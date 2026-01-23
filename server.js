@@ -78,6 +78,8 @@ const confirmMaterialReceiptRoute = require('./routes/confirmMaterialReceiptRout
 const damageAdjustmentRoute = require('./routes/damageAdjustmentRoute');
 const dashboardRoute = require('./routes/dashboardRoutes');
 const userRoute = require('./routes/userRoute');
+const customerRoute = require('./routes/customerRoute');
+const skuRoute = require('./routes/skuRoute');
 
 // Register routes
 app.use(`${appConfig.apiPrefix}/samples`, sampleRoute);
@@ -96,6 +98,8 @@ app.use('/api/v1/confirm-receipt', confirmMaterialReceiptRoute);
 app.use('/api/v1/damage-adjustment', damageAdjustmentRoute);
 app.use('/api/v1/dashboard', dashboardRoute);
 app.use('/api/v1/users', userRoute);
+app.use('/api/v1/customers', customerRoute);
+app.use('/api/v1/skus', skuRoute);
 
 // Test database connection
 const db = require('./config/db');
