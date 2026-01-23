@@ -1,0 +1,216 @@
+/**
+ * Actual Dispatch Service
+ * Business logic for actual dispatch management (Stage 5: Actual Dispatch)
+ * Uses lift_receiving_confirmation table
+ * Conditions:
+ * - Pending: planned_1 IS NOT NULL AND actual_1 IS NULL
+ * - History: planned_1 IS NOT NULL AND actual_1 IS NOT NULL
+ */
+
+const db = require('../config/db');
+const { Logger } = require('../utils');
+
+class ActualDispatchService {
+  /**
+   * Get pending actual dispatches from lift_receiving_confirmation table
+   * Pending: planned_1 IS NOT NULL AND actual_1 IS NULL
+   * @param {Object} filters - Filter parameters
+   * @param {Object} pagination - Pagination parameters
+   * @returns {Promise<Object>} Pending dispatches
+   */
+  async getPendingDispatches(filters = {}, pagination = {}) {
+    try {
+      const page = parseInt(pagination.page) || 1;
+      const limit = parseInt(pagination.limit) || 10;
+      const offset = (page - 1) * limit;
+      
+      let whereConditions = ['planned_1 IS NOT NULL', 'actual_1 IS NULL'];
+      let queryParams = [];
+      let paramIndex = 1;
+      
+      // Add optional filters
+      if (filters.d_sr_number) {
+        whereConditions.push(`d_sr_number = $${paramIndex}`);
+        queryParams.push(filters.d_sr_number);
+        paramIndex++;
+      }
+      
+      if (filters.so_no) {
+        whereConditions.push(`so_no = $${paramIndex}`);
+        queryParams.push(filters.so_no);
+        paramIndex++;
+      }
+      
+      if (filters.party_name) {
+        whereConditions.push(`party_name ILIKE $${paramIndex}`);
+        queryParams.push(`%${filters.party_name}%`);
+        paramIndex++;
+      }
+      
+      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
+      
+      // Count total
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation ${whereClause}`;
+      const countResult = await db.query(countQuery, queryParams);
+      const total = parseInt(countResult.rows[0].count);
+      
+      // Get data
+      const dataQuery = `
+        SELECT 
+          d_sr_number, so_no, party_name, product_name, 
+          qty_to_be_dispatched, type_of_transporting, dispatch_from,
+          planned_1, actual_1, timestamp
+        FROM lift_receiving_confirmation 
+        ${whereClause}
+        ORDER BY timestamp DESC, d_sr_number DESC
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+      `;
+      
+      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      
+      Logger.info(`Fetched ${dataResult.rows.length} pending actual dispatches`);
+      
+      return {
+        success: true,
+        data: dataResult.rows,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
+      };
+    } catch (error) {
+      Logger.error('Error fetching pending actual dispatches', error);
+      throw new Error('Failed to fetch pending actual dispatches');
+    }
+  }
+
+  /**
+   * Get actual dispatch history
+   * History: planned_1 IS NOT NULL AND actual_1 IS NOT NULL
+   * @param {Object} filters - Filter parameters
+   * @param {Object} pagination - Pagination parameters
+   * @returns {Promise<Object>} History dispatches
+   */
+  async getDispatchHistory(filters = {}, pagination = {}) {
+    try {
+      const page = parseInt(pagination.page) || 1;
+      const limit = parseInt(pagination.limit) || 10;
+      const offset = (page - 1) * limit;
+      
+      let whereConditions = ['planned_1 IS NOT NULL', 'actual_1 IS NOT NULL'];
+      let queryParams = [];
+      let paramIndex = 1;
+      
+      // Add optional filters
+      if (filters.d_sr_number) {
+        whereConditions.push(`d_sr_number = $${paramIndex}`);
+        queryParams.push(filters.d_sr_number);
+        paramIndex++;
+      }
+      
+      if (filters.so_no) {
+        whereConditions.push(`so_no = $${paramIndex}`);
+        queryParams.push(filters.so_no);
+        paramIndex++;
+      }
+      
+      if (filters.party_name) {
+        whereConditions.push(`party_name ILIKE $${paramIndex}`);
+        queryParams.push(`%${filters.party_name}%`);
+        paramIndex++;
+      }
+      
+      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
+      
+      // Count total
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation ${whereClause}`;
+      const countResult = await db.query(countQuery, queryParams);
+      const total = parseInt(countResult.rows[0].count);
+      
+      // Get data
+      const dataQuery = `
+        SELECT 
+          d_sr_number, so_no, party_name, product_name, 
+          qty_to_be_dispatched, type_of_transporting, dispatch_from,
+          planned_1, actual_1, timestamp, product_name_1, actual_qty_dispatch
+        FROM lift_receiving_confirmation 
+        ${whereClause}
+        ORDER BY actual_1 DESC, d_sr_number DESC
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+      `;
+      
+      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      
+      Logger.info(`Fetched ${dataResult.rows.length} actual dispatch history records`);
+      
+      return {
+        success: true,
+        data: dataResult.rows,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
+      };
+    } catch (error) {
+      Logger.error('Error fetching actual dispatch history', error);
+      throw new Error('Failed to fetch actual dispatch history');
+    }
+  }
+
+  /**
+   * Submit actual dispatch
+   * Updates actual_1 and related fields in lift_receiving_confirmation table
+   * @param {string} dsrNumber - DSR number from lift_receiving_confirmation
+   * @param {Object} data - Dispatch data
+   * @returns {Promise<Object>} Updated dispatch record
+   */
+  async submitActualDispatch(dsrNumber, data = {}) {
+    try {
+      Logger.info(`Submitting actual dispatch for DSR: ${dsrNumber}`, { data });
+      
+      const updateData = {
+        actual_1: new Date().toISOString(),
+        product_name_1: data.product_name_1 || null,
+        actual_qty_dispatch: data.actual_qty_dispatch || null,
+        ...data
+      };
+      
+      const fields = Object.keys(updateData);
+      const values = Object.values(updateData);
+      
+      const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
+      
+      const query = `
+        UPDATE lift_receiving_confirmation 
+        SET ${setClause}
+        WHERE d_sr_number = $${fields.length + 1}
+        RETURNING *
+      `;
+      
+      Logger.info(`Executing update query for DSR: ${dsrNumber}`, { setClause });
+      
+      const result = await db.query(query, [...values, dsrNumber]);
+      
+      if (result.rows.length === 0) {
+        throw new Error('Dispatch record not found');
+      }
+      
+      Logger.info(`Actual dispatch submitted successfully for DSR: ${dsrNumber}`);
+      
+      return {
+        success: true,
+        message: 'Actual dispatch submitted successfully',
+        data: result.rows[0]
+      };
+    } catch (error) {
+      Logger.error('Error submitting actual dispatch', error);
+      throw error;
+    }
+  }
+}
+
+module.exports = new ActualDispatchService();
