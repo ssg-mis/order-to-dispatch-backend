@@ -80,6 +80,8 @@ const dashboardRoute = require('./routes/dashboardRoutes');
 const userRoute = require('./routes/userRoute');
 const customerRoute = require('./routes/customerRoute');
 const skuRoute = require('./routes/skuRoute');
+const depotRoute = require('./routes/depotRoute');
+const brokerRoute = require('./routes/brokerRoute');
 
 // Register routes
 app.use(`${appConfig.apiPrefix}/samples`, sampleRoute);
@@ -100,6 +102,8 @@ app.use('/api/v1/dashboard', dashboardRoute);
 app.use('/api/v1/users', userRoute);
 app.use('/api/v1/customers', customerRoute);
 app.use('/api/v1/skus', skuRoute);
+app.use('/api/v1/depots', depotRoute);
+app.use('/api/v1/brokers', brokerRoute);
 
 // Test database connection
 const db = require('./config/db');
