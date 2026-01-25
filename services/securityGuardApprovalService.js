@@ -60,6 +60,10 @@ class SecurityGuardApprovalService {
           id, d_sr_number, so_no, party_name, product_name,
           qty_to_be_dispatched, type_of_transporting, dispatch_from,
           planned_4, actual_4, 
+          actual_qty_dispatch, rst_no,
+          gross_weight, tare_weight, net_weight,
+          transporter_name, reason_of_difference_in_weight_if_any_speacefic,
+          truck_no,
           bilty_no, bilty_image, vehicle_image_attachemrnt,
           timestamp
         FROM lift_receiving_confirmation 

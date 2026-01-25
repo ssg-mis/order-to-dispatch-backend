@@ -217,7 +217,7 @@ class DispatchPlanningService {
         order.order_no,
         order.customer_name,
         order.product_name,
-        order.order_quantity,
+        data.dispatch_qty || order.order_quantity,
         order.type_of_transporting,
         data.dispatch_from || null
       ];

@@ -59,8 +59,14 @@ class GateOutService {
         SELECT 
           id, d_sr_number, so_no, party_name, product_name,
           qty_to_be_dispatched, type_of_transporting, dispatch_from,
+          product_name_1, actual_qty_dispatch,
+          check_status, remarks,
+          fitness, insurance, tax_copy, polution, permit1, permit2_out_state,
+          actual_qty, weightment_slip_copy, rst_no,
+          transporter_name, reason_of_difference_in_weight_if_any_speacefic,
+          truck_no, vehicle_no_plate_image,
+          bilty_no,
           planned_7, actual_7,
-          truck_no,
           gross_weight, tare_weight, net_weight,
           timestamp,
           invoice_no, invoice_date, bill_amount
