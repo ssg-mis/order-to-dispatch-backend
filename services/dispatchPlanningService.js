@@ -54,11 +54,9 @@ class DispatchPlanningService {
       const total = parseInt(countResult.rows[0].count);
       
       // Get data
+      // Get data
       const dataQuery = `
-        SELECT 
-          id, order_no, customer_name, product_name, 
-          order_quantity, type_of_transporting, delivery_date,
-          planned_3, actual_3, created_at
+        SELECT *
         FROM order_dispatch 
         ${whereClause}
         ORDER BY created_at DESC, order_no ASC
@@ -130,13 +128,10 @@ class DispatchPlanningService {
       
       // Get data
       const dataQuery = `
-        SELECT 
-          id, order_no, customer_name, product_name, 
-          order_quantity, type_of_transporting, delivery_date,
-          planned_3, actual_3, created_at
+        SELECT *
         FROM order_dispatch 
         ${whereClause}
-        ORDER BY actual_3 DESC, order_no ASC
+        ORDER BY created_at DESC, order_no ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
       
@@ -180,7 +175,8 @@ class DispatchPlanningService {
       const orderQuery = `
         SELECT 
           order_no, customer_name, product_name, 
-          order_quantity, type_of_transporting
+          order_quantity, type_of_transporting,
+          approval_qty, remaining_dispatch_qty
         FROM order_dispatch 
         WHERE id = $1
       `;
@@ -192,6 +188,19 @@ class DispatchPlanningService {
       
       const order = orderResult.rows[0];
       
+      // Calculate remaining quantity logic
+      // If remaining_dispatch_qty is null, use approval_qty (or order_quantity if approval_qty is missing)
+      const currentAvailable = order.remaining_dispatch_qty !== null 
+        ? parseFloat(order.remaining_dispatch_qty) 
+        : parseFloat(order.approval_qty || order.order_quantity || 0);
+        
+      const dispatchQty = parseFloat(data.dispatch_qty || order.order_quantity || 0);
+      
+      // New remaining quantity
+      const newRemainingQty = currentAvailable - dispatchQty;
+      
+      Logger.info(`Partial dispatch calc: Order ${order.order_no} - Available: ${currentAvailable}, Dispatched: ${dispatchQty}, New Rem: ${newRemainingQty}`);
+
       // Generate DSR number (dispatch serial number)
       // Format: DSR-001, DSR-002, etc.
       const dsrQuery = `
@@ -217,22 +226,40 @@ class DispatchPlanningService {
         order.order_no,
         order.customer_name,
         order.product_name,
-        data.dispatch_qty || order.order_quantity,
+        dispatchQty,
         order.type_of_transporting,
         data.dispatch_from || null
       ];
       
       const insertResult = await client.query(insertQuery, insertParams);
       
-      // Update actual_3 in order_dispatch
-      const updateQuery = `
-        UPDATE order_dispatch 
-        SET actual_3 = NOW()
-        WHERE id = $1
-        RETURNING *
-      `;
+      // Update order_dispatch
+      // 1. Update remaining_dispatch_qty
+      // 2. Update actual_3 IF newRemainingQty <= 0 (Completed)
+      let updateQuery;
+      let updateParams;
       
-      await client.query(updateQuery, [orderId]);
+      if (newRemainingQty <= 0) {
+         // Full Dispatch or Over Dispatch -> Mark as Completed (actual_3 = NOW())
+         updateQuery = `
+          UPDATE order_dispatch 
+          SET remaining_dispatch_qty = $1, actual_3 = NOW()
+          WHERE id = $2
+          RETURNING *
+        `;
+        updateParams = [0, orderId]; // Cap at 0
+      } else {
+         // Partial Dispatch -> Keep Pending (actual_3 stays NULL)
+         updateQuery = `
+          UPDATE order_dispatch 
+          SET remaining_dispatch_qty = $1
+          WHERE id = $2
+          RETURNING *
+        `;
+        updateParams = [newRemainingQty, orderId];
+      }
+      
+      await client.query(updateQuery, updateParams);
       
       await client.query('COMMIT');
       

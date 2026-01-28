@@ -19,6 +19,17 @@ const createOrder = async (req, res, next) => {
       productsCount: products?.length || 1 
     });
     
+    // Log all field lengths to help debug VARCHAR constraints
+    Logger.info('Order data field lengths:', {
+      customer_name: orderData.customer_name?.length,
+      order_type: orderData.order_type?.length,
+      customer_type: orderData.customer_type?.length,
+      order_type_delivery_purpose: orderData.order_type_delivery_purpose?.length,
+      type_of_transporting: orderData.type_of_transporting?.length,
+      broker_name: orderData.broker_name?.length,
+      payment_terms: orderData.payment_terms?.length
+    });
+    
     const result = await orderDispatchService.createOrder(orderData, products);
     
     return ResponseUtil.success(
@@ -29,6 +40,13 @@ const createOrder = async (req, res, next) => {
     );
   } catch (error) {
     Logger.error('Error in createOrder controller', error);
+    Logger.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      position: error.position
+    });
     next(error);
   }
 };

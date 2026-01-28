@@ -24,25 +24,25 @@ class MakeInvoiceService {
       const limit = parseInt(pagination.limit) || 1000;
       const offset = (page - 1) * limit;
       
-      let whereConditions = ['planned_5 IS NOT NULL', 'actual_5 IS NULL'];
+      let whereConditions = ['lrc.planned_5 IS NOT NULL', 'lrc.actual_5 IS NULL'];
       let queryParams = [];
       let paramIndex = 1;
       
       // Add optional filters
       if (filters.d_sr_number) {
-        whereConditions.push(`d_sr_number = $${paramIndex}`);
+        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
         paramIndex++;
       }
       
       if (filters.so_no) {
-        whereConditions.push(`so_no = $${paramIndex}`);
+        whereConditions.push(`lrc.so_no = $${paramIndex}`);
         queryParams.push(filters.so_no);
         paramIndex++;
       }
       
       if (filters.party_name) {
-        whereConditions.push(`party_name ILIKE $${paramIndex}`);
+        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
@@ -50,29 +50,41 @@ class MakeInvoiceService {
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
       
       // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation ${whereClause}`;
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
       
-      // Get data
-      // Selecting relevant columns for invoice generation
+      // Get data with JOIN to order_dispatch for complete order details
       const dataQuery = `
         SELECT 
-          id, d_sr_number, so_no, party_name, product_name,
-          qty_to_be_dispatched, type_of_transporting, dispatch_from,
-          product_name_1, actual_qty_dispatch,
-          check_status, remarks,
-          fitness, insurance, tax_copy, polution, permit1, permit2_out_state,
-          actual_qty, weightment_slip_copy, rst_no,
-          transporter_name, reason_of_difference_in_weight_if_any_speacefic,
-          truck_no, vehicle_no_plate_image,
-          bilty_no,
-          planned_5, actual_5,
-          gross_weight, tare_weight, net_weight,
-          timestamp
-        FROM lift_receiving_confirmation 
+          lrc.*,
+          od.order_type_delivery_purpose,
+          od.start_date,
+          od.end_date,
+          od.delivery_date,
+          od.order_type,
+          od.customer_type,
+          od.party_so_date,
+          od.oil_type,
+          od.rate_per_15kg,
+          od.rate_per_ltr,
+          od.rate_of_material,
+          od.total_amount_with_gst,
+          od.type_of_transporting,
+          od.customer_contact_person_name,
+          od.customer_contact_person_whatsapp_no,
+          od.customer_address,
+          od.payment_terms,
+          od.advance_payment_to_be_taken,
+          od.advance_amount,
+          od.is_order_through_broker,
+          od.broker_name,
+          od.sku_name,
+          od.approval_qty
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
-        ORDER BY timestamp DESC, d_sr_number ASC
+        ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
       

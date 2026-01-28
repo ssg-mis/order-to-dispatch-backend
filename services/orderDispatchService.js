@@ -41,7 +41,9 @@ class OrderDispatchService {
             rate_per_15kg: product.rate_per_15kg,
             rate_per_ltr: product.rate_per_ltr,
             sku_name: product.sku_name,
-            approval_qty: product.approval_qty
+            approval_qty: product.approval_qty,
+            // For regular orders, set remaining_dispatch_qty to order_quantity immediately
+            remaining_dispatch_qty: orderData.order_type === 'regular' ? product.order_quantity : null
           });
           
           const inserted = await this.insertOrder(client, orderRow);

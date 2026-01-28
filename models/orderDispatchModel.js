@@ -83,6 +83,8 @@ class OrderDispatch {
     this.actual_3 = data.actual_3 || null;
     this.delay_3 = data.delay_3 || null;
     
+    this.remaining_dispatch_qty = data.remaining_dispatch_qty !== undefined ? data.remaining_dispatch_qty : null;
+    
     this.created_at = data.created_at || new Date();
   }
 
@@ -141,7 +143,8 @@ class OrderDispatch {
       order_confirmation_with_customer: this.order_confirmation_with_customer,
       planned_3: this.planned_3,
       actual_3: this.actual_3,
-      delay_3: this.delay_3
+      delay_3: this.delay_3,
+      remaining_dispatch_qty: this.remaining_dispatch_qty
     };
   }
 }
