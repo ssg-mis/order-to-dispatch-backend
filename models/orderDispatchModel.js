@@ -11,6 +11,8 @@ class OrderDispatch {
     // serial column removed - now part of order_no (e.g., DO-001A)
     
     this.order_type_delivery_purpose = data.order_type_delivery_purpose || null;
+    this.depo_name = data.depo_name || null;
+    this.order_punch_remarks = data.order_punch_remarks || null;
     
     this.start_date = data.start_date || null;
     this.end_date = data.end_date || null;
@@ -98,6 +100,8 @@ class OrderDispatch {
       order_no: this.order_no,
       // serial column removed - now part of order_no (e.g., DO-001A)
       order_type_delivery_purpose: this.order_type_delivery_purpose,
+      depo_name: this.depo_name,
+      order_punch_remarks: this.order_punch_remarks,
       start_date: this.start_date,
       end_date: this.end_date,
       delivery_date: this.delivery_date,

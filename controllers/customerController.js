@@ -11,7 +11,7 @@ const Logger = require('../utils/logger');
  */
 async function getAllCustomers(req, res) {
   try {
-    const customers = await customerService.getAllCustomers();
+    const customers = await customerService.getAllCustomers(req.query);
     
     res.status(200).json({
       success: true,
@@ -88,8 +88,78 @@ async function getCustomerByName(req, res) {
   }
 }
 
+/**
+ * Create a new customer
+ */
+async function createCustomer(req, res) {
+  try {
+    const customer = await customerService.createCustomer(req.body);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Customer created successfully',
+      data: customer
+    });
+  } catch (error) {
+    Logger.error('Error in createCustomer controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create customer',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Update an existing customer
+ */
+async function updateCustomer(req, res) {
+  try {
+    const { id } = req.params;
+    const customer = await customerService.updateCustomer(id, req.body);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Customer updated successfully',
+      data: customer
+    });
+  } catch (error) {
+    Logger.error('Error in updateCustomer controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update customer',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Delete a customer
+ */
+async function deleteCustomer(req, res) {
+  try {
+    const { id } = req.params;
+    await customerService.deleteCustomer(id);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Customer deleted successfully'
+    });
+  } catch (error) {
+    Logger.error('Error in deleteCustomer controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete customer',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAllCustomers,
   getCustomerById,
-  getCustomerByName
+  getCustomerByName,
+  createCustomer,
+  updateCustomer,
+  deleteCustomer
 };

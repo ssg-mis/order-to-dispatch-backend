@@ -11,7 +11,7 @@ const Logger = require('../utils/logger');
  */
 async function getAllBrokers(req, res) {
   try {
-    const brokers = await brokerService.getAllBrokers();
+    const brokers = await brokerService.getAllBrokers(req.query);
     
     res.status(200).json({
       success: true,
@@ -88,8 +88,78 @@ async function getBrokerByName(req, res) {
   }
 }
 
+/**
+ * Create a new broker
+ */
+async function createBroker(req, res) {
+  try {
+    const broker = await brokerService.createBroker(req.body);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Broker created successfully',
+      data: broker
+    });
+  } catch (error) {
+    Logger.error('Error in createBroker controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create broker',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Update an existing broker
+ */
+async function updateBroker(req, res) {
+  try {
+    const { id } = req.params;
+    const broker = await brokerService.updateBroker(id, req.body);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Broker updated successfully',
+      data: broker
+    });
+  } catch (error) {
+    Logger.error('Error in updateBroker controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update broker',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Delete a broker
+ */
+async function deleteCustomer(req, res) {
+  try {
+    const { id } = req.params;
+    await brokerService.deleteBroker(id);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Broker deleted successfully'
+    });
+  } catch (error) {
+    Logger.error('Error in deleteBroker controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete broker',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAllBrokers,
   getBrokerById,
-  getBrokerByName
+  getBrokerByName,
+  createBroker,
+  updateBroker,
+  deleteBroker: deleteCustomer
 };

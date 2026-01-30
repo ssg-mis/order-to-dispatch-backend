@@ -11,7 +11,7 @@ const Logger = require('../utils/logger');
  */
 async function getAllDepots(req, res) {
   try {
-    const depots = await depotService.getAllDepots();
+    const depots = await depotService.getAllDepots(req.query);
     
     res.status(200).json({
       success: true,
@@ -88,8 +88,78 @@ async function getDepotByName(req, res) {
   }
 }
 
+/**
+ * Create a new depot
+ */
+async function createDepot(req, res) {
+  try {
+    const depot = await depotService.createDepot(req.body);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Depot created successfully',
+      data: depot
+    });
+  } catch (error) {
+    Logger.error('Error in createDepot controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create depot',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Update an existing depot
+ */
+async function updateDepot(req, res) {
+  try {
+    const { id } = req.params;
+    const depot = await depotService.updateDepot(id, req.body);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Depot updated successfully',
+      data: depot
+    });
+  } catch (error) {
+    Logger.error('Error in updateDepot controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update depot',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * Delete a depot
+ */
+async function deleteDepot(req, res) {
+  try {
+    const { id } = req.params;
+    await depotService.deleteDepot(id);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Depot deleted successfully'
+    });
+  } catch (error) {
+    Logger.error('Error in deleteDepot controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete depot',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAllDepots,
   getDepotById,
-  getDepotByName
+  getDepotByName,
+  createDepot,
+  updateDepot,
+  deleteDepot
 };

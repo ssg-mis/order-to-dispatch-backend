@@ -28,4 +28,25 @@ router.get('/:id', depotController.getDepotById);
  */
 router.get('/name/:name', depotController.getDepotByName);
 
+/**
+ * @route   POST /api/v1/depots
+ * @desc    Create a new depot
+ * @access  Public
+ */
+router.post('/', depotController.createDepot);
+
+/**
+ * @route   PUT /api/v1/depots/:id
+ * @desc    Update an existing depot
+ * @access  Public
+ */
+router.put('/:id', depotController.updateDepot);
+
+/**
+ * @route   DELETE /api/v1/depots/:id
+ * @desc    Delete a depot
+ * @access  Public
+ */
+router.delete('/:id', depotController.deleteDepot);
+
 module.exports = router;

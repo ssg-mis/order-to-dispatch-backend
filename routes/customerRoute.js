@@ -28,4 +28,25 @@ router.get('/:id', customerController.getCustomerById);
  */
 router.get('/name/:name', customerController.getCustomerByName);
 
+/**
+ * @route   POST /api/v1/customers
+ * @desc    Create a new customer
+ * @access  Public
+ */
+router.post('/', customerController.createCustomer);
+
+/**
+ * @route   PUT /api/v1/customers/:id
+ * @desc    Update an existing customer
+ * @access  Public
+ */
+router.put('/:id', customerController.updateCustomer);
+
+/**
+ * @route   DELETE /api/v1/customers/:id
+ * @desc    Delete a customer
+ * @access  Public
+ */
+router.delete('/:id', customerController.deleteCustomer);
+
 module.exports = router;

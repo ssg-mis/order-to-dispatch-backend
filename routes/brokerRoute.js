@@ -28,4 +28,25 @@ router.get('/:id', brokerController.getBrokerById);
  */
 router.get('/name/:name', brokerController.getBrokerByName);
 
+/**
+ * @route   POST /api/v1/brokers
+ * @desc    Create a new broker
+ * @access  Public
+ */
+router.post('/', brokerController.createBroker);
+
+/**
+ * @route   PUT /api/v1/brokers/:id
+ * @desc    Update an existing broker
+ * @access  Public
+ */
+router.put('/:id', brokerController.updateBroker);
+
+/**
+ * @route   DELETE /api/v1/brokers/:id
+ * @desc    Delete a broker
+ * @access  Public
+ */
+router.delete('/:id', brokerController.deleteBroker);
+
 module.exports = router;
