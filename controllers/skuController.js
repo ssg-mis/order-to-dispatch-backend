@@ -58,7 +58,38 @@ async function getSkuById(req, res) {
   }
 }
 
+/**
+ * Get rate by SKU name
+ */
+async function getSkuRate(req, res) {
+  try {
+    const { skuName } = req.params;
+    
+    const rate = await skuService.getRateBySku(skuName);
+    
+    if (rate === null) {
+      return res.status(404).json({
+        success: false,
+        message: `Rate not found for SKU: ${skuName}`
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      rate: parseFloat(rate)
+    });
+  } catch (error) {
+    Logger.error('Error in getSkuRate controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch SKU rate',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAllSkus,
-  getSkuById
+  getSkuById,
+  getSkuRate
 };

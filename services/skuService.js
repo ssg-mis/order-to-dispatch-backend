@@ -67,6 +67,30 @@ class SkuService {
       throw error;
     }
   }
+
+  /**
+   * Get rate by SKU name
+   */
+  async getRateBySku(skuName) {
+    try {
+      const query = `
+        SELECT rate
+        FROM sku_rate
+        WHERE sku = $1
+      `;
+      
+      const result = await pool.query(query, [skuName]);
+      
+      if (result.rows.length === 0) {
+        return null;
+      }
+      
+      return result.rows[0].rate;
+    } catch (error) {
+      Logger.error(`Error fetching rate for SKU ${skuName}:`, error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new SkuService();

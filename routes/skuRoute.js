@@ -21,4 +21,11 @@ router.get('/', skuController.getAllSkus);
  */
 router.get('/:id', skuController.getSkuById);
 
+/**
+ * @route   GET /api/v1/skus/rate/:skuName
+ * @desc    Get rate by SKU name
+ * @access  Public
+ */
+router.get('/rate/:skuName', skuController.getSkuRate);
+
 module.exports = router;
