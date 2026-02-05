@@ -185,7 +185,8 @@ class ActualDispatchService {
         reason_of_difference_in_weight_if_any_speacefic: data.reason_of_difference_in_weight_if_any_speacefic || null,
         truck_no: data.truck_no || null,
         vehicle_no_plate_image: data.vehicle_no_plate_image || null,
-        vehicle_number: data.vehicle_number || null // Added since it's in their provided schema
+        vehicle_number: data.vehicle_number || null, // Added since it's in their provided schema
+        extra_weight: data.extra_weight || 0
       };
       
       const fields = Object.keys(updateData);
