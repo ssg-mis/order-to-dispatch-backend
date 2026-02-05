@@ -28,4 +28,11 @@ router.get('/:id', skuController.getSkuById);
  */
 router.get('/rate/:skuName', skuController.getSkuRate);
 
+/**
+ * @route   GET /api/v1/skus/rates/all
+ * @desc    Get all SKU rates with formulas
+ * @access  Public
+ */
+router.get('/rates/all', skuController.getAllSkuRates);
+
 module.exports = router;

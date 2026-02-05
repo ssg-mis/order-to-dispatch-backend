@@ -88,8 +88,31 @@ async function getSkuRate(req, res) {
   }
 }
 
+/**
+ * Get all SKU rates with formulas
+ */
+async function getAllSkuRates(req, res) {
+  try {
+    const skuRates = await skuService.getAllSkuRates();
+    
+    res.status(200).json({
+      success: true,
+      data: skuRates,
+      count: skuRates.length
+    });
+  } catch (error) {
+    Logger.error('Error in getAllSkuRates controller:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch SKU rates',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAllSkus,
   getSkuById,
-  getSkuRate
+  getSkuRate,
+  getAllSkuRates
 };

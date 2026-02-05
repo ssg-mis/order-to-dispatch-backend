@@ -91,6 +91,30 @@ class SkuService {
       throw error;
     }
   }
+
+  /**
+   * Get all SKU rates with formulas
+   */
+  async getAllSkuRates() {
+    try {
+      const query = `
+        SELECT 
+          id,
+          sku,
+          rate,
+          formula
+        FROM sku_rate
+        ORDER BY id ASC
+      `;
+      
+      const result = await pool.query(query);
+      Logger.info(`Fetched ${result.rows.length} SKU rates`);
+      return result.rows;
+    } catch (error) {
+      Logger.error('Error fetching SKU rates:', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new SkuService();
