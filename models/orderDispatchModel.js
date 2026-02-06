@@ -61,6 +61,7 @@ class OrderDispatch {
     
     this.sku_name = data.sku_name || null;
     this.approval_qty = data.approval_qty || null;
+    this.final_rate = data.final_rate || null;
     
     this.take_required_rates_each_item = data.take_required_rates_each_item || false;
     
@@ -134,6 +135,7 @@ class OrderDispatch {
       delay_1: this.delay_1,
       sku_name: this.sku_name,
       approval_qty: this.approval_qty,
+      final_rate: this.final_rate,
       take_required_rates_each_item: this.take_required_rates_each_item,
       remark: this.remark,
       planned_2: this.planned_2,
