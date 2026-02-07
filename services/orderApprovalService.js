@@ -26,7 +26,7 @@ class OrderApprovalService {
       payment_terms, advance_payment_to_be_taken, advance_amount,
       is_order_through_broker, broker_name, upload_so,
       planned_1, actual_1, delay_1, sku_name, approval_qty,
-      take_required_rates_each_item, remark,
+      take_required_rates_each_item, remark, final_rate,
       planned_2, actual_2, delay_2,
       rate_is_rightly_as_per_current_market_rate,
       we_are_dealing_in_ordered_sku, party_credit_status,
