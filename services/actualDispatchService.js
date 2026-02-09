@@ -160,7 +160,8 @@ class ActualDispatchService {
 
   async submitActualDispatch(dsrNumber, data = {}) {
     try {
-      Logger.info(`Submitting actual dispatch for DSR: ${dsrNumber}`, { data });
+      Logger.info(`Submitting actual dispatch for DSR: ${dsrNumber}`);
+      Logger.debug(`[ACTUAL DISPATCH] Raw body data:`, { data });
       
       // Explicitly pick only the fields the user wants to submit
       // This avoids sending fields that don't exist in the table (like planned_2)
@@ -187,7 +188,13 @@ class ActualDispatchService {
         truck_no: data.truck_no || null,
         vehicle_no_plate_image: data.vehicle_no_plate_image || null,
         vehicle_number: data.vehicle_number || null, // Added since it's in their provided schema
-        extra_weight: data.extra_weight || 0
+        extra_weight: data.extra_weight || 0,
+        fitness_end_date: data.fitness_end_date || null,
+        insurance_end_date: data.insurance_end_date || null,
+        tax_end_date: data.tax_end_date || null,
+        pollution_end_date: data.pollution_end_date || null,
+        permit1_end_date: data.permit1_end_date || null,
+        permit2_end_date: data.permit2_end_date || null
       };
       
       const fields = Object.keys(updateData);
@@ -200,6 +207,10 @@ class ActualDispatchService {
         WHERE d_sr_number = $${fields.length + 1}
         RETURNING *
       `;
+      
+      Logger.debug(`[ACTUAL DISPATCH] Built updateData:`, { updateData });
+      Logger.debug(`[ACTUAL DISPATCH] Final Query: ${query}`);
+      Logger.debug(`[ACTUAL DISPATCH] Final Params:`, { params: [...values, dsrNumber] });
       
       const result = await db.query(query, [...values, dsrNumber]);
       if (result.rows.length === 0) throw new Error('Dispatch record not found');
