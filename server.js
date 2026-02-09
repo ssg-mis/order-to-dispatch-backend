@@ -82,10 +82,12 @@ const customerRoute = require('./routes/customerRoute');
 const skuRoute = require('./routes/skuRoute');
 const depotRoute = require('./routes/depotRoute');
 const brokerRoute = require('./routes/brokerRoute');
+const uploadRoute = require('./routes/uploadRoute');
 
 // Register routes
 app.use(`${appConfig.apiPrefix}/samples`, sampleRoute);
 app.use(`${appConfig.apiPrefix}/orders`, orderDispatchRoute);
+app.use(`${appConfig.apiPrefix}/upload`, uploadRoute);
 app.use('/api/v1/pre-approval', preApprovalRoute); // Changed prefix
 app.use('/api/v1/approval', orderApprovalRoute); // Changed prefix
 app.use('/api/v1/dispatch-planning', dispatchPlanningRoute); // Changed prefix
