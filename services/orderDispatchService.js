@@ -407,12 +407,30 @@ class OrderDispatchService {
 
   /**
    * Submit pre-approval (set actual_1 to current timestamp)
+   * Supports partial approvals - if approval_qty < order_quantity, creates new row with remaining qty
    * @param {number} id - Order ID
    * @param {Object} data - Optional additional data to update
    * @returns {Promise<Object>} Updated order
    */
   async submitPreApproval(id, data = {}) {
+    const client = await db.getClient();
+    
     try {
+      await client.query('BEGIN');
+      
+      // Step 1: Get original order data
+      const originalQuery = 'SELECT * FROM order_dispatch WHERE id = $1';
+      const originalResult = await client.query(originalQuery, [id]);
+      
+      if (originalResult.rows.length === 0) {
+        throw new Error('Order not found');
+      }
+      
+      const originalOrder = originalResult.rows[0];
+      const approvalQty = parseFloat(data.approval_qty) || 0;
+      const orderQty = parseFloat(originalOrder.order_quantity) || 0;
+      
+      // Step 2: Update the approved order
       const updateData = {
         actual_1: new Date().toISOString(),
         ...data
@@ -420,32 +438,105 @@ class OrderDispatchService {
       
       const fields = Object.keys(updateData);
       const values = Object.values(updateData);
-      
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
       
-      const query = `
+      const updateQuery = `
         UPDATE order_dispatch 
         SET ${setClause}
         WHERE id = $${fields.length + 1}
         RETURNING *
       `;
       
-      const result = await db.query(query, [...values, id]);
+      const updateResult = await client.query(updateQuery, [...values, id]);
       
-      if (result.rows.length === 0) {
-        throw new Error('Order not found');
+      // Step 3: Check for partial approval and create remaining qty row
+      let remainingOrder = null;
+      if (approvalQty > 0 && approvalQty < orderQty) {
+        const remainingQty = orderQty - approvalQty;
+        
+        Logger.info(`Partial approval detected. Creating new row for remaining qty: ${remainingQty}`);
+        
+        // Generate new order number with -1 suffix (e.g., DO-106A-1)
+        const newOrderNo = `${originalOrder.order_no}-1`;
+        
+        // Create new order row with remaining quantity
+        const remainingOrderData = new OrderDispatch({
+          // Manually set order number
+          order_no: newOrderNo,
+          
+          // Copy all original order data
+          customer_name: originalOrder.customer_name,
+          customer_type: originalOrder.customer_type,
+          order_type: originalOrder.order_type,
+          order_type_delivery_purpose: originalOrder.order_type_delivery_purpose,
+          start_date: originalOrder.start_date,
+          end_date: originalOrder.end_date,
+          delivery_date: originalOrder.delivery_date,
+          party_so_date: originalOrder.party_so_date,
+          customer_contact_person_name: originalOrder.customer_contact_person_name,
+          customer_contact_person_whatsapp_no: originalOrder.customer_contact_person_whatsapp_no,
+          customer_address: originalOrder.customer_address,
+          payment_terms: originalOrder.payment_terms,
+          advance_payment_to_be_taken: originalOrder.advance_payment_to_be_taken,
+          advance_amount: originalOrder.advance_amount,
+          is_order_through_broker: originalOrder.is_order_through_broker,
+          broker_name: originalOrder.broker_name,
+          type_of_transporting: originalOrder.type_of_transporting,
+          depo_name: originalOrder.depo_name,
+          order_punch_remarks: originalOrder.order_punch_remarks,
+          total_amount_with_gst: originalOrder.total_amount_with_gst,
+          item_confirm_by_manager: originalOrder.item_confirm_by_manager,
+          
+          // Product details
+          product_name: originalOrder.product_name,
+          oil_type: originalOrder.oil_type,
+          uom: originalOrder.uom,
+          alternate_uom: originalOrder.alternate_uom,
+          alternate_qty_kg: originalOrder.alternate_qty_kg,
+          rate_per_15kg: originalOrder.rate_per_15kg,
+          rate_per_ltr: originalOrder.rate_per_ltr,
+          rate_of_material: originalOrder.rate_of_material,
+          
+          // Set remaining quantity
+          order_quantity: remainingQty,
+          
+          // Reset approval fields (this row needs new approval)
+          approval_qty: null,
+          remaining_dispatch_qty: null,
+          sku_name: null,
+          final_rate: null,
+          remark: null,
+          
+          // Set workflow status - keep in pre-approval
+          planned_1: new Date().toISOString(),
+          actual_1: null // Not approved yet
+        });
+        
+        remainingOrder = await this.insertOrder(client, remainingOrderData);
+        
+        Logger.info(`Created remaining order with ID: ${remainingOrder.id}, order_no: ${remainingOrder.order_no}`);
       }
+      
+      await client.query('COMMIT');
       
       Logger.info(`Pre-approval submitted for order ID: ${id}`);
       
       return {
         success: true,
-        message: 'Pre-approval submitted successfully',
-        data: result.rows[0]
+        message: remainingOrder 
+          ? `Pre-approval submitted. Remaining quantity (${remainingOrder.order_quantity}) added to pending.`
+          : 'Pre-approval submitted successfully',
+        data: {
+          approved: updateResult.rows[0],
+          remaining: remainingOrder
+        }
       };
     } catch (error) {
+      await client.query('ROLLBACK');
       Logger.error('Error submitting pre-approval', error);
       throw error;
+    } finally {
+      client.release();
     }
   }
 }
