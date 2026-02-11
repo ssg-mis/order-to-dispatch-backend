@@ -176,7 +176,7 @@ class DispatchPlanningService {
         SELECT 
           order_no, customer_name, product_name, 
           order_quantity, type_of_transporting,
-          approval_qty, remaining_dispatch_qty
+          approval_qty, remaining_dispatch_qty, processid
         FROM order_dispatch 
         WHERE id = $1
       `;
@@ -215,9 +215,9 @@ class DispatchPlanningService {
         INSERT INTO lift_receiving_confirmation (
           timestamp, d_sr_number, so_no, party_name, 
           product_name, qty_to_be_dispatched, 
-          type_of_transporting, dispatch_from
+          type_of_transporting, dispatch_from, processid
         ) VALUES (
-          NOW(), $1, $2, $3, $4, $5, $6, $7
+          NOW(), $1, $2, $3, $4, $5, $6, $7, $8
         ) RETURNING *
       `;
       
@@ -228,7 +228,8 @@ class DispatchPlanningService {
         order.product_name,
         dispatchQty,
         order.type_of_transporting,
-        data.dispatch_from || null
+        data.dispatch_from || null,
+        order.processid || null
       ];
       
       const insertResult = await client.query(insertQuery, insertParams);
