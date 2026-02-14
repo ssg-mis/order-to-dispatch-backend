@@ -81,6 +81,7 @@ class ActualDispatchService {
           od.broker_name,
           od.sku_name,
           od.approval_qty,
+          od.order_punch_remarks,
           od.final_rate,
           od.overall_status_of_order
         FROM lift_receiving_confirmation lrc
