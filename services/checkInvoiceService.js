@@ -201,7 +201,7 @@ class CheckInvoiceService {
       Logger.info(`Submitting check invoice for ID: ${id}`, { data });
       
       const updateData = {
-        actual_6: new Date().toISOString(),
+        actual_6: data.status_1 === "Issue" ? null : new Date().toISOString(),
         status_1: data.status_1 || null,
         remarks_2: data.remarks_2 || null
       };
