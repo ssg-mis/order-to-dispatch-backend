@@ -450,9 +450,12 @@ class OrderDispatchService {
       const updateResult = await client.query(updateQuery, [...values, id]);
       
       // Step 3: Check for partial approval and create remaining qty row
+      const updatedOrder = updateResult.rows[0];
+      const updatedOrderQty = parseFloat(updatedOrder.order_quantity) || 0;
+
       let remainingOrder = null;
-      if (approvalQty > 0 && approvalQty < orderQty) {
-        const remainingQty = orderQty - approvalQty;
+      if (approvalQty > 0 && approvalQty < updatedOrderQty) {
+        const remainingQty = updatedOrderQty - approvalQty;
         
         Logger.info(`Partial approval detected. Creating new row for remaining qty: ${remainingQty}`);
         
