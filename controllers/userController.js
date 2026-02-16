@@ -77,7 +77,7 @@ const createUser = async (req, res) => {
     const { username, password, email, phone_no, status, role, page_access } = req.body;
     
     // Validate required fields
-    if (!username || !password || !email || !role) {
+    if (!username || !password || !role) {
       return res.status(400).json({
         success: false,
         message: 'Username, password, email, and role are required',

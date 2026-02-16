@@ -133,7 +133,7 @@ class UserService {
       const result = await db.query(query, [
         username,
         hashedPassword,
-        email,
+        email || null,
         phone_no,
         status,
         role,
@@ -188,8 +188,10 @@ class UserService {
       }
       
       if (email !== undefined) {
+        // If email is empty string, set it to NULL
+        const emailValue = email === "" ? null : email;
         updateFields.push(`email = $${paramIndex++}`);
-        queryParams.push(email);
+        queryParams.push(emailValue);
       }
       
       if (phone_no !== undefined) {
