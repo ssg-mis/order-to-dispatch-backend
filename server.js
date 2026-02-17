@@ -106,6 +106,7 @@ app.use('/api/v1/customers', customerRoute);
 app.use('/api/v1/skus', skuRoute);
 app.use('/api/v1/depots', depotRoute);
 app.use('/api/v1/brokers', brokerRoute);
+app.use('/api/v1/sku-details', require('./routes/skuDetailsRoute'));
 
 // Test database connection
 const db = require('./config/db');
