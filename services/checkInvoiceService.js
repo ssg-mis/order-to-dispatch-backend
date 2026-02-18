@@ -80,7 +80,8 @@ class CheckInvoiceService {
           od.is_order_through_broker,
           od.broker_name,
           od.sku_name,
-          od.approval_qty
+          od.approval_qty,
+          od.order_punch_remarks
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
