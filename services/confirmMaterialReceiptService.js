@@ -81,9 +81,12 @@ class ConfirmMaterialReceiptService {
           od.broker_name,
           od.sku_name,
           od.approval_qty,
-          od.order_punch_remarks
+          od.order_punch_remarks,
+          od.rate_of_material,
+          sd.nos_per_main_uom
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
         ${whereClause}
         ORDER BY lrc.planned_8 ASC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -201,14 +204,15 @@ class ConfirmMaterialReceiptService {
       Logger.info(`Submitting material receipt for ID: ${id}`, { data });
       
       const updateData = {
-        actual_8: new Date().toISOString(), // Receipt Timestamp
+        actual_8: new Date().toISOString(),
         material_received_date: data.material_received_date || null,
         received_image_proof: data.received_image_proof || null,
         damage_status: data.damage_status || null,
         sku: data.sku || null,
         damage_qty: data.damage_qty || null,
         damage_image: data.damage_image || null,
-        remarks_3: data.remarks_3 || null
+        remarks_3: data.remarks_3 || null,
+        bill_amount: data.bill_amount !== undefined ? data.bill_amount : null,
       };
       
       const fields = Object.keys(updateData);

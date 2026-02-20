@@ -24,7 +24,7 @@ class CheckInvoiceService {
       const limit = parseInt(pagination.limit) || 1000;
       const offset = (page - 1) * limit;
       
-      let whereConditions = ['lrc.planned_6 IS NOT NULL', 'lrc.actual_6 IS NULL'];
+      let whereConditions = ['lrc.planned_6 IS NOT NULL', 'lrc.actual_6 IS NULL', '(lrc.actual_5 IS NOT NULL OR lrc.status_1 = \'Issue\')'];
       let queryParams = [];
       let paramIndex = 1;
       
@@ -203,9 +203,15 @@ class CheckInvoiceService {
       
       const updateData = {
         actual_6: data.status_1 === "Issue" ? null : new Date().toISOString(),
+        actual_5: data.status_1 === "Issue" ? null : undefined, // Revert to Make Invoice stage on Issue
         status_1: data.status_1 || null,
         remarks_2: data.remarks_2 || null
       };
+
+      // Remove undefined fields so they don't get set in the query
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] === undefined) delete updateData[key];
+      });
       
       const fields = Object.keys(updateData);
       const values = Object.values(updateData);
