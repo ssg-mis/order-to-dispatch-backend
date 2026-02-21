@@ -198,25 +198,78 @@ class ActualDispatchService {
         permit2_end_date: data.permit2_end_date || null
       };
       
-      const fields = Object.keys(updateData);
-      const values = Object.values(updateData);
-      const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-      
-      const query = `
-        UPDATE lift_receiving_confirmation 
-        SET ${setClause}
-        WHERE d_sr_number = $${fields.length + 1}
-        RETURNING *
-      `;
-      
-      Logger.debug(`[ACTUAL DISPATCH] Built updateData:`, { updateData });
-      Logger.debug(`[ACTUAL DISPATCH] Final Query: ${query}`);
-      Logger.debug(`[ACTUAL DISPATCH] Final Params:`, { params: [...values, dsrNumber] });
-      
-      const result = await db.query(query, [...values, dsrNumber]);
-      if (result.rows.length === 0) throw new Error('Dispatch record not found');
-      
-      return { success: true, message: 'Actual dispatch submitted successfully', data: result.rows[0] };
+      const client = await db.getClient();
+      try {
+        await client.query('BEGIN');
+
+        // Step 1: Get original dispatch info (planned quantity and SO number)
+        const currentQuery = `SELECT so_no, qty_to_be_dispatched FROM lift_receiving_confirmation WHERE d_sr_number = $1`;
+        const currentResult = await client.query(currentQuery, [dsrNumber]);
+        
+        if (currentResult.rows.length === 0) {
+          throw new Error('Dispatch record not found');
+        }
+        
+        const originalDispatch = currentResult.rows[0];
+        const plannedQty = parseFloat(originalDispatch.qty_to_be_dispatched || 0);
+        const actualQty = parseFloat(data.actual_qty_dispatch || data.actual_qty || plannedQty);
+        const diffQty = plannedQty - actualQty;
+        const soNo = originalDispatch.so_no;
+
+        // Step 2: Update lift_receiving_confirmation
+        const fields = Object.keys(updateData);
+        const values = Object.values(updateData);
+        const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
+        
+        const query = `
+          UPDATE lift_receiving_confirmation 
+          SET ${setClause}
+          WHERE d_sr_number = $${fields.length + 1}
+          RETURNING *
+        `;
+        
+        const result = await client.query(query, [...values, dsrNumber]);
+
+        // Step 3: Handle partial dispatch by updating order_dispatch
+        if (diffQty !== 0 && soNo) {
+          Logger.info(`[ACTUAL DISPATCH] Partial dispatch detected for SO: ${soNo}. Planned: ${plannedQty}, Actual: ${actualQty}, Difference: ${diffQty}`);
+          
+          // Get current remaining_dispatch_qty from order_dispatch
+          const orderQuery = `SELECT remaining_dispatch_qty FROM order_dispatch WHERE order_no = $1`;
+          const orderResult = await client.query(orderQuery, [soNo]);
+          
+          if (orderResult.rows.length > 0) {
+            const currentOrder = orderResult.rows[0];
+            const oldRemaining = parseFloat(currentOrder.remaining_dispatch_qty || 0);
+            const newRemaining = Math.max(0, oldRemaining + diffQty);
+            
+            Logger.info(`[ACTUAL DISPATCH] Updating order_dispatch. Old Remaining: ${oldRemaining}, New Remaining: ${newRemaining}`);
+            
+            // If newRemaining > 0, we must set actual_3 to NULL so it appears back in Dispatch Planning
+            // If newRemaining == 0, we can keep actual_3 as is (it should already be set)
+            let updateOrderQuery;
+            let updateOrderParams;
+            
+            if (newRemaining > 0) {
+              updateOrderQuery = `UPDATE order_dispatch SET remaining_dispatch_qty = $1, actual_3 = NULL WHERE order_no = $2`;
+              updateOrderParams = [newRemaining, soNo];
+            } else {
+              updateOrderQuery = `UPDATE order_dispatch SET remaining_dispatch_qty = $1 WHERE order_no = $2`;
+              updateOrderParams = [0, soNo];
+            }
+            
+            await client.query(updateOrderQuery, updateOrderParams);
+          }
+        }
+
+        await client.query('COMMIT');
+        return { success: true, message: 'Actual dispatch submitted successfully', data: result.rows[0] };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     } catch (error) {
       Logger.error('Error submitting actual dispatch', error);
       throw error;
