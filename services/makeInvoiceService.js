@@ -66,6 +66,7 @@ class MakeInvoiceService {
           od.customer_type,
           od.party_so_date,
           od.oil_type,
+          od.final_rate,
           od.rate_per_15kg,
           od.rate_per_ltr,
           od.rate_of_material,
