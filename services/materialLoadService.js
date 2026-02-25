@@ -104,6 +104,7 @@ class MaterialLoadService {
       
       const updateData = {
         actual_qty: data.actual_qty || null,
+        material_load_user: data.username || null,
         weightment_slip_copy: data.weightment_slip_copy || null,
         rst_no: data.rst_no || null,
         gross_weight: data.gross_weight || null,

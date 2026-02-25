@@ -202,6 +202,7 @@ class DamageAdjustmentService {
       
       const updateData = {
         actual_9: new Date().toISOString(), // Adjustment Timestamp
+        damage_adjustment_user: data.username || null,
         delay_9: data.delay_9 || null,
         status_2: data.status_2 || null, // Final Status
         credit_note_date: data.credit_note_date || null,

@@ -201,13 +201,11 @@ class DispatchPlanningService {
       
       Logger.info(`Partial dispatch calc: Order ${order.order_no} - Available: ${currentAvailable}, Dispatched: ${dispatchQty}, New Rem: ${newRemainingQty}`);
 
-      // Generate DSR number (dispatch serial number)
+      // Generate DSR number (dispatch serial number) using atomic sequence
       // Format: DSR-001, DSR-002, etc.
-      const dsrQuery = `
-        SELECT COUNT(*) as count FROM lift_receiving_confirmation
-      `;
-      const dsrResult = await client.query(dsrQuery);
-      const dsrCount = parseInt(dsrResult.rows[0].count) + 1;
+      const seqQuery = "SELECT nextval('dsr_number_seq') as val";
+      const seqResult = await client.query(seqQuery);
+      const dsrCount = seqResult.rows[0].val;
       const dsrNumber = `DSR-${String(dsrCount).padStart(3, '0')}`;
       
       // Insert into lift_receiving_confirmation
@@ -240,25 +238,31 @@ class DispatchPlanningService {
       let updateQuery;
       let updateParams;
       
+      Logger.info(`[DEBUG-TRACKING] Raw data received in submitDispatchPlanning:`, { data });
+      
       if (newRemainingQty <= 0) {
          // Full Dispatch or Over Dispatch -> Mark as Completed (actual_3 = NOW())
          updateQuery = `
           UPDATE order_dispatch 
-          SET remaining_dispatch_qty = $1, actual_3 = NOW()
+          SET remaining_dispatch_qty = $1, actual_3 = NOW(), dispatch_planning_user = $3
           WHERE id = $2
           RETURNING *
         `;
-        updateParams = [0, orderId]; // Cap at 0
+        updateParams = [0, orderId, data.username || null]; // Cap at 0
       } else {
          // Partial Dispatch -> Keep Pending (actual_3 stays NULL)
          updateQuery = `
           UPDATE order_dispatch 
-          SET remaining_dispatch_qty = $1
+          SET remaining_dispatch_qty = $1, dispatch_planning_user = $3
           WHERE id = $2
           RETURNING *
         `;
-        updateParams = [newRemainingQty, orderId];
+        updateParams = [newRemainingQty, orderId, data.username || null];
       }
+      
+      Logger.info(`[DEBUG-TRACKING] Prepared updateParams for order_dispatch (Planning):`, { 
+        dispatch_planning_user: updateParams[2]
+      });
       
       await client.query(updateQuery, updateParams);
       

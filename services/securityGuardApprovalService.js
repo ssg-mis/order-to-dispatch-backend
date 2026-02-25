@@ -211,6 +211,7 @@ class SecurityGuardApprovalService {
         bilty_no: data.bilty_no || null,
         bilty_image: data.bilty_image || null,
         vehicle_image_attachemrnt: data.vehicle_image_attachemrnt || null,
+        security_guard_user: data.username || null,
       };
       
       const fields = Object.keys(updateData);

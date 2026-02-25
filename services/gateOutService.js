@@ -204,6 +204,7 @@ class GateOutService {
       
       const updateData = {
         actual_7: new Date().toISOString(), // Gate Out Timestamp
+        gate_out_user: data.username || null,
         gate_pass_copy: data.gate_pass || null, // Renamed column
         vehicle_loaded_image: data.vehicle_image || null // Renamed column
       };

@@ -169,6 +169,7 @@ class ActualDispatchService {
       const updateData = {
         actual_1: new Date().toISOString(),
         product_name_1: data.product_name_1 || null,
+        actual_dispatch_user: data.username || null,
         actual_qty_dispatch: data.actual_qty_dispatch || null,
         check_status: data.check_status || null,
         remarks: data.remarks || null,

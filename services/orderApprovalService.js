@@ -192,10 +192,22 @@ class OrderApprovalService {
     try {
       Logger.info(`submitApproval called for ID: ${id}`, { data });
       
+      Logger.info(`[DEBUG-TRACKING] Raw data received in submitApproval:`, { data });
+      
       const updateData = {
         actual_2: new Date().toISOString(),
+        order_approval_user: data.username || null,
         ...data
       };
+
+      Logger.info(`[DEBUG-TRACKING] Prepared updateData for order_dispatch (Approval):`, { 
+        order_approval_user: updateData.order_approval_user,
+        hasUsername: !!updateData.username,
+        usernameValue: updateData.username
+      });
+
+      // Remove username from data if it exists to avoid trying to update a non-existent column in the spread (...data)
+      if (updateData.username) delete updateData.username;
       
       Logger.info(`Update data prepared:`, updateData);
       

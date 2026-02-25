@@ -208,7 +208,8 @@ class MakeInvoiceService {
         invoice_no: data.invoice_no || null,
         invoice_copy: data.invoice_copy || null,
         qty: data.qty || null,
-        bill_amount: data.bill_amount || null
+        bill_amount: data.bill_amount || null,
+        make_invoice_user: data.username || null,
       };
       
       const fields = Object.keys(updateData);

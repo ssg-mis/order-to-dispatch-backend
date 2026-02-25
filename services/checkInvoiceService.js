@@ -204,6 +204,7 @@ class CheckInvoiceService {
       
       const updateData = {
         actual_6: data.status_1 === "Issue" ? null : new Date().toISOString(),
+        check_invoice_user: data.username || null,
         actual_5: data.status_1 === "Issue" ? null : undefined, // Revert to Make Invoice stage on Issue
         status_1: data.status_1 || null,
         remarks_2: data.remarks_2 || null

@@ -205,6 +205,7 @@ class ConfirmMaterialReceiptService {
       
       const updateData = {
         actual_8: new Date().toISOString(),
+        material_receipt_user: data.username || null,
         material_received_date: data.material_received_date || null,
         received_image_proof: data.received_image_proof || null,
         damage_status: data.damage_status || null,

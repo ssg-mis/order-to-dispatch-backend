@@ -88,6 +88,11 @@ class OrderDispatch {
     
     this.remaining_dispatch_qty = data.remaining_dispatch_qty !== undefined ? data.remaining_dispatch_qty : null;
     
+    this.dispatch_planning_user = data.dispatch_planning_user || null;
+    this.order_approval_user = data.order_approval_user || null;
+    this.pre_approval_user = data.pre_approval_user || null;
+    this.order_punch_user = data.order_punch_user || null;
+    
     this.created_at = data.created_at || new Date();
   }
 
@@ -150,7 +155,11 @@ class OrderDispatch {
       planned_3: this.planned_3,
       actual_3: this.actual_3,
       delay_3: this.delay_3,
-      remaining_dispatch_qty: this.remaining_dispatch_qty
+      remaining_dispatch_qty: this.remaining_dispatch_qty,
+      order_punch_user: this.order_punch_user,
+      pre_approval_user: this.pre_approval_user,
+      order_approval_user: this.order_approval_user,
+      dispatch_planning_user: this.dispatch_planning_user
     };
   }
 }
