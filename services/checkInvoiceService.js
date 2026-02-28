@@ -82,9 +82,11 @@ class CheckInvoiceService {
           od.broker_name,
           od.sku_name,
           od.approval_qty,
-          od.order_punch_remarks
+          od.order_punch_remarks,
+          sd.nos_per_main_uom
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
         ${whereClause}
         ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

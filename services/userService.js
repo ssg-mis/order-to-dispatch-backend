@@ -130,6 +130,9 @@ class UserService {
         RETURNING id, username, email, phone_no, status, role, page_access, created_at, updated_at
       `;
       
+      // Serialize page_access: convert object/array to JSON string for jsonb column
+      const pageAccessValue = page_access ? JSON.stringify(page_access) : JSON.stringify({})
+      
       const result = await db.query(query, [
         username,
         hashedPassword,
@@ -137,7 +140,7 @@ class UserService {
         phone_no,
         status,
         role,
-        page_access
+        pageAccessValue
       ]);
       
       return {
@@ -211,7 +214,8 @@ class UserService {
       
       if (page_access !== undefined) {
         updateFields.push(`page_access = $${paramIndex++}`);
-        queryParams.push(page_access);
+        // Serialize: accepts both object and array formats
+        queryParams.push(JSON.stringify(page_access));
       }
 
       if (updateFields.length === 0) {
