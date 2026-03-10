@@ -23,37 +23,37 @@ class SecurityGuardApprovalService {
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 1000;
       const offset = (page - 1) * limit;
-      
+
       let whereConditions = ['lrc.planned_4 IS NOT NULL', 'lrc.actual_4 IS NULL'];
       let queryParams = [];
       let paramIndex = 1;
-      
+
       // Add optional filters
       if (filters.d_sr_number) {
         whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
         paramIndex++;
       }
-      
+
       if (filters.so_no) {
         whereConditions.push(`lrc.so_no = $${paramIndex}`);
         queryParams.push(filters.so_no);
         paramIndex++;
       }
-      
+
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
-      
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-      
+
       // Count total
       const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
-      
+
       // Get data
       const dataQuery = `
         SELECT 
@@ -88,11 +88,11 @@ class SecurityGuardApprovalService {
         ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      
+
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      
+
       Logger.info(`Fetched ${dataResult.rows.length} pending security guard approvals`);
-      
+
       return {
         success: true,
         data: dataResult.rows,
@@ -121,37 +121,37 @@ class SecurityGuardApprovalService {
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 1000;
       const offset = (page - 1) * limit;
-      
+
       let whereConditions = ['planned_4 IS NOT NULL', 'actual_4 IS NOT NULL'];
       let queryParams = [];
       let paramIndex = 1;
-      
+
       // Add optional filters
       if (filters.d_sr_number) {
         whereConditions.push(`d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
         paramIndex++;
       }
-      
+
       if (filters.so_no) {
         whereConditions.push(`so_no = $${paramIndex}`);
         queryParams.push(filters.so_no);
         paramIndex++;
       }
-      
+
       if (filters.party_name) {
         whereConditions.push(`party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
-      
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-      
+
       // Count total
       const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
-      
+
       // Get data
       const dataQuery = `
         SELECT 
@@ -165,11 +165,11 @@ class SecurityGuardApprovalService {
         ORDER BY actual_4 DESC, d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      
+
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      
+
       Logger.info(`Fetched ${dataResult.rows.length} security guard approval history records`);
-      
+
       return {
         success: true,
         data: dataResult.rows,
@@ -195,7 +195,7 @@ class SecurityGuardApprovalService {
   async submitApproval(id, data = {}) {
     try {
       Logger.info(`Submitting security guard approval for ID: ${id}`, { data });
-      
+
       // Calculate time delay if planned_4 exists
       let timeDelay = null;
       if (data.planned_4) {
@@ -205,35 +205,47 @@ class SecurityGuardApprovalService {
         const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
         timeDelay = `${diffHours} hours`;
       }
-      
-      const updateData = {
-        actual_4: new Date().toISOString(),
-        bilty_no: data.bilty_no || null,
-        bilty_image: data.bilty_image || null,
-        vehicle_image_attachemrnt: data.vehicle_image_attachemrnt || null,
-        security_guard_user: data.username || null,
-      };
-      
+
+      let updateData = {};
+
+      if (data.verdict_status === 'REJECT') {
+        updateData = {
+          actual_1: null,
+          actual_4: null,
+          security_guard_status: 'REJECT',
+          security_guard_user: data.username || null,
+        };
+      } else {
+        updateData = {
+          actual_4: new Date().toISOString(),
+          bilty_no: data.bilty_no || null,
+          bilty_image: data.bilty_image || null,
+          vehicle_image_attachemrnt: data.vehicle_image_attachemrnt || null,
+          security_guard_user: data.username || null,
+          security_guard_status: 'APPROVE',
+        };
+      }
+
       const fields = Object.keys(updateData);
       const values = Object.values(updateData);
-      
+
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-      
+
       const query = `
         UPDATE lift_receiving_confirmation 
         SET ${setClause}
         WHERE id = $${fields.length + 1}
         RETURNING *
       `;
-      
+
       const result = await db.query(query, [...values, id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error('Record not found');
       }
-      
+
       Logger.info(`Security guard approval submitted successfully for ID: ${id}`);
-      
+
       return {
         success: true,
         message: 'Security guard approval submitted successfully',
@@ -256,13 +268,13 @@ class SecurityGuardApprovalService {
         SELECT * FROM lift_receiving_confirmation 
         WHERE id = $1
       `;
-      
+
       const result = await db.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error('Record not found');
       }
-      
+
       return {
         success: true,
         data: result.rows[0]
