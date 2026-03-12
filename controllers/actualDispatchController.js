@@ -114,8 +114,36 @@ const submitActualDispatch = async (req, res, next) => {
   }
 };
 
+/**
+ * Revert actual dispatch
+ * @route POST /api/v1/actual-dispatch/revert/:dsrNumber
+ */
+const revertActualDispatch = async (req, res, next) => {
+  try {
+    const { dsrNumber } = req.params;
+    const { username } = req.body;
+    
+    Logger.info(`[ACTUAL DISPATCH] Reverting DSR: ${dsrNumber}`, { username });
+    
+    const result = await actualDispatchService.revertActualDispatch(dsrNumber, username);
+    
+    return ResponseUtil.success(
+      res,
+      null,
+      result.message
+    );
+  } catch (error) {
+    Logger.error('[ACTUAL DISPATCH] Error in revertActualDispatch controller', error);
+    if (error.message.includes('not found')) {
+      return ResponseUtil.notFound(res, error.message);
+    }
+    next(error);
+  }
+};
+
 module.exports = {
   getPendingDispatches,
   getDispatchHistory,
-  submitActualDispatch
+  submitActualDispatch,
+  revertActualDispatch
 };

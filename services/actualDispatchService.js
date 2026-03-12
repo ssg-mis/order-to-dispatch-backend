@@ -276,6 +276,64 @@ class ActualDispatchService {
       throw error;
     }
   }
+
+  /**
+   * Revert actual dispatch
+   * 1. Delete from lift_receiving_confirmation
+   * 2. Restore quantity in order_dispatch
+   * 3. Reset actual_3 status in order_dispatch
+   * @param {string} dsrNumber - DSR Number
+   * @param {string} username - User who is reverting
+   * @returns {Promise<Object>} Status of reversion
+   */
+  async revertActualDispatch(dsrNumber, username) {
+    try {
+      Logger.info(`Reverting actual dispatch for DSR: ${dsrNumber} by user: ${username}`);
+      
+      const client = await db.getClient();
+      try {
+        await client.query('BEGIN');
+
+        // Step 1: Get dispatch info before deleting
+        const infoQuery = `SELECT so_no, qty_to_be_dispatched FROM lift_receiving_confirmation WHERE d_sr_number = $1`;
+        const infoResult = await client.query(infoQuery, [dsrNumber]);
+        
+        if (infoResult.rows.length === 0) {
+          throw new Error('Dispatch record not found');
+        }
+        
+        const { so_no: soNo, qty_to_be_dispatched: qtyToRevert } = infoResult.rows[0];
+        const revertAmt = parseFloat(qtyToRevert || 0);
+
+        // Step 2: Delete from lift_receiving_confirmation
+        await client.query(`DELETE FROM lift_receiving_confirmation WHERE d_sr_number = $1`, [dsrNumber]);
+
+        // Step 3: Update order_dispatch to restore quantity and reset status
+        if (soNo) {
+          const updateOrderQuery = `
+            UPDATE order_dispatch 
+            SET 
+              remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
+              actual_3 = NULL 
+            WHERE order_no = $2
+          `;
+          await client.query(updateOrderQuery, [revertAmt, soNo]);
+          Logger.info(`[REVERT] Restored ${revertAmt} to SO: ${soNo}`);
+        }
+
+        await client.query('COMMIT');
+        return { success: true, message: 'Actual dispatch reverted successfully' };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      Logger.error('Error reverting actual dispatch', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new ActualDispatchService();

@@ -44,4 +44,15 @@ router.post(
   actualDispatchController.submitActualDispatch
 );
 
+/**
+ * @route   POST /api/v1/actual-dispatch/revert/:dsrNumber
+ * @desc    Revert actual dispatch (removes from list and restores quantity)
+ * @access  Public
+ * @body    { username }
+ */
+router.post(
+  '/revert/:dsrNumber',
+  actualDispatchController.revertActualDispatch
+);
+
 module.exports = router;
