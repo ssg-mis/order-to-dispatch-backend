@@ -116,8 +116,32 @@ const submitDispatchPlanning = async (req, res, next) => {
   }
 };
 
+/**
+ * Revert dispatch planning back to pre-approval
+ * @route POST /api/v1/dispatch-planning/revert/:id
+ */
+const revertDispatchPlanning = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { username } = req.body;
+
+    Logger.info(`[DISPATCH PLANNING] Reverting order ID: ${id}`, { username });
+
+    const result = await dispatchPlanningService.revertDispatchPlanning(id, username);
+
+    return ResponseUtil.success(res, result, result.message);
+  } catch (error) {
+    Logger.error('[DISPATCH PLANNING] Error in revertDispatchPlanning controller', error);
+    if (error.message.includes('not found')) {
+      return ResponseUtil.notFound(res, error.message);
+    }
+    next(error);
+  }
+};
+
 module.exports = {
   getPendingDispatches,
   getDispatchHistory,
-  submitDispatchPlanning
+  submitDispatchPlanning,
+  revertDispatchPlanning
 };

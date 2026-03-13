@@ -290,6 +290,67 @@ class DispatchPlanningService {
       client.release();
     }
   }
+
+  /**
+   * Revert dispatch planning back to pre-approval
+   * 1. Null actual_3, planned_3, actual_2, planned_2, actual_1 in order_dispatch
+   * 2. Restore remaining_dispatch_qty
+   * 3. Delete related lift_receiving_confirmation records
+   * @param {number} orderId - Order ID from order_dispatch table
+   * @param {string} username - User who is reverting
+   * @returns {Promise<Object>} Status of reversion
+   */
+  async revertDispatchPlanning(orderId, username) {
+    const client = await db.pool.connect();
+    
+    try {
+      await client.query('BEGIN');
+      
+      Logger.info(`[DISPATCH PLANNING] Reverting order ID: ${orderId} by user: ${username}`);
+      
+      // Step 1: Get order details
+      const orderQuery = `SELECT order_no, approval_qty, order_quantity, remaining_dispatch_qty FROM order_dispatch WHERE id = $1`;
+      const orderResult = await client.query(orderQuery, [orderId]);
+      
+      if (orderResult.rows.length === 0) {
+        throw new Error('Order not found');
+      }
+      
+      const order = orderResult.rows[0];
+      const originalQty = parseFloat(order.approval_qty || order.order_quantity || 0);
+      
+      // Step 2: Delete related lift_receiving_confirmation records for this order
+      const deleteQuery = `DELETE FROM lift_receiving_confirmation WHERE so_no = $1`;
+      const deleteResult = await client.query(deleteQuery, [order.order_no]);
+      Logger.info(`[REVERT] Deleted ${deleteResult.rowCount} lift_receiving_confirmation records for SO: ${order.order_no}`);
+      
+      // Step 3: Update order_dispatch - null all stage columns and restore qty
+      const updateQuery = `
+        UPDATE order_dispatch 
+        SET 
+          actual_3 = NULL,
+          planned_3 = NULL,
+          actual_2 = NULL,
+          planned_2 = NULL,
+          actual_1 = NULL,
+          remaining_dispatch_qty = $1
+        WHERE id = $2
+        RETURNING *
+      `;
+      await client.query(updateQuery, [originalQty, orderId]);
+      Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Restored qty: ${originalQty}`);
+      
+      await client.query('COMMIT');
+      return { success: true, message: 'Dispatch planning reverted to pre-approval successfully' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      Logger.error('Error reverting dispatch planning', error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 module.exports = new DispatchPlanningService();
+

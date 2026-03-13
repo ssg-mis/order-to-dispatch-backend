@@ -314,7 +314,11 @@ class ActualDispatchService {
             UPDATE order_dispatch 
             SET 
               remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
-              actual_3 = NULL 
+              planned_3 = NULL,
+              actual_3 = NULL,
+              planned_2 = NULL,
+              actual_2 = NULL,
+              actual_1 = NULL
             WHERE order_no = $2
           `;
           await client.query(updateOrderQuery, [revertAmt, soNo]);

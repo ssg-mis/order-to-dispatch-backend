@@ -43,4 +43,15 @@ router.post(
   dispatchPlanningController.submitDispatchPlanning
 );
 
+/**
+ * @route   POST /api/v1/dispatch-planning/revert/:id
+ * @desc    Revert dispatch planning to pre-approval (nulls actual_3, planned_3, actual_2, planned_2, actual_1)
+ * @access  Public
+ * @body    { username: string }
+ */
+router.post(
+  '/revert/:id',
+  dispatchPlanningController.revertDispatchPlanning
+);
+
 module.exports = router;
