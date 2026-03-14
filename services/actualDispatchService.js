@@ -294,15 +294,20 @@ class ActualDispatchService {
       try {
         await client.query('BEGIN');
 
-        // Step 1: Get dispatch info before deleting
-        const infoQuery = `SELECT so_no, qty_to_be_dispatched FROM lift_receiving_confirmation WHERE d_sr_number = $1`;
+        // Step 1: Get dispatch info before deleting (join with order_dispatch to get order_type)
+        const infoQuery = `
+          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_type
+          FROM lift_receiving_confirmation lrc
+          LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+          WHERE lrc.d_sr_number = $1
+        `;
         const infoResult = await client.query(infoQuery, [dsrNumber]);
         
         if (infoResult.rows.length === 0) {
           throw new Error('Dispatch record not found');
         }
         
-        const { so_no: soNo, qty_to_be_dispatched: qtyToRevert } = infoResult.rows[0];
+        const { so_no: soNo, qty_to_be_dispatched: qtyToRevert, order_type: orderType } = infoResult.rows[0];
         const revertAmt = parseFloat(qtyToRevert || 0);
 
         // Step 2: Delete from lift_receiving_confirmation
@@ -310,19 +315,39 @@ class ActualDispatchService {
 
         // Step 3: Update order_dispatch to restore quantity and reset status
         if (soNo) {
-          const updateOrderQuery = `
-            UPDATE order_dispatch 
-            SET 
-              remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
-              planned_3 = NULL,
-              actual_3 = NULL,
-              planned_2 = NULL,
-              actual_2 = NULL,
-              actual_1 = NULL
-            WHERE order_no = $2
-          `;
+          let updateOrderQuery;
+
+          if (orderType && orderType.toLowerCase() === 'regular') {
+            // For regular orders: set planned_1 to current date instead of leaving it
+            updateOrderQuery = `
+              UPDATE order_dispatch 
+              SET 
+                remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
+                planned_3 = NULL,
+                actual_3 = NULL,
+                planned_2 = NULL,
+                actual_2 = NULL,
+                actual_1 = NULL,
+                planned_1 = NOW()
+              WHERE order_no = $2
+            `;
+          } else {
+            // For non-regular orders: keep existing behavior (don't touch planned_1)
+            updateOrderQuery = `
+              UPDATE order_dispatch 
+              SET 
+                remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
+                planned_3 = NULL,
+                actual_3 = NULL,
+                planned_2 = NULL,
+                actual_2 = NULL,
+                actual_1 = NULL
+              WHERE order_no = $2
+            `;
+          }
+
           await client.query(updateOrderQuery, [revertAmt, soNo]);
-          Logger.info(`[REVERT] Restored ${revertAmt} to SO: ${soNo}`);
+          Logger.info(`[REVERT] Restored ${revertAmt} to SO: ${soNo} (order_type: ${orderType || 'unknown'})`);
         }
 
         await client.query('COMMIT');

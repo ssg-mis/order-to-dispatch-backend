@@ -309,7 +309,7 @@ class DispatchPlanningService {
       Logger.info(`[DISPATCH PLANNING] Reverting order ID: ${orderId} by user: ${username}`);
       
       // Step 1: Get order details
-      const orderQuery = `SELECT order_no, approval_qty, order_quantity, remaining_dispatch_qty FROM order_dispatch WHERE id = $1`;
+      const orderQuery = `SELECT order_no, approval_qty, order_quantity, remaining_dispatch_qty, order_type FROM order_dispatch WHERE id = $1`;
       const orderResult = await client.query(orderQuery, [orderId]);
       
       if (orderResult.rows.length === 0) {
@@ -325,20 +325,41 @@ class DispatchPlanningService {
       Logger.info(`[REVERT] Deleted ${deleteResult.rowCount} lift_receiving_confirmation records for SO: ${order.order_no}`);
       
       // Step 3: Update order_dispatch - null all stage columns and restore qty
-      const updateQuery = `
-        UPDATE order_dispatch 
-        SET 
-          actual_3 = NULL,
-          planned_3 = NULL,
-          actual_2 = NULL,
-          planned_2 = NULL,
-          actual_1 = NULL,
-          remaining_dispatch_qty = $1
-        WHERE id = $2
-        RETURNING *
-      `;
+      let updateQuery;
+
+      if (order.order_type && order.order_type.toLowerCase() === 'regular') {
+        // For regular orders: set planned_1 to current date
+        updateQuery = `
+          UPDATE order_dispatch 
+          SET 
+            actual_3 = NULL,
+            planned_3 = NULL,
+            actual_2 = NULL,
+            planned_2 = NULL,
+            actual_1 = NULL,
+            planned_1 = NOW(),
+            remaining_dispatch_qty = $1
+          WHERE id = $2
+          RETURNING *
+        `;
+      } else {
+        // For non-regular orders: keep existing behavior (don't touch planned_1)
+        updateQuery = `
+          UPDATE order_dispatch 
+          SET 
+            actual_3 = NULL,
+            planned_3 = NULL,
+            actual_2 = NULL,
+            planned_2 = NULL,
+            actual_1 = NULL,
+            remaining_dispatch_qty = $1
+          WHERE id = $2
+          RETURNING *
+        `;
+      }
+
       await client.query(updateQuery, [originalQty, orderId]);
-      Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Restored qty: ${originalQty}`);
+      Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Restored qty: ${originalQty} (order_type: ${order.order_type || 'unknown'})`);
       
       await client.query('COMMIT');
       return { success: true, message: 'Dispatch planning reverted to pre-approval successfully' };
