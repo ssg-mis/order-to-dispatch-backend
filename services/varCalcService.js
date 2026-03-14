@@ -47,28 +47,27 @@ class VarCalcService {
      */
     async save(data) {
         try {
-            const { oil_rate, freight_rate, total, gst, gt } = data;
-            const date = new Date();
-            const today = date.toISOString().split("T")[0];
-            const isExists = await db.query(`
-                SELECT calculation_date
-                FROM var_calc
-                WHERE calculation_date = $1`,
-                [today]);
+            const { oil_rate, freight_rate, total, gst, gt, calculation_date, oil_type } = data;
 
-            if (isExists.rows.length) {
-                const error = new Error("Today's calculation already present");
+            const isExists = await db.query(`
+                SELECT oil_type, calculation_date
+                FROM var_calc
+                WHERE calculation_date = $1 AND oil_type = $2`,
+            [calculation_date, oil_type]);
+
+            if(isExists.rows.length) {
+                const error = new Error("Variable parameter calculation already exists");
                 throw error;
             }
 
             const query = `
         INSERT INTO var_calc (
-          loose_1_kg_oil_rate, freight_rate, total, five_percent_gst, gt, calculation_date
+          loose_1_kg_oil_rate, freight_rate, total, five_percent_gst, gt, calculation_date, oil_type
         ) VALUES (
-          $1, $2, $3, $4, $5, NOW()
+          $1, $2, $3, $4, $5, $6, $7
         ) RETURNING *
       `;
-            const values = [oil_rate, freight_rate, total, gst, gt];
+            const values = [oil_rate, freight_rate, total, gst, gt, calculation_date, oil_type];
             const result = await db.query(query, values);
 
             // After saving var_calc, update landing_cost in sku_selling_price
