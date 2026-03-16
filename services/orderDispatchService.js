@@ -459,6 +459,8 @@ class OrderDispatchService {
       
       // Remove username from data if it exists to avoid trying to update a non-existent column in the spread (...data)
       if (updateData.username) delete updateData.username;
+      // Remove remark since it's not a column but passed from the frontend for history
+      if (updateData.remark !== undefined) delete updateData.remark;
       
       const fields = Object.keys(updateData);
       const values = Object.values(updateData);

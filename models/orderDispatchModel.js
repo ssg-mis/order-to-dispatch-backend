@@ -65,8 +65,6 @@ class OrderDispatch {
     
     this.take_required_rates_each_item = data.take_required_rates_each_item || false;
     
-    this.remark = data.remark || null;
-    
     // Stage 2 columns (renamed from planned_dispatch, actual_dispatch, delay_dispatch)
     this.planned_2 = data.planned_2 || null;
     this.actual_2 = data.actual_2 || null;
@@ -142,7 +140,6 @@ class OrderDispatch {
       approval_qty: this.approval_qty,
       final_rate: this.final_rate,
       take_required_rates_each_item: this.take_required_rates_each_item,
-      remark: this.remark,
       planned_2: this.planned_2,
       actual_2: this.actual_2,
       delay_2: this.delay_2,

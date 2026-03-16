@@ -121,11 +121,11 @@ const submitActualDispatch = async (req, res, next) => {
 const revertActualDispatch = async (req, res, next) => {
   try {
     const { dsrNumber } = req.params;
-    const { username } = req.body;
+    const { username, remarks } = req.body;
     
-    Logger.info(`[ACTUAL DISPATCH] Reverting DSR: ${dsrNumber}`, { username });
+    Logger.info(`[ACTUAL DISPATCH] Reverting DSR: ${dsrNumber}`, { username, remarks });
     
-    const result = await actualDispatchService.revertActualDispatch(dsrNumber, username);
+    const result = await actualDispatchService.revertActualDispatch(dsrNumber, username, remarks);
     
     return ResponseUtil.success(
       res,

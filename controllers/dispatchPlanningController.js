@@ -123,11 +123,11 @@ const submitDispatchPlanning = async (req, res, next) => {
 const revertDispatchPlanning = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username } = req.body;
+    const { username, remarks } = req.body;
 
-    Logger.info(`[DISPATCH PLANNING] Reverting order ID: ${id}`, { username });
+    Logger.info(`[DISPATCH PLANNING] Reverting order ID: ${id}`, { username, remarks });
 
-    const result = await dispatchPlanningService.revertDispatchPlanning(id, username);
+    const result = await dispatchPlanningService.revertDispatchPlanning(id, username, remarks);
 
     return ResponseUtil.success(res, result, result.message);
   } catch (error) {

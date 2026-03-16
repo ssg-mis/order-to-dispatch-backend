@@ -214,6 +214,7 @@ class SecurityGuardApprovalService {
           actual_4: null,
           security_guard_status: 'REJECT',
           security_guard_user: data.username || null,
+          revert_security_remarks: data.remarks || null,
         };
       } else {
         updateData = {

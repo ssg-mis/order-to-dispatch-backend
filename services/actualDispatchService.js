@@ -286,9 +286,9 @@ class ActualDispatchService {
    * @param {string} username - User who is reverting
    * @returns {Promise<Object>} Status of reversion
    */
-  async revertActualDispatch(dsrNumber, username) {
+  async revertActualDispatch(dsrNumber, username, remarks) {
     try {
-      Logger.info(`Reverting actual dispatch for DSR: ${dsrNumber} by user: ${username}`);
+      Logger.info(`Reverting actual dispatch for DSR: ${dsrNumber} by user: ${username}`, { remarks });
       
       const client = await db.getClient();
       try {
@@ -313,7 +313,7 @@ class ActualDispatchService {
         // Step 2: Delete from lift_receiving_confirmation
         await client.query(`DELETE FROM lift_receiving_confirmation WHERE d_sr_number = $1`, [dsrNumber]);
 
-        // Step 3: Update order_dispatch to restore quantity and reset status
+        // Step 3: Update order_dispatch to restore quantity, reset status, and save revert remarks
         if (soNo) {
           let updateOrderQuery;
 
@@ -328,7 +328,8 @@ class ActualDispatchService {
                 planned_2 = NULL,
                 actual_2 = NULL,
                 actual_1 = NULL,
-                planned_1 = NOW()
+                planned_1 = NOW(),
+                revert_dispatch_remarks = $3
               WHERE order_no = $2
             `;
           } else {
@@ -341,13 +342,14 @@ class ActualDispatchService {
                 actual_3 = NULL,
                 planned_2 = NULL,
                 actual_2 = NULL,
-                actual_1 = NULL
+                actual_1 = NULL,
+                revert_dispatch_remarks = $3
               WHERE order_no = $2
             `;
           }
 
-          await client.query(updateOrderQuery, [revertAmt, soNo]);
-          Logger.info(`[REVERT] Restored ${revertAmt} to SO: ${soNo} (order_type: ${orderType || 'unknown'})`);
+          await client.query(updateOrderQuery, [revertAmt, soNo, remarks || null]);
+          Logger.info(`[REVERT] Restored ${revertAmt} to SO: ${soNo} (order_type: ${orderType || 'unknown'}, remarks: ${remarks || 'none'})`);
         }
 
         await client.query('COMMIT');
