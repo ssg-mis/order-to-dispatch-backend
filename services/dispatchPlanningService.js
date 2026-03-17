@@ -364,22 +364,37 @@ class DispatchPlanningService {
       await client.query(updateQuery, [originalQty, orderId, remarks || null]);
       Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Restored qty: ${originalQty} (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
 
-      // Step 4: For regular orders, derive rate_per_15kg and rate_per_ltr from product_name + rate_of_material
-      if (order.order_type && order.order_type.toLowerCase() === 'regular' && order.product_name && order.rate_of_material) {
+      // Step 4: For regular orders, map oil_type and derive rates
+      if (order.order_type && order.order_type.toLowerCase() === 'regular' && order.product_name) {
         try {
-          const derivedRates = await deriveRatesForRegularOrder(order.product_name, parseFloat(order.rate_of_material));
-          if (derivedRates) {
-            const rateUpdateQuery = `
-              UPDATE order_dispatch 
-              SET rate_per_15kg = $1, rate_per_ltr = $2
-              WHERE id = $3
-            `;
-            await client.query(rateUpdateQuery, [derivedRates.rate_per_15kg, derivedRates.rate_per_ltr, orderId]);
-            Logger.info(`[REVERT] Derived and saved rates for order ${orderId}: 15kg=${derivedRates.rate_per_15kg}, 1ltr=${derivedRates.rate_per_ltr}`);
+          // 1. Map product name to oil type
+          const nameLower = order.product_name.toLowerCase();
+          let oilType = null;
+          if (nameLower.includes('sbo') || nameLower.includes('soya')) oilType = 'Soya Oil';
+          else if (nameLower.includes('rbo') || nameLower.includes('rice')) oilType = 'Rice Oil';
+          else if (nameLower.includes('palm')) oilType = 'Palm Oil';
+
+          if (oilType) {
+            await client.query(`UPDATE order_dispatch SET oil_type = $1 WHERE id = $2`, [oilType, orderId]);
+            Logger.info(`[REVERT] Mapped product "${order.product_name}" to oil_type "${oilType}" for order ID ${orderId}`);
           }
-        } catch (deriveError) {
-          Logger.warn(`[REVERT] Could not derive rates for order ${orderId}: ${deriveError.message}`);
-          // Non-fatal: continue with revert even if rate derivation fails
+
+          // 2. Derive rate_per_15kg and rate_per_ltr
+          if (order.rate_of_material) {
+            const derivedRates = await deriveRatesForRegularOrder(order.product_name, parseFloat(order.rate_of_material));
+            if (derivedRates) {
+              const rateUpdateQuery = `
+                UPDATE order_dispatch 
+                SET rate_per_15kg = $1, rate_per_ltr = $2
+                WHERE id = $3
+              `;
+              await client.query(rateUpdateQuery, [derivedRates.rate_per_15kg, derivedRates.rate_per_ltr, orderId]);
+              Logger.info(`[REVERT] Derived and saved rates for order ${orderId}: 15kg=${derivedRates.rate_per_15kg}, 1ltr=${derivedRates.rate_per_ltr}`);
+            }
+          }
+        } catch (error) {
+          Logger.warn(`[REVERT] Post-revert updates failed for order ID ${orderId}: ${error.message}`);
+          // Non-fatal
         }
       }
       
