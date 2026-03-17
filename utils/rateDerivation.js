@@ -294,8 +294,8 @@ async function deriveRatesForRegularOrder(productName, rateOfMaterial) {
     }
 
     const result = {
-      rate_per_15kg: parseFloat(ratePer15Kg.toFixed(2)),
-      rate_per_ltr: parseFloat(ratePerLtr.toFixed(2))
+      rate_per_15kg: ratePer15Kg,
+      rate_per_ltr: ratePerLtr
     };
 
     Logger.info(`[RATE_DERIVATION] Final result: rate_per_15kg=${result.rate_per_15kg}, rate_per_ltr=${result.rate_per_ltr}`);
