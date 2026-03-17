@@ -9,6 +9,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { deriveRatesForRegularOrder } = require('../utils/rateDerivation');
 
 class ActualDispatchService {
   /**
@@ -294,9 +295,9 @@ class ActualDispatchService {
       try {
         await client.query('BEGIN');
 
-        // Step 1: Get dispatch info before deleting (join with order_dispatch to get order_type)
+        // Step 1: Get dispatch info before deleting (join with order_dispatch to get order_type, product_name, rate_of_material)
         const infoQuery = `
-          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_type
+          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_type, od.product_name, od.rate_of_material
           FROM lift_receiving_confirmation lrc
           LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
           WHERE lrc.d_sr_number = $1
@@ -307,7 +308,7 @@ class ActualDispatchService {
           throw new Error('Dispatch record not found');
         }
         
-        const { so_no: soNo, qty_to_be_dispatched: qtyToRevert, order_type: orderType } = infoResult.rows[0];
+        const { so_no: soNo, qty_to_be_dispatched: qtyToRevert, order_type: orderType, product_name: productName, rate_of_material: rateOfMaterial } = infoResult.rows[0];
         const revertAmt = parseFloat(qtyToRevert || 0);
 
         // Step 2: Delete from lift_receiving_confirmation
@@ -350,6 +351,25 @@ class ActualDispatchService {
 
           await client.query(updateOrderQuery, [revertAmt, soNo, remarks || null]);
           Logger.info(`[REVERT] Restored ${revertAmt} to SO: ${soNo} (order_type: ${orderType || 'unknown'}, remarks: ${remarks || 'none'})`);
+
+          // Step 4: For regular orders, derive rate_per_15kg and rate_per_ltr from product_name + rate_of_material
+          if (orderType && orderType.toLowerCase() === 'regular' && productName && rateOfMaterial) {
+            try {
+              const derivedRates = await deriveRatesForRegularOrder(productName, parseFloat(rateOfMaterial));
+              if (derivedRates) {
+                const rateUpdateQuery = `
+                  UPDATE order_dispatch 
+                  SET rate_per_15kg = $1, rate_per_ltr = $2
+                  WHERE order_no = $3
+                `;
+                await client.query(rateUpdateQuery, [derivedRates.rate_per_15kg, derivedRates.rate_per_ltr, soNo]);
+                Logger.info(`[REVERT] Derived and saved rates for SO ${soNo}: 15kg=${derivedRates.rate_per_15kg}, 1ltr=${derivedRates.rate_per_ltr}`);
+              }
+            } catch (deriveError) {
+              Logger.warn(`[REVERT] Could not derive rates for SO ${soNo}: ${deriveError.message}`);
+              // Non-fatal: continue with revert even if rate derivation fails
+            }
+          }
         }
 
         await client.query('COMMIT');

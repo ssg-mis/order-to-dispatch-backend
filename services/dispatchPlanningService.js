@@ -8,6 +8,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { deriveRatesForRegularOrder } = require('../utils/rateDerivation');
 
 class DispatchPlanningService {
   /**
@@ -309,7 +310,7 @@ class DispatchPlanningService {
       Logger.info(`[DISPATCH PLANNING] Reverting order ID: ${orderId} by user: ${username}`, { remarks });
       
       // Step 1: Get order details
-      const orderQuery = `SELECT order_no, approval_qty, order_quantity, remaining_dispatch_qty, order_type FROM order_dispatch WHERE id = $1`;
+      const orderQuery = `SELECT order_no, approval_qty, order_quantity, remaining_dispatch_qty, order_type, product_name, rate_of_material FROM order_dispatch WHERE id = $1`;
       const orderResult = await client.query(orderQuery, [orderId]);
       
       if (orderResult.rows.length === 0) {
@@ -362,6 +363,25 @@ class DispatchPlanningService {
 
       await client.query(updateQuery, [originalQty, orderId, remarks || null]);
       Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Restored qty: ${originalQty} (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
+
+      // Step 4: For regular orders, derive rate_per_15kg and rate_per_ltr from product_name + rate_of_material
+      if (order.order_type && order.order_type.toLowerCase() === 'regular' && order.product_name && order.rate_of_material) {
+        try {
+          const derivedRates = await deriveRatesForRegularOrder(order.product_name, parseFloat(order.rate_of_material));
+          if (derivedRates) {
+            const rateUpdateQuery = `
+              UPDATE order_dispatch 
+              SET rate_per_15kg = $1, rate_per_ltr = $2
+              WHERE id = $3
+            `;
+            await client.query(rateUpdateQuery, [derivedRates.rate_per_15kg, derivedRates.rate_per_ltr, orderId]);
+            Logger.info(`[REVERT] Derived and saved rates for order ${orderId}: 15kg=${derivedRates.rate_per_15kg}, 1ltr=${derivedRates.rate_per_ltr}`);
+          }
+        } catch (deriveError) {
+          Logger.warn(`[REVERT] Could not derive rates for order ${orderId}: ${deriveError.message}`);
+          // Non-fatal: continue with revert even if rate derivation fails
+        }
+      }
       
       await client.query('COMMIT');
       return { success: true, message: 'Dispatch planning reverted to pre-approval successfully' };
