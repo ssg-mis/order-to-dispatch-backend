@@ -197,7 +197,9 @@ class ActualDispatchService {
         tax_end_date: data.tax_end_date || null,
         pollution_end_date: data.pollution_end_date || null,
         permit1_end_date: data.permit1_end_date || null,
-        permit2_end_date: data.permit2_end_date || null
+        permit2_end_date: data.permit2_end_date || null,
+        security_guard_status: null,
+        revert_security_remarks: null
       };
       
       const client = await db.getClient();

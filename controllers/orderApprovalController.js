@@ -2,9 +2,9 @@
  * Order Approval Controller
  * Handles HTTP requests for order approval (Stage 3: Approval)
  */
-
 const orderApprovalService = require('../services/orderApprovalService');
 const { ResponseUtil, Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
  * Get pending approval orders
@@ -103,6 +103,21 @@ const submitApproval = async (req, res, next) => {
     });
     
     const result = await orderApprovalService.submitApproval(id, additionalData);
+    
+    // Trigger WhatsApp notification for the next stage
+    try {
+      if (result.success && result.data && result.data.order_no) {
+        const docDetails = {
+          stage: `✅ *Approval of Order Completed*`,
+          do_number: result.data.order_no
+        };
+        if (req.pageAccessDetails) {
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Dispatch Planning');
+        }
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notifications for Approval of Order', notifyError);
+    }
     
     Logger.info(`[SUBMIT APPROVAL] Success for ID: ${id}`);
     

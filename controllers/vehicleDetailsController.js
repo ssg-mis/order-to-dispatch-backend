@@ -5,6 +5,7 @@
 
 const vehicleDetailsService = require('../services/vehicleDetailsService');
 const { Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
  * Get pending vehicle assignments
@@ -90,6 +91,21 @@ const submitVehicleDetails = async (req, res, next) => {
     Logger.info(`Submit vehicle details request for ID: ${id}`, { vehicleData });
     
     const result = await vehicleDetailsService.submitVehicleDetails(id, vehicleData);
+    
+    // Trigger WhatsApp notification for the next stage
+    try {
+      if (result.success && result.data && result.data.so_no) {
+        const docDetails = {
+          stage: `🚛 *Vehicle Details Added*`,
+          do_number: result.data.so_no
+        };
+        if (req.pageAccessDetails) {
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Material Load');
+        }
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notifications for Vehicle Details', notifyError);
+    }
     
     res.status(200).json(result);
   } catch (error) {

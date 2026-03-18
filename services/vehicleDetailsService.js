@@ -131,6 +131,8 @@ class VehicleDetailsService {
         polution: data.polution || null,
         permit1: data.permit1 || null,
         permit2_out_state: data.permit2_out_state || null,
+        security_guard_status: null,
+        revert_security_remarks: null
       };
       
       const fields = Object.keys(updateData);

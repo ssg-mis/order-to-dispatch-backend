@@ -5,6 +5,7 @@
 
 const dispatchPlanningService = require('../services/dispatchPlanningService');
 const { ResponseUtil, Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
  * Get pending dispatch planning orders
@@ -99,6 +100,21 @@ const submitDispatchPlanning = async (req, res, next) => {
     });
     
     const result = await dispatchPlanningService.submitDispatchPlanning(id, dispatchData);
+    
+    // Trigger WhatsApp notification for the next stage
+    try {
+      if (result.success && result.data && result.data.so_no) {
+        const docDetails = {
+          stage: `📦 *Dispatch Planned*`,
+          do_number: result.data.so_no
+        };
+        if (req.pageAccessDetails) {
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Actual Dispatch');
+        }
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notifications for Dispatch Planning', notifyError);
+    }
     
     Logger.info(`[DISPATCH PLANNING] Success for order ID: ${id}`);
     

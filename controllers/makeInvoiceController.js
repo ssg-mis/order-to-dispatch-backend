@@ -1,6 +1,7 @@
 const express = require('express');
 const makeInvoiceService = require('../services/makeInvoiceService');
 const { Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 // Get pending invoices
 async function getPendingInvoices(req, res) {
@@ -57,6 +58,22 @@ async function submitInvoice(req, res) {
     }
     
     const result = await makeInvoiceService.submitInvoice(id, data);
+    
+    // Trigger WhatsApp notification for the next stage
+    try {
+      if (result.success && result.data && result.data.so_no) {
+        const docDetails = {
+          stage: `🧾 *Make Invoice Completed*`,
+          do_number: result.data.so_no
+        };
+        if (req.pageAccessDetails) {
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Check Invoice');
+        }
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notifications for Make Invoice', notifyError);
+    }
+    
     res.json(result);
   } catch (error) {
     Logger.error('Error in submitInvoice controller', error);

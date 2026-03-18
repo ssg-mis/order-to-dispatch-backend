@@ -1,6 +1,7 @@
 const express = require('express');
 const damageAdjustmentService = require('../services/damageAdjustmentService');
 const { Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 // Get pending adjustments
 async function getPendingAdjustments(req, res) {
@@ -57,6 +58,22 @@ async function submitAdjustment(req, res) {
     }
     
     const result = await damageAdjustmentService.submitAdjustment(id, data);
+    
+    // Trigger WhatsApp notification for completion
+    try {
+      if (result.success && result.data && result.data.so_no) {
+        const docDetails = {
+          stage: `🔧 *Damage Adjustment Completed*`,
+          do_number: result.data.so_no
+        };
+        if (req.pageAccessDetails) {
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Dashboard'); // Final stage
+        }
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notifications for Damage Adjustment', notifyError);
+    }
+    
     res.json(result);
   } catch (error) {
     Logger.error('Error in submitAdjustment controller', error);

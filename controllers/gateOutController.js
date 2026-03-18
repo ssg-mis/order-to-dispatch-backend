@@ -1,6 +1,7 @@
 const express = require('express');
 const gateOutService = require('../services/gateOutService');
 const { Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 // Get pending gate out records
 async function getPendingGateOut(req, res) {
@@ -57,6 +58,22 @@ async function submitGateOut(req, res) {
     }
     
     const result = await gateOutService.submitGateOut(id, data);
+    
+    // Trigger WhatsApp notification for the next stage
+    try {
+      if (result.success && result.data && result.data.so_no) {
+        const docDetails = {
+          stage: `🚪 *Gate Out Completed*`,
+          do_number: result.data.so_no
+        };
+        if (req.pageAccessDetails) {
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Make Invoice');
+        }
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notifications for Gate Out', notifyError);
+    }
+    
     res.json(result);
   } catch (error) {
     Logger.error('Error in submitGateOut controller', error);

@@ -16,6 +16,25 @@ const whatsappShareService = async (docDetails, pageAccessDetails, targetPage) =
         "Content-Type": "application/json",
     };
 
+    if (docDetails.do_number && (!docDetails.order_type || !docDetails.oil_type)) {
+        try {
+            const db = require('../config/db');
+            const result = await db.query('SELECT * FROM order_dispatch WHERE order_no = $1 LIMIT 1', [docDetails.do_number]);
+            if (result.rows.length > 0) {
+                const order = result.rows[0];
+                docDetails.order_type = docDetails.order_type || order.order_type;
+                docDetails.do_date = docDetails.do_date || order.delivery_date || order.party_so_date;
+                docDetails.customer_name = docDetails.customer_name || order.customer_name;
+                docDetails.oil_type = docDetails.oil_type || order.oil_type;
+                docDetails.rate_15_kg = docDetails.rate_15_kg || order.rate_per_15kg;
+                docDetails.rate_1_ltr = docDetails.rate_1_ltr || order.rate_per_ltr;
+                docDetails.order_punch_remarks = docDetails.order_punch_remarks || order.order_punch_remarks;
+            }
+        } catch (dbErr) {
+            console.error('[WHATSAPP-NOTIFY] Failed to fetch order details for notifications', dbErr);
+        }
+    }
+
     const isRegularOrder = docDetails?.order_type?.toLowerCase() === 'regular';
     const isPreApproval = docDetails?.order_type?.toLowerCase() === 'pre approval';
 

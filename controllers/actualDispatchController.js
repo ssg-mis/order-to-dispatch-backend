@@ -5,6 +5,7 @@
 
 const actualDispatchService = require('../services/actualDispatchService');
 const { ResponseUtil, Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
  * Get pending actual dispatches
@@ -97,6 +98,21 @@ const submitActualDispatch = async (req, res, next) => {
     });
     
     const result = await actualDispatchService.submitActualDispatch(dsrNumber, dispatchData);
+    
+    // Trigger WhatsApp notification for the next stage
+    try {
+      if (result.success && result.data && result.data.so_no) {
+        const docDetails = {
+          stage: `🚚 *Actual Dispatch Completed*`,
+          do_number: result.data.so_no
+        };
+        if (req.pageAccessDetails) {
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Vehicle Details');
+        }
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notifications for Actual Dispatch', notifyError);
+    }
     
     Logger.info(`[ACTUAL DISPATCH] Success for DSR: ${dsrNumber}`);
     

@@ -116,6 +116,8 @@ class MaterialLoadService {
         vehicle_no_plate_image: data.vehicle_no_plate_image || null,
         check_status: data.check_status || null,
         remarks: data.remarks || null,
+        security_guard_status: null,
+        revert_security_remarks: null
       };
       
       const fields = Object.keys(updateData);
