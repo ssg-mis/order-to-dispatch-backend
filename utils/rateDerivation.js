@@ -284,9 +284,9 @@ async function deriveRatesForRegularOrder(productName, rateOfMaterial) {
       const netOil15 = parseFloat(sp15kg.net_oil_in_gm) || 0;
       const packingCost15 = parseFloat(sp15kg.packing_cost) || 0;
       const cost15kg = (gt / 1000) * netOil15 + packingCost15;
-      ratePer15Kg = cost15kg * 1.04; // Add 4% margin "at last"
+      ratePer15Kg = cost15kg; // Removed 4% margin as per user request
       
-      Logger.info(`[RATE_DERIVATION] rate_per_15kg = ((${gt.toFixed(2)}/1000)*${netOil15}+${packingCost15}) * 1.04 = ${ratePer15Kg.toFixed(2)}`);
+      Logger.info(`[RATE_DERIVATION] rate_per_15kg = ((${gt.toFixed(2)}/1000)*${netOil15}+${packingCost15}) = ${ratePer15Kg.toFixed(2)}`);
 
     } else {
       Logger.warn(`[RATE_DERIVATION] Unknown variable in formula: "${matchedSku.formula}"`);

@@ -1,14 +1,6 @@
-const { db } = require("../config");
+const db = require("../config/db");
 
 const pageAccess = async (req, res, next) => {
-    const { page } = req.body;
-    if(!page) {
-        return res.status(400).json({
-            success: false,
-            message: "Specify system page name"
-        });
-    }
-
     try {
         const result = await db.query(`
             SELECT id, username, phone_no, page_access
@@ -22,7 +14,8 @@ const pageAccess = async (req, res, next) => {
             });
         }
 
-        res.pageAccessDetails = result.rows[0];
+        req.pageAccessDetails = result.rows;
+        console.log(req.pageAccessDetails);
         next();
     }
     catch(error) {
@@ -32,3 +25,5 @@ const pageAccess = async (req, res, next) => {
         });
     }
 };
+
+module.exports = { pageAccess };

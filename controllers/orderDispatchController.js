@@ -5,6 +5,7 @@
 
 const orderDispatchService = require('../services/orderDispatchService');
 const { ResponseUtil, Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
  * Create new order
@@ -32,6 +33,31 @@ const createOrder = async (req, res, next) => {
     
     const result = await orderDispatchService.createOrder(orderData, products);
     
+    // Trigger WhatsApp notifications for the relevant stage
+    try {
+      const orderTypeLower = orderData.order_type?.toLowerCase() || '';
+      const targetPage = orderTypeLower === 'pre approval' ? 'Pre Approval' : 'Approval of Order';
+      const docDetails = {
+        stage: `🆕 *New Order Punched* (${targetPage})`,
+        order_type: orderData.order_type,
+        do_date: orderData.delivery_date,
+        do_number: result.data.order_no,
+        customer_name: orderData.customer_name,
+        oil_type: products?.[0]?.oil_type || orderData.oil_type,
+        rate_15_kg: products?.[0]?.rate_per_15kg || orderData.rate_per_15kg,
+        rate_1_ltr: products?.[0]?.rate_per_ltr || orderData.rate_per_ltr,
+        order_punch_remarks: orderData.order_punch_remarks
+      };
+
+      if (req.pageAccessDetails) {
+        // Send to all users who have access to targetPage
+        await whatsappShareService(docDetails, req.pageAccessDetails, targetPage);
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notifications for new order', notifyError);
+      // Don't fail the order creation if notification fails
+    }
+
     return ResponseUtil.success(
       res,
       result.data,

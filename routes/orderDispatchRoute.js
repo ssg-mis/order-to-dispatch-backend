@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const orderDispatchController = require('../controllers/orderDispatchController');
 const orderDispatchValidator = require('../validators/orderDispatchValidator');
+const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 /**
  * @route   POST /api/v1/orders
@@ -22,6 +23,7 @@ const orderDispatchValidator = require('../validators/orderDispatchValidator');
 router.post(
   '/',
   orderDispatchValidator.validateCreate,
+  pageAccess,
   orderDispatchController.createOrder
 );
 

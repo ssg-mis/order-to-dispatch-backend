@@ -8,8 +8,9 @@ const whatsappShare = async (req, res) => {
             message: "Phone or Document is required"
         });
     }
+
     try {
-        const result = await whatsappShareService(phone, docDetails);
+        const result = await whatsappShareService(phone, docDetails, req.pageAccessDetails);
         return res.status(200).json({
             success: true,
             message: "Message sent successfully",

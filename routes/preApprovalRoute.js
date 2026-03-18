@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const preApprovalController = require('../controllers/preApprovalController');
+const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 /**
  * @route   GET /api/v1/pre-approval/pending
@@ -37,6 +38,7 @@ router.get(
  */
 router.post(
   '/submit/:id',
+  pageAccess,
   preApprovalController.submitPreApproval
 );
 
