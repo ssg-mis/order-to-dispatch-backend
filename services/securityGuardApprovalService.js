@@ -82,7 +82,7 @@ class SecurityGuardApprovalService {
           od.sku_name,
           od.approval_qty,
           od.order_punch_remarks,
-          od.actual_1
+          od.actual_1 AS order_actual_1
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}

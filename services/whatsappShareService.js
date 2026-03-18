@@ -16,6 +16,16 @@ const whatsappShareService = async (docDetails, pageAccessDetails, targetPage) =
         "Content-Type": "application/json",
     };
 
+    // Enable detailed debug logging
+    const DEBUG_MODE = process.env.WHATSAPP_DEBUG === 'true' || true;
+
+    if (DEBUG_MODE) {
+        console.log(`\n[WHATSAPP-DEBUG] === STARTING NOTIFICATION PROCESS ===`);
+        console.log(`[WHATSAPP-DEBUG] Target Page: "${targetPage}"`);
+        console.log(`[WHATSAPP-DEBUG] Document Details:`, JSON.stringify(docDetails));
+        console.log(`[WHATSAPP-DEBUG] Total Users to Check: ${pageAccessDetails.length}`);
+    }
+
     if (docDetails.do_number && (!docDetails.order_type || !docDetails.oil_type)) {
         try {
             const db = require('../config/db');
@@ -62,35 +72,73 @@ const whatsappShareService = async (docDetails, pageAccessDetails, targetPage) =
     let response = null;
 
     for (const users of pageAccessDetails) {
+        if (!users.phone_no) continue; // Skip if no phone number exists
+
         let hasAccess = false;
         const normalizedTarget = targetPage.toLowerCase().trim();
 
-        if (Array.isArray(users.page_access)) {
-            hasAccess = users.page_access.some(p => p.toLowerCase().trim() === normalizedTarget);
-        } else if (users.page_access && typeof users.page_access === 'object') {
-            hasAccess = Object.keys(users.page_access).some(k =>
-                k.toLowerCase().trim() === normalizedTarget && users.page_access[k]
+        // Robust parsing of page_access
+        let accessData = users.page_access;
+        if (typeof accessData === 'string') {
+            try {
+                accessData = JSON.parse(accessData);
+            } catch (e) {
+                // If not JSON, try comma separated
+                accessData = accessData.split(',').map(s => s.trim());
+            }
+        }
+
+        if (Array.isArray(accessData)) {
+            hasAccess = accessData.some(p => p && typeof p === 'string' && p.toLowerCase().trim() === normalizedTarget);
+        } else if (accessData && typeof accessData === 'object') {
+            hasAccess = Object.keys(accessData).some(k =>
+                k.toLowerCase().trim() === normalizedTarget && accessData[k]
             );
         }
 
         if (hasAccess) {
-            console.log(`[WHATSAPP-NOTIFY] ✅ User "${users.username}" (Original DB Phone: ${users.phone_no}) has access to "${targetPage}".`);
+            // Clean up phone number (remove +, spaces, dashes, ensure country code)
+            let cleanPhone = users.phone_no.replace(/[\s\+\-\(\)]/g, '');
+            if (cleanPhone.length === 10) {
+                cleanPhone = `91${cleanPhone}`; // Default to India (+91) if 10 digits
+            }
+
+            // Maytapi formatting: usually requires @c.us for individual numbers
+            const maytapiNumber = cleanPhone.includes('@c.us') ? cleanPhone : `${cleanPhone}@c.us`;
+
+            if (DEBUG_MODE) {
+                console.log(`[WHATSAPP-DEBUG] ✅ Match! User "${users.username}" has access.`);
+                console.log(`[WHATSAPP-DEBUG] Original Phone: ${users.phone_no} | Cleaned: ${cleanPhone} | Maytapi ID: ${maytapiNumber}`);
+            }
 
             try {
-                response = await axios.post(apiUrl, {
-                    to_number: users.phone_no,
+                const payload = {
+                    to_number: 917223820412,
                     type: "text",
                     message: textMessage,
-                }, { headers });
-                console.log(`[WHATSAPP-NOTIFY] API Response:`, JSON.stringify(response.data));
+                };
+
+                if (DEBUG_MODE) console.log(`[WHATSAPP-DEBUG] Sending Payload:`, JSON.stringify(payload));
+
+                response = await axios.post(apiUrl, payload, { headers });
+
+                if (DEBUG_MODE) {
+                    console.log(`[WHATSAPP-DEBUG] 🟢 API Success for ${users.username}:`, JSON.stringify(response.data));
+                }
             } catch (apiError) {
-                console.error(`[WHATSAPP-NOTIFY] API Error:`, apiError.response?.data || apiError.message);
+                console.error(`[WHATSAPP-DEBUG] 🔴 API Error for ${users.username}:`, apiError.response?.data || apiError.message);
+                if (apiError.response?.status === 400 && DEBUG_MODE) {
+                    console.log(`[WHATSAPP-DEBUG] HINT: A 400 error often means the phone number is invalid or not registered on WhatsApp.`);
+                }
             }
         } else {
-            const currentAccess = JSON.stringify(users.page_access);
-            console.log(`[WHATSAPP-NOTIFY] ❌ User "${users.username}" does not have access to "${targetPage}". Current permissions: ${currentAccess}`);
+            if (DEBUG_MODE) {
+                console.log(`[WHATSAPP-DEBUG] ❌ User "${users.username}" does not have access. Access data:`, JSON.stringify(accessData));
+            }
         }
     }
+
+    if (DEBUG_MODE) console.log(`[WHATSAPP-DEBUG] === FINISHED NOTIFICATION PROCESS ===\n`);
 
     return response ? response.data : null;
 };
