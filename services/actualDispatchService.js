@@ -15,7 +15,8 @@ class ActualDispatchService {
   /**
    * Get pending actual dispatches from lift_receiving_confirmation table
    * Pending: planned_1 IS NOT NULL AND actual_1 IS NULL
-   * @param {Object} filters - Filter parameters
+   * @param {Object} filters - 
+   * Filter parameters
    * @param {Object} pagination - Pagination parameters
    * @returns {Promise<Object>} Pending dispatches
    */

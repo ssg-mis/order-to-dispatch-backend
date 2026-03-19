@@ -92,7 +92,9 @@ const whatsappShareService = async (docDetails, pageAccessDetails, targetPage) =
             hasAccess = accessData.some(p => p && typeof p === 'string' && p.toLowerCase().trim() === normalizedTarget);
         } else if (accessData && typeof accessData === 'object') {
             hasAccess = Object.keys(accessData).some(k =>
-                k.toLowerCase().trim() === normalizedTarget && accessData[k]
+                k.toLowerCase().trim() === normalizedTarget &&
+                accessData[k] &&
+                accessData[k].toLowerCase().trim() !== 'view_only'
             );
         }
 

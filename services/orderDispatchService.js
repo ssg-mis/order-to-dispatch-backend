@@ -456,7 +456,10 @@ class OrderDispatchService {
       
       const originalOrder = originalResult.rows[0];
       const approvalQty = parseFloat(data.approval_qty) || 0;
-      const orderQty = parseFloat(originalOrder.order_quantity) || 0;
+      // If frontend explicitly passes order_quantity (e.g. deducting budget for newly added SKUs), respect it
+      const orderQty = data.order_quantity !== undefined 
+          ? parseFloat(data.order_quantity) 
+          : (parseFloat(originalOrder.order_quantity) || 0);
       
       // Step 2: Update the approved order
       const updateData = {
@@ -464,6 +467,16 @@ class OrderDispatchService {
         pre_approval_user: data.username || null,
         ...data
       };
+      
+      // If partial approval, mutate the parent row to only represent the approved chunk
+      // This strictly maintains Sum(order_quantity) across splits == Original Total
+      if (approvalQty > 0 && approvalQty < orderQty) {
+        updateData.order_quantity = approvalQty;
+        // The remaining_dispatch_qty should also mimic this chunk size if it's being mapped later
+        if (updateData.remaining_dispatch_qty !== undefined) {
+           updateData.remaining_dispatch_qty = approvalQty;
+        }
+      }
       
       // Remove username from data if it exists to avoid trying to update a non-existent column in the spread (...data)
       if (updateData.username) delete updateData.username;
@@ -485,7 +498,9 @@ class OrderDispatchService {
       
       // Step 3: Check for partial approval and create remaining qty row
       const updatedOrder = updateResult.rows[0];
-      const updatedOrderQty = parseFloat(updatedOrder.order_quantity) || 0;
+      // IMPORTANT: updatedOrder.order_quantity is now the strictly approved chunk (e.g. 40)
+      // So use the original orderQty (100) to find what remains for the new row (60)
+      const updatedOrderQty = orderQty;
 
       let remainingOrder = null;
       if (approvalQty > 0 && approvalQty < updatedOrderQty) {
