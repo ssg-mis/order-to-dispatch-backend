@@ -26,6 +26,18 @@ const STAGE_DEFS = [
 
 class DashboardService {
   /**
+   * Strip trailing letter suffix(es) or -1/2 from order number.
+   * DO-130A, DO-130A-1, DO-130B, DO-130B-1, DO-130C → DO-130
+   */
+  getBaseOrderNo(orderNo) {
+    if (!orderNo) return orderNo;
+    // Capture the prefix part (e.g., DO-130) and discard any suffix starting with A-Z or additional -1, etc.
+    // Based on user query: regexp_replace(order_no, '^(DO-[0-9]+).*', '\1')
+    const match = orderNo.match(/^(DO-\d+)/);
+    return match ? match[1] : orderNo;
+  }
+
+  /**
    * Get comprehensive dashboard statistics
    * @returns {Promise<Object>} Complete dashboard data
    */
@@ -38,75 +50,109 @@ class DashboardService {
         const allOrdersResult = await client.query('SELECT * FROM order_dispatch ORDER BY created_at DESC');
         const allOrders = allOrdersResult.rows;
 
-        const totalOrders = allOrders.length;
-
-        // Active orders: orders that are not yet at Final Delivery
-        const activeOrders = allOrders.filter(o => !o.actual_13).length;
-
-        // Completed orders: orders that reached Gate Out (actual_10) or beyond
-        const completedOrders = allOrders.filter(o => o.actual_10).length;
-
-        // Delayed orders: orders stuck for more than 48 hours at any intermediate stage
-        const now = new Date();
-        const delayedOrders = allOrders.filter(o => {
-          if (o.actual_13) return false; // already complete
-
-          // Find the latest documented timestamp
-          const actualFields = ['actual_1','actual_2','actual_3','actual_4','actual_5',
-                                'actual_6','actual_7','actual_8','actual_9','actual_10',
-                                'actual_11','actual_12','actual_13'];
-          let latestActual = null;
-          for (const field of actualFields) {
-            if (o[field]) latestActual = new Date(o[field]);
+        // Group orders by base number for statistics
+        const groupedMap = new Map();
+        allOrders.forEach(order => {
+          const baseNo = this.getBaseOrderNo(order.order_no);
+          if (!groupedMap.has(baseNo)) {
+            groupedMap.set(baseNo, []);
           }
-          if (!latestActual) latestActual = new Date(o.created_at);
+          groupedMap.get(baseNo).push(order);
+        });
 
-          const hoursDiff = (now - latestActual) / (1000 * 60 * 60);
-          return hoursDiff > 48;
+        const groupedOrdersArray = Array.from(groupedMap.values());
+
+        // Get completed orders from lift_receiving_confirmation history
+        // Completion: actual_8 IS NOT NULL in lift_receiving_confirmation
+        const receiptHistoryResult = await client.query('SELECT so_no FROM lift_receiving_confirmation WHERE actual_8 IS NOT NULL');
+        const receiptHistory = receiptHistoryResult.rows;
+        
+        // Count unique base order numbers in history
+        const completedBaseNos = new Set(receiptHistory.map(r => this.getBaseOrderNo(r.so_no)));
+        const completedOrders = completedBaseNos.size;
+
+        // KPI Counts based on groups
+        const totalOrders = groupedMap.size;
+
+        // Active: A group is active if ANY of its sub-orders are not complete (actual_13 is null AND NOT in completedBaseNos)
+        const activeOrders = groupedOrdersArray.filter(group => {
+          const isCompleted = completedBaseNos.has(group[0] ? this.getBaseOrderNo(group[0].order_no) : '');
+          return !isCompleted && group.some(o => !o.actual_13);
         }).length;
 
-        // Rejected/Cancelled
-        const rejectedOrders = allOrders.filter(o =>
-          o.overall_status_of_order &&
-          (o.overall_status_of_order.toLowerCase().includes('reject') ||
-           o.overall_status_of_order.toLowerCase().includes('cancel'))
-        ).length;
+        // Delayed: A group is delayed if ANY sub-order is delayed > 48h and NOT completed
+        const now = new Date();
+        const delayedOrders = groupedOrdersArray.filter(group => {
+          const isCompleted = completedBaseNos.has(group[0] ? this.getBaseOrderNo(group[0].order_no) : '');
+          if (isCompleted) return false;
 
-        // Stage-wise counts
+          return group.some(o => {
+            if (o.actual_13) return false;
+            const actualFields = ['actual_1','actual_2','actual_3','actual_4','actual_5',
+                                  'actual_6','actual_7','actual_8','actual_9','actual_10',
+                                  'actual_11','actual_12','actual_13'];
+            let latestActual = null;
+            for (const field of actualFields) {
+              if (o[field]) latestActual = new Date(o[field]);
+            }
+            if (!latestActual) latestActual = new Date(o.created_at);
+            const hoursDiff = (now - latestActual) / (1000 * 60 * 60);
+            return hoursDiff > 48;
+          });
+        }).length;
+
+        // Rejected/Cancelled: A group is rejected if ANY sub-order is rejected/cancelled and NOT completed
+        const rejectedOrders = groupedOrdersArray.filter(group => {
+          const isCompleted = completedBaseNos.has(group[0] ? this.getBaseOrderNo(group[0].order_no) : '');
+          if (isCompleted) return false;
+
+          return group.some(o => 
+            o.overall_status_of_order &&
+            (o.overall_status_of_order.toLowerCase().includes('reject') ||
+             o.overall_status_of_order.toLowerCase().includes('cancel'))
+          );
+        }).length;
+
+        // Stage-wise counts: unique base orders per stage
         const stageCounts = STAGE_DEFS.map((stage, idx) => {
-          let pending = 0;
-          let completed = 0;
+          let pendingBaseCount = 0;
+          let completedBaseCount = 0;
 
           if (idx === 0) {
-            // Order Punch = all orders that have been entered into the system
-            completed = totalOrders;
-            pending = 0;
+            completedBaseCount = totalOrders;
+            pendingBaseCount = 0;
           } else {
-            // Pending = order has data for previous stage but hasn't completed this stage yet
-            pending = allOrders.filter(o => {
-              const prevActual = STAGE_DEFS[idx - 1].actual;
-              const prevDone = prevActual ? !!o[prevActual] : true; // Order Punch is always "done" for all orders
-              const thisDone = stage.actual ? !!o[stage.actual] : false;
-              return prevDone && !thisDone;
+            // A group is "Pending" at this stage if at least one sub-order is pending here
+            pendingBaseCount = groupedOrdersArray.filter(group => {
+              return group.some(o => {
+                const prevActual = STAGE_DEFS[idx - 1].actual;
+                const prevDone = prevActual ? !!o[prevActual] : true;
+                const thisDone = stage.actual ? !!o[stage.actual] : false;
+                return prevDone && !thisDone;
+              });
             }).length;
 
-            completed = stage.actual
-              ? allOrders.filter(o => !!o[stage.actual]).length
+            // A group is "Completed" at this stage if at least one sub-order completed it
+            completedBaseCount = stage.actual
+              ? groupedOrdersArray.filter(group => group.some(o => !!o[stage.actual])).length
               : 0;
           }
 
           return {
             id: stage.id,
             label: stage.label,
-            pending,
-            completed,
-            count: pending
+            pending: pendingBaseCount,
+            completed: completedBaseCount,
+            count: pendingBaseCount
           };
         });
 
         // All orders with current stage and stage progress for the pipeline tracker
         const enrichedOrders = allOrders.map(o => {
           const currentStageData = this.getOrderStageProgress(o);
+          const baseNo = this.getBaseOrderNo(o.order_no);
+          const isCompleted = completedBaseNos.has(baseNo);
+          
           return {
             id: o.id,
             orderNo: o.order_no,
@@ -115,33 +161,33 @@ class DashboardService {
             customerName: o.customer_name,
             timestamp: o.created_at,
             date: o.created_at,
-            stage: currentStageData.currentStage,
-            stageIndex: currentStageData.stageIndex,
-            completedStages: currentStageData.completedStages,
+            stage: isCompleted ? 'Final Delivery' : currentStageData.currentStage,
+            stageIndex: isCompleted ? STAGE_DEFS.length - 1 : currentStageData.stageIndex,
+            completedStages: isCompleted ? STAGE_DEFS.length : currentStageData.completedStages,
             totalStages: STAGE_DEFS.length,
             stageProgress: currentStageData.stageProgress,
-            status: this.getOrderStatus(o)
+            status: isCompleted ? 'completed' : this.getOrderStatus(o)
           };
         });
 
-        // Pending orders = not at final delivery, sorted by how stuck they are
-        const pendingOrders = enrichedOrders.filter(o => !allOrders.find(raw => raw.order_no === o.orderNo && raw.actual_13));
-        const completedOrdersList = enrichedOrders.filter(o => {
-          const raw = allOrders.find(r => r.order_no === o.orderNo);
-          return raw && raw.actual_10;
-        });
-
-        // Today's activity
+        // Today's activity (Still uses individual sub-orders for granular tracking)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        const createdToday = allOrders.filter(o => new Date(o.created_at) >= today).length;
-        const dispatchedToday = allOrders.filter(o => o.actual_4 && new Date(o.actual_4) >= today).length;
-        const invoicedToday = allOrders.filter(o => o.actual_8 && new Date(o.actual_8) >= today).length;
-        const deliveredToday = allOrders.filter(o => {
+        const createdTodayRaw = allOrders.filter(o => new Date(o.created_at) >= today);
+        const createdToday = new Set(createdTodayRaw.map(o => this.getBaseOrderNo(o.order_no))).size;
+
+        const dispatchedTodayRaw = allOrders.filter(o => o.actual_4 && new Date(o.actual_4) >= today);
+        const dispatchedToday = new Set(dispatchedTodayRaw.map(o => this.getBaseOrderNo(o.order_no))).size;
+
+        const invoicedTodayRaw = allOrders.filter(o => o.actual_8 && new Date(o.actual_8) >= today);
+        const invoicedToday = new Set(invoicedTodayRaw.map(o => this.getBaseOrderNo(o.order_no))).size;
+
+        const deliveredTodayRaw = allOrders.filter(o => {
           const d = o.actual_11 || o.actual_13;
           return d && new Date(d) >= today;
-        }).length;
+        });
+        const deliveredToday = new Set(deliveredTodayRaw.map(o => this.getBaseOrderNo(o.order_no))).size;
 
         return {
           total: totalOrders,
@@ -150,9 +196,9 @@ class DashboardService {
           delayed: delayedOrders,
           cancelled: rejectedOrders,
           stageCounts,
-          recentOrders: enrichedOrders, // ALL orders, not just 10
+          recentOrders: enrichedOrders,
           pendingOrdersList: enrichedOrders,
-          completedOrdersList,
+          completedOrdersList: enrichedOrders.filter(o => o.status === 'completed'),
           createdToday,
           dispatchedToday,
           invoicedToday,
@@ -229,18 +275,39 @@ class DashboardService {
     try {
       const client = await db.getClient();
       try {
-        const [totalOrdersResult, pendingPreApprovalResult, pendingApprovalResult, completedOrdersResult] = await Promise.all([
-          client.query('SELECT COUNT(*) FROM order_dispatch'),
-          client.query('SELECT COUNT(*) FROM order_dispatch WHERE planned_1 IS NOT NULL AND actual_1 IS NULL'),
-          client.query('SELECT COUNT(*) FROM order_dispatch WHERE planned_2 IS NOT NULL AND actual_2 IS NULL'),
-          client.query('SELECT COUNT(*) FROM order_dispatch WHERE actual_3 IS NOT NULL')
+        const orderQuery = 'SELECT order_no, planned_1, actual_1, planned_2, actual_2, actual_3 FROM order_dispatch';
+        const receiptQuery = 'SELECT so_no FROM lift_receiving_confirmation WHERE actual_8 IS NOT NULL';
+        
+        const [orderResult, receiptResult] = await Promise.all([
+          client.query(orderQuery),
+          client.query(receiptQuery)
         ]);
 
+        const rows = orderResult.rows;
+        const receiptHistory = receiptResult.rows;
+        const completedBaseNos = new Set(receiptHistory.map(r => this.getBaseOrderNo(r.so_no)));
+
+        // Group by base number
+        const groupedMap = new Map();
+        rows.forEach(r => {
+          const baseNo = this.getBaseOrderNo(r.order_no);
+          if (!groupedMap.has(baseNo)) groupedMap.set(baseNo, []);
+          groupedMap.get(baseNo).push(r);
+        });
+
+        const groups = Array.from(groupedMap.values());
+
         return {
-          totalOrders: parseInt(totalOrdersResult.rows[0].count),
-          pendingPreApproval: parseInt(pendingPreApprovalResult.rows[0].count),
-          pendingApproval: parseInt(pendingApprovalResult.rows[0].count),
-          completedOrders: parseInt(completedOrdersResult.rows[0].count)
+          totalOrders: groups.length,
+          pendingPreApproval: groups.filter(g => {
+            const baseNo = g[0] ? this.getBaseOrderNo(g[0].order_no) : '';
+            return !completedBaseNos.has(baseNo) && g.some(r => r.planned_1 && !r.actual_1);
+          }).length,
+          pendingApproval: groups.filter(g => {
+            const baseNo = g[0] ? this.getBaseOrderNo(g[0].order_no) : '';
+            return !completedBaseNos.has(baseNo) && g.some(r => r.planned_2 && !r.actual_2);
+          }).length,
+          completedOrders: completedBaseNos.size
         };
       } finally {
         client.release();
