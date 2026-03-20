@@ -333,6 +333,7 @@ class ActualDispatchService {
                 actual_2 = NULL,
                 actual_1 = NULL,
                 planned_1 = NOW(),
+                order_type = 'pre-approval',
                 revert_dispatch_remarks = $3
               WHERE order_no = $2
             `;

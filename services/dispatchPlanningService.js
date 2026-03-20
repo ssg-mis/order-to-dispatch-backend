@@ -339,6 +339,7 @@ class DispatchPlanningService {
             planned_2 = NULL,
             actual_1 = NULL,
             planned_1 = NOW(),
+            order_type = 'pre-approval',
             remaining_dispatch_qty = $1,
             revert_planning_remarks = $3
           WHERE id = $2
