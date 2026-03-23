@@ -591,6 +591,35 @@ class OrderDispatchService {
       client.release();
     }
   }
+  
+  /**
+   * Get all suffixes used for a given order number prefix
+   * @param {string} prefix - The base order number prefix (e.g., DO-668)
+   * @returns {Promise<Array>} List of suffix characters
+   */
+  async getOrderSuffixes(prefix) {
+    try {
+      const query = `
+        SELECT order_no 
+        FROM order_dispatch 
+        WHERE order_no LIKE $1 || '%'
+      `;
+      
+      const result = await db.query(query, [prefix]);
+      
+      // Extract suffixes (last character of order_no if it matches prefix + letter)
+      const suffixes = result.rows.map(row => {
+        const orderNo = row.order_no || "";
+        const match = orderNo.match(/([A-Z])$/i);
+        return match ? match[1].toUpperCase() : null;
+      }).filter(Boolean);
+      
+      return Array.from(new Set(suffixes));
+    } catch (error) {
+      Logger.error(`Error fetching suffixes for prefix ${prefix}`, error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new OrderDispatchService();

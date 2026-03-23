@@ -195,10 +195,36 @@ const deleteOrder = async (req, res, next) => {
   }
 };
 
+/**
+ * Get all suffixes for a given order prefix
+ * @route GET /api/v1/orders/suffixes/:prefix
+ */
+const getOrderSuffixes = async (req, res, next) => {
+  try {
+    const { prefix } = req.params;
+    
+    if (!prefix) {
+      return ResponseUtil.badRequest(res, 'Prefix is required');
+    }
+    
+    const suffixes = await orderDispatchService.getOrderSuffixes(prefix);
+    
+    return ResponseUtil.success(
+      res,
+      suffixes,
+      'Order suffixes fetched successfully'
+    );
+  } catch (error) {
+    Logger.error('Error in getOrderSuffixes controller', error);
+    next(error);
+  }
+};
+
 module.exports = {
   createOrder,
   getAllOrders,
   getOrderByNumber,
   updateOrder,
-  deleteOrder
+  deleteOrder,
+  getOrderSuffixes
 };
