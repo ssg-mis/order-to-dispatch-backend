@@ -45,10 +45,16 @@ const getNextId = async (req, res, next) => {
         prefix = 'SKU';
         minDigits = 4; // SKU1001
         break;
+      case 'salesperson':
+        tableName = 'salesperson_details';
+        idColumn = 'broker_id';
+        prefix = 'SLM';
+        minDigits = 3; // SLM101
+        break;
       default:
         return res.status(400).json({
           success: false,
-          message: 'Invalid type. Allowed: customer, depot, broker, sku'
+          message: 'Invalid type. Allowed: customer, depot, broker, sku, salesperson'
         });
     }
 

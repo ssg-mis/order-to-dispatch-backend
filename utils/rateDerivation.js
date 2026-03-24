@@ -150,39 +150,62 @@ function extractPackagingPart(productName) {
 function findMatchingSkuRate(productName, skuRates) {
   const productPart = extractPackagingPart(productName);
   const normalizedProduct = normalizeForMatching(productPart);
+  
+  // Extract unit from product to ensure we don't match KG to LTR
+  const productUnitMatch = normalizedProduct.match(/\b(KG|LTR|MLT|GMS|ML)\b/i);
+  const productUnit = productUnitMatch ? productUnitMatch[0].toUpperCase() : null;
 
-  Logger.info(`[RATE_DERIVATION] Matching product: "${productName}" → extracted: "${productPart}" → normalized: "${normalizedProduct}"`);
+  Logger.info(`[RATE_DERIVATION] Matching product: "${productName}" (Unit: ${productUnit}) → extracted: "${productPart}"`);
 
-  // Try exact match first
   let bestMatch = null;
-  let bestScore = 0;
+  let bestScore = -1;
 
   for (const entry of skuRates) {
     const normalizedSku = normalizeForMatching(entry.sku);
     
-    // Check if normalized product contains the normalized SKU or vice versa
+    // 1. Precise unit check (don't match KG SKU to LTR product)
+    const skuUnitMatch = normalizedSku.match(/\b(KG|LTR|MLT|GMS|ML)\b/i);
+    const skuUnit = skuUnitMatch ? skuUnitMatch[0].toUpperCase() : null;
+    
+    // Normalize units for comparison (MLT/ML -> LTR, KG/GMS -> KG)
+    const isLtrType = (u) => u && ['LTR', 'MLT', 'ML'].includes(u);
+    const isKgType = (u) => u && ['KG', 'GMS'].includes(u);
+    
+    if (productUnit && skuUnit) {
+      if ((isLtrType(productUnit) && !isLtrType(skuUnit)) || (isKgType(productUnit) && !isKgType(skuUnit))) {
+        continue; // Unit type mismatch
+      }
+    }
+
     if (normalizedProduct === normalizedSku) {
       return entry; // Perfect match
     }
 
-    // Score by how much of the SKU matches the product
-    const skuParts = normalizedSku.split(' ');
-    const matchingParts = skuParts.filter(part => normalizedProduct.includes(part));
-    const score = matchingParts.length / skuParts.length;
+    // 2. Score by token overlap
+    const productTokens = normalizedProduct.split(' ');
+    const skuTokens = normalizedSku.split(' ');
+    const matchingTokens = skuTokens.filter(t => productTokens.includes(t));
+    
+    // Bonus for matching numeric part exactly (e.g., "13" in "13 KG")
+    const productNum = normalizedProduct.match(/\d+(\.\d+)?/);
+    const skuNum = normalizedSku.match(/\d+(\.\d+)?/);
+    const numBonus = (productNum && skuNum && productNum[0] === skuNum[0]) ? 0.5 : 0;
+    
+    const score = (matchingTokens.length / Math.max(productTokens.length, skuTokens.length)) + numBonus;
 
-    if (score > bestScore && score >= 0.6) {
+    if (score > bestScore) {
       bestScore = score;
       bestMatch = entry;
     }
   }
 
-  if (bestMatch) {
+  if (bestMatch && bestScore >= 0.5) {
     Logger.info(`[RATE_DERIVATION] Best match: "${bestMatch.sku}" (score: ${bestScore.toFixed(2)})`);
-  } else {
-    Logger.warn(`[RATE_DERIVATION] No match found for "${productName}"`);
+    return bestMatch;
   }
-
-  return bestMatch;
+  
+  Logger.warn(`[RATE_DERIVATION] No reliable match found for "${productName}"`);
+  return null;
 }
 
 /**
@@ -307,8 +330,183 @@ async function deriveRatesForRegularOrder(productName, rateOfMaterial) {
   }
 }
 
+/**
+ * Derive consolidated rate_per_15kg and rate_per_ltr for a group of products.
+ * Merges sources from all products in the group (e.g., A from 13kg SKU and B from 750ml SKU).
+ * 
+ * @param {Array<Object>} products - List of products in the group {product_name, rate_of_material}
+ * @returns {Promise<{rate_per_15kg: number, rate_per_ltr: number} | null>}
+ */
+async function deriveConsolidatedRatesForGroup(products) {
+  try {
+    if (!products || !products.length) return null;
+
+    Logger.info(`[GROUP_DERIVATION] Processing group of ${products.length} products`);
+
+    // 1. Fetch reference data
+    const [skuRateResult, sellingPriceResult] = await Promise.all([
+      db.query('SELECT id, sku, rate, formula FROM sku_rate ORDER BY id ASC'),
+      db.query('SELECT * FROM sku_selling_price ORDER BY id ASC')
+    ]);
+
+    const skuRates = skuRateResult.rows;
+    const sellingPrices = sellingPriceResult.rows;
+
+    if (!skuRates.length || !sellingPrices.length) return null;
+
+    let consolidatedA = null;
+    let consolidatedB = null;
+
+    // 2. Extract best A and B from all products in group
+    for (const p of products) {
+      if (!p.product_name || !p.rate_of_material) continue;
+
+      const matchedSku = findMatchingSkuRate(p.product_name, skuRates);
+      if (!matchedSku || !matchedSku.formula) continue;
+
+      const variable = getFormulaVariable(matchedSku.formula);
+      const derivedValue = reverseFormula(matchedSku.formula, parseFloat(p.rate_of_material));
+      
+      if (derivedValue === null || derivedValue <= 0) continue;
+
+      if (variable === 'A') {
+        // Source A (15 KG) - take the most plausible one if multiple
+        if (consolidatedA === null || (derivedValue > 500 && derivedValue < 3000)) {
+           consolidatedA = derivedValue;
+        }
+      } else if (variable === 'B') {
+        // Source B (1 LTR) - take the most plausible one if multiple
+        if (consolidatedB === null || (derivedValue > 50 && derivedValue < 300)) {
+           consolidatedB = derivedValue;
+        }
+      }
+    }
+
+    // 3. Fallback: If one is missing, derive it from the other using traditional derivation
+    if (consolidatedA !== null && consolidatedB === null) {
+      const derived = await deriveRatesForRegularOrder(products[0].product_name, parseFloat(products[0].rate_of_material));
+      if (derived) consolidatedB = derived.rate_per_ltr;
+    } else if (consolidatedB !== null && consolidatedA === null) {
+      const derived = await deriveRatesForRegularOrder(products[0].product_name, parseFloat(products[0].rate_of_material));
+      if (derived) consolidatedA = derived.rate_per_15kg;
+    }
+
+    if (consolidatedA === null || consolidatedB === null) {
+      Logger.warn('[GROUP_DERIVATION] Could not find any valid A or B in group');
+      return null;
+    }
+
+    return {
+      rate_per_15kg: parseFloat(consolidatedA.toFixed(4)),
+      rate_per_ltr: parseFloat(consolidatedB.toFixed(4))
+    };
+
+  } catch (error) {
+    Logger.error('[GROUP_DERIVATION] Error in consolidation:', error);
+    return null;
+  }
+}
+
+/**
+ * Detect oil type from product name
+ */
+function detectOilType(name) {
+  const n = (name || '').toLowerCase();
+  if (n.includes('sbo') || n.includes('soya')) return 'Soya Oil';
+  if (n.includes('rbo') || n.includes('rice')) return 'Rice Oil';
+  if (n.includes('palm') || n.includes('po ') || n.includes('p.o.')) return 'Palm Oil';
+  return 'General';
+}
+
+/**
+ * Derive consolidated rate_per_15kg and rate_per_ltr for a group of products.
+ * Groups by Oil Type and merges sources within each oil type.
+ * 
+ * @param {Array<Object>} products - List of products in the group {product_name, rate_of_material}
+ * @returns {Promise<Object | null>} Map of oilType -> {rate_per_15kg, rate_per_ltr}
+ */
+async function deriveConsolidatedRatesForGroup(products) {
+  try {
+    if (!products || !products.length) return null;
+
+    Logger.info(`[GROUP_DERIVATION] Processing group of ${products.length} products`);
+
+    // 1. Fetch reference data
+    const [skuRateResult, sellingPriceResult] = await Promise.all([
+      db.query('SELECT id, sku, rate, formula FROM sku_rate ORDER BY id ASC'),
+      db.query('SELECT * FROM sku_selling_price ORDER BY id ASC')
+    ]);
+
+    const skuRates = skuRateResult.rows;
+    const sellingPrices = sellingPriceResult.rows;
+
+    if (!skuRates.length || !sellingPrices.length) return null;
+
+    // 2. Group products by Oil Type
+    const productsByOil = {};
+    for (const p of products) {
+      const oilType = detectOilType(p.product_name);
+      if (!productsByOil[oilType]) productsByOil[oilType] = [];
+      productsByOil[oilType].push(p);
+    }
+
+    const finalRatesByOil = {};
+
+    // 3. Consolidate A/B for each oil type independently
+    for (const [oilType, group] of Object.entries(productsByOil)) {
+      let consolidatedA = null;
+      let consolidatedB = null;
+
+      // a. Extract variables from all products of this oil type
+      for (const p of group) {
+        if (!p.product_name || !p.rate_of_material) continue;
+
+        const matchedSku = findMatchingSkuRate(p.product_name, skuRates);
+        if (!matchedSku || !matchedSku.formula) continue;
+
+        const variable = getFormulaVariable(matchedSku.formula);
+        const derivedValue = reverseFormula(matchedSku.formula, parseFloat(p.rate_of_material));
+        
+        if (derivedValue === null || derivedValue <= 0) continue;
+
+        if (variable === 'A') {
+          if (consolidatedA === null || (derivedValue > 500 && derivedValue < 3000)) consolidatedA = derivedValue;
+        } else if (variable === 'B') {
+          if (consolidatedB === null || (derivedValue > 50 && derivedValue < 300)) consolidatedB = derivedValue;
+        }
+      }
+
+      // b. Fallback: If one variable is missing for this oil type, derive it from the other
+      if (consolidatedA !== null && consolidatedB === null) {
+        const firstP = group.find(p => getFormulaVariable(findMatchingSkuRate(p.product_name, skuRates)?.formula) === 'A');
+        const derived = await deriveRatesForRegularOrder(firstP.product_name, parseFloat(firstP.rate_of_material));
+        if (derived) consolidatedB = derived.rate_per_ltr;
+      } else if (consolidatedB !== null && consolidatedA === null) {
+        const firstP = group.find(p => getFormulaVariable(findMatchingSkuRate(p.product_name, skuRates)?.formula) === 'B');
+        const derived = await deriveRatesForRegularOrder(firstP.product_name, parseFloat(firstP.rate_of_material));
+        if (derived) consolidatedA = derived.rate_per_15kg;
+      }
+
+      if (consolidatedA !== null && consolidatedB !== null) {
+        finalRatesByOil[oilType] = {
+          rate_per_15kg: parseFloat(consolidatedA.toFixed(4)),
+          rate_per_ltr: parseFloat(consolidatedB.toFixed(4))
+        };
+      }
+    }
+
+    return Object.keys(finalRatesByOil).length > 0 ? finalRatesByOil : null;
+
+  } catch (error) {
+    Logger.error('[GROUP_DERIVATION] Error in consolidation:', error);
+    return null;
+  }
+}
+
 module.exports = {
+  detectOilType,
   deriveRatesForRegularOrder,
+  deriveConsolidatedRatesForGroup,
   reverseFormula,
   evaluateExpression,
   evaluateFormulaWithValue

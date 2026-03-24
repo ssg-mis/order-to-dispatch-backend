@@ -8,7 +8,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
-const { deriveRatesForRegularOrder } = require('../utils/rateDerivation');
+const { deriveRatesForRegularOrder, deriveConsolidatedRatesForGroup, detectOilType } = require('../utils/rateDerivation');
 
 class DispatchPlanningService {
   /**
@@ -365,37 +365,45 @@ class DispatchPlanningService {
       await client.query(updateQuery, [originalQty, orderId, remarks || null]);
       Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Restored qty: ${originalQty} (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
 
-      // Step 4: For regular orders, map oil_type and derive rates
+      // Step 4: For regular orders, map oil_type and derive rates FOR THE ENTIRE GROUP
       if (order.order_type && order.order_type.toLowerCase() === 'regular' && order.product_name) {
         try {
-          // 1. Map product name to oil type
-          const nameLower = order.product_name.toLowerCase();
-          let oilType = null;
-          if (nameLower.includes('sbo') || nameLower.includes('soya')) oilType = 'Soya Oil';
-          else if (nameLower.includes('rbo') || nameLower.includes('rice')) oilType = 'Rice Oil';
-          else if (nameLower.includes('palm')) oilType = 'Palm Oil';
+          // 1. Fetch all products in this DO group to consolidate rates
+          // Use base DO (strip suffixes like A, B, /1) to catch sister rows like DO-698A, DO-698B
+          const baseDo = order.order_no.replace(/[a-zA-Z/]+$/, '');
+          const groupQuery = `SELECT id, product_name, rate_of_material FROM order_dispatch WHERE order_no LIKE $1`;
+          const groupResult = await client.query(groupQuery, [`${baseDo}%`]);
+          const groupProducts = groupResult.rows;
 
-          if (oilType) {
-            await client.query(`UPDATE order_dispatch SET oil_type = $1 WHERE id = $2`, [oilType, orderId]);
-            Logger.info(`[REVERT] Mapped product "${order.product_name}" to oil_type "${oilType}" for order ID ${orderId}`);
-          }
+          // 2. Derive consolidated rates for the whole group
+          const consolidatedRatesMap = await deriveConsolidatedRatesForGroup(groupProducts);
+          
+          if (consolidatedRatesMap) {
+            // 3. Update products in the group with their specific oil-type rates
+            for (const p of groupProducts) {
+              const oilType = detectOilType(p.product_name);
+              const rates = consolidatedRatesMap[oilType];
 
-          // 2. Derive rate_per_15kg and rate_per_ltr
-          if (order.rate_of_material) {
-            const derivedRates = await deriveRatesForRegularOrder(order.product_name, parseFloat(order.rate_of_material));
-            if (derivedRates) {
-              const rateUpdateQuery = `
-                UPDATE order_dispatch 
-                SET rate_per_15kg = $1, rate_per_ltr = $2
-                WHERE id = $3
-              `;
-              await client.query(rateUpdateQuery, [derivedRates.rate_per_15kg, derivedRates.rate_per_ltr, orderId]);
-              Logger.info(`[REVERT] Derived and saved rates for order ${orderId}: 15kg=${derivedRates.rate_per_15kg}, 1ltr=${derivedRates.rate_per_ltr}`);
+              if (rates) {
+                const updateRatesQuery = `
+                  UPDATE order_dispatch 
+                  SET rate_per_15kg = $1, rate_per_ltr = $2, oil_type = $3
+                  WHERE id = $4
+                `;
+                await client.query(updateRatesQuery, [rates.rate_per_15kg, rates.rate_per_ltr, oilType, p.id]);
+              } else {
+                // Individual derivation fallback if oil type not in consolidation map for some reason
+                const derivedRes = await deriveRatesForRegularOrder(p.product_name, parseFloat(p.rate_of_material));
+                if (derivedRes) {
+                  await client.query(`UPDATE order_dispatch SET rate_per_15kg = $1, rate_per_ltr = $2, oil_type = $3 WHERE id = $4`, 
+                    [derivedRes.rate_per_15kg, derivedRes.rate_per_ltr, oilType, p.id]);
+                }
+              }
             }
+            Logger.info(`[REVERT] Consolidated rates applied by oil type for group ${baseDo}%`);
           }
         } catch (error) {
-          Logger.warn(`[REVERT] Post-revert updates failed for order ID ${orderId}: ${error.message}`);
-          // Non-fatal
+          Logger.warn(`[REVERT] Post-revert group updates failed for order NO ${order.order_no}: ${error.message}`);
         }
       }
       
