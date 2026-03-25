@@ -36,8 +36,8 @@ const getNextId = async (req, res, next) => {
       case 'broker':
         tableName = 'broker_details';
         idColumn = 'broker_id';
-        prefix = 'SLM';
-        minDigits = 3; // SLM101
+        prefix = 'BRK';
+        minDigits = 3; // BRK101
         break;
       case 'sku':
         tableName = 'sku_details';
