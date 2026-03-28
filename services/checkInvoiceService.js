@@ -83,6 +83,8 @@ class CheckInvoiceService {
           od.sku_name,
           od.approval_qty,
           od.order_punch_remarks,
+          od.transfer,
+          od.bill_company_name,
           sd.nos_per_main_uom
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
@@ -165,8 +167,9 @@ class CheckInvoiceService {
           planned_6, actual_6,
           status_1, remarks_2,
           bill_type, invoice_date, invoice_no, invoice_copy, qty, bill_amount,
-          timestamp
-        FROM lift_receiving_confirmation 
+          timestamp, od.transfer, od.bill_company_name
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY actual_6 DESC, d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

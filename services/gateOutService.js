@@ -82,6 +82,8 @@ class GateOutService {
           od.sku_name,
           od.approval_qty,
           od.order_punch_remarks,
+          od.transfer,
+          od.bill_company_name,
           sd.nos_per_main_uom
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
@@ -164,9 +166,10 @@ class GateOutService {
           planned_7, actual_7,
           truck_no,
           gate_pass_copy, vehicle_loaded_image,
-          timestamp,
-          invoice_no
-        FROM lift_receiving_confirmation 
+          invoice_no,
+          timestamp, od.transfer, od.bill_company_name
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY actual_7 DESC, d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

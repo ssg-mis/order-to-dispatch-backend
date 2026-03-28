@@ -83,6 +83,8 @@ class ConfirmMaterialReceiptService {
           od.approval_qty,
           od.order_punch_remarks,
           od.rate_of_material,
+          od.transfer,
+          od.bill_company_name,
           sd.nos_per_main_uom
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
@@ -164,8 +166,9 @@ class ConfirmMaterialReceiptService {
           qty_to_be_dispatched, type_of_transporting, dispatch_from,
           planned_8, actual_8,
           material_received_date, damage_status, remarks_3,
-          timestamp, invoice_no
-        FROM lift_receiving_confirmation 
+          timestamp, invoice_no, od.transfer, od.bill_company_name
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY actual_8 DESC, d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

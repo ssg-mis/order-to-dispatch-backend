@@ -82,7 +82,9 @@ class SecurityGuardApprovalService {
           od.sku_name,
           od.approval_qty,
           od.order_punch_remarks,
-          od.actual_1 AS order_actual_1
+          od.actual_1 AS order_actual_1,
+          od.transfer,
+          od.bill_company_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
@@ -160,8 +162,9 @@ class SecurityGuardApprovalService {
           qty_to_be_dispatched, type_of_transporting, dispatch_from,
           planned_4, actual_4, 
           bilty_no, bilty_image, vehicle_image_attachemrnt,
-          timestamp
-        FROM lift_receiving_confirmation 
+          timestamp, od.transfer, od.bill_company_name
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY actual_4 DESC, d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

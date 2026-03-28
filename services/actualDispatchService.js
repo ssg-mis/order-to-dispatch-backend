@@ -81,11 +81,11 @@ class ActualDispatchService {
           od.advance_amount,
           od.is_order_through_broker,
           od.broker_name,
-          od.sku_name,
-          od.approval_qty,
           od.order_punch_remarks,
           od.final_rate,
-          od.overall_status_of_order
+          od.overall_status_of_order,
+          od.transfer,
+          od.bill_company_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
@@ -140,8 +140,9 @@ class ActualDispatchService {
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
       
-      const dataQuery = `
-        SELECT lrc.*, od.order_type, od.party_so_date FROM lift_receiving_confirmation lrc
+    const dataQuery = `
+        SELECT lrc.*, od.order_type, od.party_so_date, od.transfer, od.bill_company_name 
+        FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY lrc.actual_1 DESC

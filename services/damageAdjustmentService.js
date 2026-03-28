@@ -79,9 +79,10 @@ class DamageAdjustmentService {
           od.advance_amount,
           od.is_order_through_broker,
           od.broker_name,
-          od.sku_name,
           od.approval_qty,
-          od.order_punch_remarks
+          od.order_punch_remarks,
+          od.transfer,
+          od.bill_company_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
@@ -161,8 +162,9 @@ class DamageAdjustmentService {
           qty_to_be_dispatched, type_of_transporting, dispatch_from,
           planned_9, actual_9, delay_9,
           status_2, credit_note_no, net_banalce,
-          timestamp, invoice_no
-        FROM lift_receiving_confirmation 
+          timestamp, invoice_no, od.transfer, od.bill_company_name
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY actual_9 DESC, d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

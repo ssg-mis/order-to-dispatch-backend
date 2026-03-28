@@ -245,20 +245,57 @@ class DispatchPlanningService {
          // Full Dispatch or Over Dispatch -> Mark as Completed (actual_3 = NOW())
          updateQuery = `
           UPDATE order_dispatch 
-          SET remaining_dispatch_qty = $1, actual_3 = NOW(), dispatch_planning_user = $3
+          SET 
+            remaining_dispatch_qty = $1, 
+            actual_3 = NOW(), 
+            dispatch_planning_user = $3,
+            transfer = $4,
+            bill_company_name = $5,
+            bill_address = $6,
+            ship_company_name = $7,
+            ship_address = $8,
+            freight_rate = $9
           WHERE id = $2
           RETURNING *
         `;
-        updateParams = [0, orderId, data.username || null]; // Cap at 0
+        updateParams = [
+          0, 
+          orderId, 
+          data.username || null,
+          data.transfer || 'no',
+          data.bill_company_name || null,
+          data.bill_address || null,
+          data.ship_company_name || null,
+          data.ship_address || null,
+          data.freight_rate || 0
+        ]; // Cap at 0
       } else {
          // Partial Dispatch -> Keep Pending (actual_3 stays NULL)
          updateQuery = `
           UPDATE order_dispatch 
-          SET remaining_dispatch_qty = $1, dispatch_planning_user = $3
+          SET 
+            remaining_dispatch_qty = $1, 
+            dispatch_planning_user = $3,
+            transfer = $4,
+            bill_company_name = $5,
+            bill_address = $6,
+            ship_company_name = $7,
+            ship_address = $8,
+            freight_rate = $9
           WHERE id = $2
           RETURNING *
         `;
-        updateParams = [newRemainingQty, orderId, data.username || null];
+        updateParams = [
+          newRemainingQty, 
+          orderId, 
+          data.username || null,
+          data.transfer || 'no',
+          data.bill_company_name || null,
+          data.bill_address || null,
+          data.ship_company_name || null,
+          data.ship_address || null,
+          data.freight_rate || 0
+        ];
       }
       
       Logger.info(`[DEBUG-TRACKING] Prepared updateParams for order_dispatch (Planning):`, { 
@@ -415,6 +452,56 @@ class DispatchPlanningService {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * Update transfer details for an order
+   * @param {number} orderId - Order ID from order_dispatch table
+   * @param {Object} data - Transfer data
+   * @returns {Promise<Object>} Status of update
+   */
+  async updateTransferDetails(orderId, data = {}) {
+    try {
+      const updateQuery = `
+        UPDATE order_dispatch 
+        SET 
+          transfer = $1,
+          bill_company_name = $2,
+          bill_address = $3,
+          ship_company_name = $4,
+          ship_address = $5,
+          freight_rate = $6
+        WHERE id = $7
+        RETURNING *
+      `;
+      
+      const updateParams = [
+        data.transfer || 'yes',
+        data.bill_company_name || null,
+        data.bill_address || null,
+        data.ship_company_name || null,
+        data.ship_address || null,
+        data.freight_rate || 0,
+        orderId
+      ];
+      
+      const result = await db.query(updateQuery, updateParams);
+      
+      if (result.rows.length === 0) {
+        throw new Error('Order not found');
+      }
+      
+      Logger.info(`Updated transfer details for order ID: ${orderId}`);
+      
+      return { 
+        success: true, 
+        message: 'Transfer details updated successfully',
+        data: result.rows[0]
+      };
+    } catch (error) {
+      Logger.error(`Error updating transfer details for order ID: ${orderId}`, error);
+      throw error;
     }
   }
 }

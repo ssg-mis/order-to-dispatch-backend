@@ -155,9 +155,37 @@ const revertDispatchPlanning = async (req, res, next) => {
   }
 };
 
+/**
+ * Update transfer details for an order
+ * @route POST /api/v1/dispatch-planning/update-transfer/:id
+ */
+const updateTransferDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const transferData = req.body;
+    
+    Logger.info(`[DISPATCH PLANNING] Updating transfer details for order ID: ${id}`, { transferData });
+    
+    const result = await dispatchPlanningService.updateTransferDetails(id, transferData);
+    
+    return ResponseUtil.success(
+      res,
+      result.data,
+      result.message
+    );
+  } catch (error) {
+    Logger.error('[DISPATCH PLANNING] Error in updateTransferDetails controller', error);
+    if (error.message.includes('not found')) {
+      return ResponseUtil.notFound(res, error.message);
+    }
+    next(error);
+  }
+};
+
 module.exports = {
   getPendingDispatches,
   getDispatchHistory,
   submitDispatchPlanning,
-  revertDispatchPlanning
+  revertDispatchPlanning,
+  updateTransferDetails
 };

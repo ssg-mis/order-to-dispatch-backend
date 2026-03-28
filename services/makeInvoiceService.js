@@ -83,6 +83,8 @@ class MakeInvoiceService {
           od.sku_name,
           od.approval_qty,
           od.order_punch_remarks,
+          od.transfer,
+          od.bill_company_name,
           sd.nos_per_main_uom
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
@@ -163,9 +165,10 @@ class MakeInvoiceService {
           id, d_sr_number, so_no, party_name, product_name,
           qty_to_be_dispatched, type_of_transporting, dispatch_from,
           planned_5, actual_5,
-          bill_type, invoice_date, invoice_no, invoice_copy, qty, bill_amount,
-          timestamp
-        FROM lift_receiving_confirmation 
+          bill_type, invoice_date,          invoice_no, invoice_copy, qty, bill_amount,
+          timestamp, od.transfer, od.bill_company_name
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY actual_5 DESC, d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

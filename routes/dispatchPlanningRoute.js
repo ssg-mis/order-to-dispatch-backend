@@ -54,4 +54,15 @@ router.post(
   dispatchPlanningController.revertDispatchPlanning
 );
 
+/**
+ * @route   POST /api/v1/dispatch-planning/update-transfer/:id
+ * @desc    Update transfer details for an order
+ * @access  Public
+ * @body    { transfer: string, bill_company_name: string, ... }
+ */
+router.post(
+  '/update-transfer/:id',
+  dispatchPlanningController.updateTransferDetails
+);
+
 module.exports = router;

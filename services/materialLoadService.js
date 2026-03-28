@@ -42,7 +42,8 @@ class MaterialLoadService {
       const total = parseInt(countResult.rows[0].count);
       
       const dataQuery = `
-        SELECT lrc.*, od.sku_name, od.approval_qty FROM lift_receiving_confirmation lrc
+        SELECT lrc.*, od.sku_name, od.approval_qty, od.transfer, od.bill_company_name 
+        FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY lrc.timestamp DESC
@@ -79,7 +80,9 @@ class MaterialLoadService {
       const total = parseInt(countResult.rows[0].count);
       
       const dataQuery = `
-        SELECT lrc.* FROM lift_receiving_confirmation lrc
+        SELECT lrc.*, od.transfer, od.bill_company_name 
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY lrc.actual_1 DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

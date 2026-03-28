@@ -90,8 +90,15 @@ class OrderDispatch {
     this.order_approval_user = data.order_approval_user || null;
     this.pre_approval_user = data.pre_approval_user || null;
     this.order_punch_user = data.order_punch_user || null;
-
     this.created_at = data.created_at || new Date();
+
+    // New Transfer columns
+    this.transfer = data.transfer || 'no';
+    this.bill_company_name = data.bill_company_name || null;
+    this.bill_address = data.bill_address || null;
+    this.ship_company_name = data.ship_company_name || null;
+    this.ship_address = data.ship_address || null;
+    this.freight_rate = data.freight_rate || 0;
   }
 
   /**
@@ -156,7 +163,14 @@ class OrderDispatch {
       order_punch_user: this.order_punch_user,
       pre_approval_user: this.pre_approval_user,
       order_approval_user: this.order_approval_user,
-      dispatch_planning_user: this.dispatch_planning_user
+      order_approval_user: this.order_approval_user,
+      dispatch_planning_user: this.dispatch_planning_user,
+      transfer: this.transfer,
+      bill_company_name: this.bill_company_name,
+      bill_address: this.bill_address,
+      ship_company_name: this.ship_company_name,
+      ship_address: this.ship_address,
+      freight_rate: this.freight_rate
     };
   }
 }
