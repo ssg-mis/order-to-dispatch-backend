@@ -332,8 +332,8 @@ class DispatchPlanningService {
   /**
    * Revert dispatch planning back to pre-approval
    * 1. Null actual_3, planned_3, actual_2, planned_2, actual_1 in order_dispatch
-   * 2. Restore remaining_dispatch_qty
-   * 3. Delete related lift_receiving_confirmation records
+   * 2. Keep remaining_dispatch_qty as-is (do NOT restore to approval_qty)
+   * 3. Do NOT delete lift_receiving_confirmation records (only actual dispatch revert should do that)
    * @param {number} orderId - Order ID from order_dispatch table
    * @param {string} username - User who is reverting
    * @returns {Promise<Object>} Status of reversion
@@ -355,12 +355,16 @@ class DispatchPlanningService {
       }
       
       const order = orderResult.rows[0];
-      const originalQty = parseFloat(order.approval_qty || order.order_quantity || 0);
+      // Keep the current remaining_dispatch_qty (e.g. 20) — do NOT reset to approval_qty (50).
+      // If remaining_dispatch_qty is NULL (never partially dispatched), fall back to approval_qty.
+      const qtyToRestore = order.remaining_dispatch_qty !== null
+        ? parseFloat(order.remaining_dispatch_qty)
+        : parseFloat(order.approval_qty || order.order_quantity || 0);
       
-      // Step 2: Delete related lift_receiving_confirmation records for this order
-      const deleteQuery = `DELETE FROM lift_receiving_confirmation WHERE so_no = $1`;
-      const deleteResult = await client.query(deleteQuery, [order.order_no]);
-      Logger.info(`[REVERT] Deleted ${deleteResult.rowCount} lift_receiving_confirmation records for SO: ${order.order_no}`);
+      // Step 2 (SKIPPED): Do NOT delete lift_receiving_confirmation records here.
+      // Those records were created by actual dispatch (actualDispatchService) and should
+      // only be removed when actual dispatch is reverted, not dispatch planning.
+      Logger.info(`[REVERT] Dispatch planning revert — keeping lift_receiving_confirmation records intact for SO: ${order.order_no}`);
       
       // Step 3: Update order_dispatch - null all stage columns, restore qty, and save remarks
       let updateQuery;
@@ -399,8 +403,8 @@ class DispatchPlanningService {
         `;
       }
 
-      await client.query(updateQuery, [originalQty, orderId, remarks || null]);
-      Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Restored qty: ${originalQty} (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
+      await client.query(updateQuery, [qtyToRestore, orderId, remarks || null]);
+      Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Kept remaining_dispatch_qty: ${qtyToRestore} (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
 
       // Step 4: For regular orders, map oil_type and derive rates FOR THE ENTIRE GROUP
       if (order.order_type && order.order_type.toLowerCase() === 'regular' && order.product_name) {
