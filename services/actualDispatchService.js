@@ -140,8 +140,36 @@ class ActualDispatchService {
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
       
-    const dataQuery = `
-        SELECT lrc.*, od.order_type, od.party_so_date, od.transfer, od.bill_company_name 
+      const dataQuery = `
+        SELECT 
+          lrc.*,
+          od.order_type_delivery_purpose,
+          od.start_date,
+          od.end_date,
+          od.delivery_date,
+          od.order_type,
+          od.customer_type,
+          od.party_so_date,
+          od.oil_type,
+          od.rate_per_15kg,
+          od.rate_per_ltr,
+          od.rate_of_material,
+          od.total_amount_with_gst,
+          od.type_of_transporting,
+          od.customer_contact_person_name,
+          od.customer_contact_person_whatsapp_no,
+          od.customer_address,
+          od.payment_terms,
+          od.advance_payment_to_be_taken,
+          od.advance_amount,
+          od.is_order_through_broker,
+          od.broker_name,
+          od.sku_name,
+          od.approval_qty,
+          od.order_punch_remarks,
+          od.actual_1 AS order_actual_1,
+          od.transfer,
+          od.bill_company_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
@@ -200,6 +228,7 @@ class ActualDispatchService {
         pollution_end_date: data.pollution_end_date || null,
         permit1_end_date: data.permit1_end_date || null,
         permit2_end_date: data.permit2_end_date || null,
+        difference: data.difference || 0,
         security_guard_status: null,
         revert_security_remarks: null
       };
