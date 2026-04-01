@@ -155,11 +155,11 @@ class OrderDispatchValidator {
       }]);
     }
 
-    // Validate DO-XXX format
-    if (!/^DO-\d{3,}$/.test(orderNo)) {
+    // Validate DO-XXX or DO/YY-YY/XXXX format
+    if (!/^DO[-\/](?:\d{2}-\d{2}\/)?\d+[A-Z]?(-\d+)?$/.test(orderNo)) {
       return ResponseUtil.validationError(res, [{
         field: 'orderNo',
-        message: 'Invalid order number format. Expected format: DO-001'
+        message: 'Invalid order number format. Expected format: DO/26-27/0001'
       }]);
     }
 

@@ -607,11 +607,16 @@ class OrderDispatchService {
       
       const result = await db.query(query, [prefix]);
       
-      // Extract suffixes (last character of order_no if it matches prefix + letter)
+      // Extract suffixes (first character after the prefix if it's a letter)
       const suffixes = result.rows.map(row => {
         const orderNo = row.order_no || "";
-        const match = orderNo.match(/([A-Z])$/i);
-        return match ? match[1].toUpperCase() : null;
+        // Remove prefix to see what's left
+        if (orderNo.startsWith(prefix)) {
+          const suffixPart = orderNo.substring(prefix.length);
+          const match = suffixPart.match(/^([A-Z])/i);
+          return match ? match[1].toUpperCase() : null;
+        }
+        return null;
       }).filter(Boolean);
       
       return Array.from(new Set(suffixes));

@@ -31,9 +31,9 @@ class DashboardService {
    */
   getBaseOrderNo(orderNo) {
     if (!orderNo) return orderNo;
-    // Capture the prefix part (e.g., DO-130) and discard any suffix starting with A-Z or additional -1, etc.
-    // Based on user query: regexp_replace(order_no, '^(DO-[0-9]+).*', '\1')
-    const match = orderNo.match(/^(DO-\d+)/);
+    // Capture the prefix part (e.g., DO-130 or DO/26-27/0001) and discard any suffix starting with A-Z or additional -1, etc.
+    // Updated to handle new format: DO/YY-YY/XXXX
+    const match = orderNo.match(/^(DO[-\/](?:\d{2}-\d{2}\/)?\d+)/);
     return match ? match[1] : orderNo;
   }
 
