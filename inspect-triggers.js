@@ -3,7 +3,7 @@ const db = require('./config/db');
 
 async function inspectTriggers() {
   try {
-    console.log('Inspecting triggers on order_dispatch...');
+    console.log('Inspecting triggers on lift_receiving_confirmation...');
     const result = await db.query(`
       SELECT 
           trig.tgname AS trigger_name,
@@ -12,7 +12,7 @@ async function inspectTriggers() {
       FROM pg_trigger trig
       JOIN pg_class cls ON trig.tgrelid = cls.oid
       JOIN pg_proc proc ON trig.tgfoid = proc.oid
-      WHERE cls.relname = 'order_dispatch';
+      WHERE cls.relname = 'lift_receiving_confirmation';
     `);
 
     console.log('Found', result.rows.length, 'triggers:');

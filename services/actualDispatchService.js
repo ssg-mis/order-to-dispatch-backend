@@ -50,7 +50,7 @@ class ActualDispatchService {
         paramIndex++;
       }
 
-      if (filters.depo_names && filters.depo_names.length > 0) {
+      if (filters.depo_names && Array.isArray(filters.depo_names) && filters.depo_names.length > 0) {
         whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
         queryParams.push(filters.depo_names);
         paramIndex++;
@@ -141,7 +141,7 @@ class ActualDispatchService {
         paramIndex++;
       }
 
-      if (filters.depo_names && filters.depo_names.length > 0) {
+      if (filters.depo_names && Array.isArray(filters.depo_names) && filters.depo_names.length > 0) {
         whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
         queryParams.push(filters.depo_names);
         paramIndex++;
@@ -270,6 +270,14 @@ class ActualDispatchService {
         const diffQty = plannedQty - actualQty;
         const soNo = originalDispatch.so_no;
         const orderCategory = (originalDispatch.order_category || '').toUpperCase();
+        const isStockTransfer = orderCategory === 'STOCK TRANSFER';
+
+        // SPECIAL RULE: For Stock Transfer, skip Stage 8 (Security Guard Approval) 
+        // and go straight to Stage 9 (Make Invoice)
+        if (isStockTransfer) {
+          updateData.planned_4 = null;
+          updateData.planned_5 = new Date().toISOString();
+        }
 
         // Step 2: Update lift_receiving_confirmation
         const fields = Object.keys(updateData);

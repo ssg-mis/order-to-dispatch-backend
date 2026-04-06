@@ -13,13 +13,13 @@ const { whatsappShareService } = require('../services/whatsappShareService');
  */
 const getPendingDispatches = async (req, res, next) => {
   try {
-    const { page, limit, d_sr_number, so_no, party_name, ...otherFilters } = req.query;
+    const { page, limit, d_sr_number, so_no, party_name, depo_names, ...otherFilters } = req.query;
     
     const filters = {
       d_sr_number,
       so_no,
       party_name,
-      depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : req.query.depo_names.split(',')) : undefined,
+      depo_names: (depo_names && depo_names !== 'undefined') ? (Array.isArray(depo_names) ? depo_names : depo_names.split(',')) : undefined,
       ...otherFilters
     };
     
@@ -52,13 +52,13 @@ const getPendingDispatches = async (req, res, next) => {
  */
 const getDispatchHistory = async (req, res, next) => {
   try {
-    const { page, limit, d_sr_number, so_no, party_name, ...otherFilters } = req.query;
+    const { page, limit, d_sr_number, so_no, party_name, depo_names, ...otherFilters } = req.query;
     
     const filters = {
       d_sr_number,
       so_no,
       party_name,
-      depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : req.query.depo_names.split(',')) : undefined,
+      depo_names: (depo_names && depo_names !== 'undefined') ? (Array.isArray(depo_names) ? depo_names : depo_names.split(',')) : undefined,
       ...otherFilters
     };
     
