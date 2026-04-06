@@ -74,7 +74,7 @@ const getUserById = async (req, res) => {
  */
 const createUser = async (req, res) => {
   try {
-    const { username, password, email, phone_no, status, role, page_access } = req.body;
+    const { username, password, email, phone_no, status, role, page_access, depo_access } = req.body;
     
     // Validate required fields
     if (!username || !password || !role) {
@@ -92,7 +92,8 @@ const createUser = async (req, res) => {
       phone_no,
       status,
       role,
-      page_access
+      page_access,
+      depo_access
     });
     
     res.status(201).json({
