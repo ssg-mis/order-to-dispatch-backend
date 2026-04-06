@@ -99,6 +99,7 @@ class OrderDispatch {
     this.ship_company_name = data.ship_company_name || null;
     this.ship_address = data.ship_address || null;
     this.freight_rate = data.freight_rate || 0;
+    this.order_category = data.order_category || 'Sales';
   }
 
   /**
@@ -170,7 +171,8 @@ class OrderDispatch {
       bill_address: this.bill_address,
       ship_company_name: this.ship_company_name,
       ship_address: this.ship_address,
-      freight_rate: this.freight_rate
+      freight_rate: this.freight_rate,
+      order_category: this.order_category
     };
   }
 }

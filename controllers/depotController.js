@@ -11,12 +11,11 @@ const Logger = require('../utils/logger');
  */
 async function getAllDepots(req, res) {
   try {
-    const depots = await depotService.getAllDepots(req.query);
+    const result = await depotService.getAllDepots(req.query);
     
     res.status(200).json({
       success: true,
-      data: depots,
-      count: depots.length
+      data: result
     });
   } catch (error) {
     Logger.error('Error in getAllDepots controller:', error);

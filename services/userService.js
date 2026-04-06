@@ -19,10 +19,10 @@ class UserService {
     try {
       const { page = 1, limit = 100, role, status } = params;
       const offset = (page - 1) * limit;
-      
+
       let query = `
         SELECT 
-          id, username, email, phone_no, status, role, page_access, 
+          id, username, email, phone_no, status, role, page_access, depo_access,
           created_at, updated_at
         FROM login
         WHERE 1=1
@@ -34,7 +34,7 @@ class UserService {
         query += ` AND role = $${paramIndex++}`;
         queryParams.push(role);
       }
-      
+
       if (status) {
         query += ` AND status = $${paramIndex++}`;
         queryParams.push(status);
@@ -45,12 +45,12 @@ class UserService {
       queryParams.push(limit, offset);
 
       const result = await db.query(query, queryParams);
-      
+
       // Get total count for pagination
       let countQuery = 'SELECT COUNT(*) FROM login WHERE 1=1';
       const countParams = [];
       let countIndex = 1;
-      
+
       if (role) {
         countQuery += ` AND role = $${countIndex++}`;
         countParams.push(role);
@@ -59,7 +59,7 @@ class UserService {
         countQuery += ` AND status = $${countIndex++}`;
         countParams.push(status);
       }
-      
+
       const countResult = await db.query(countQuery, countParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -90,18 +90,18 @@ class UserService {
     try {
       const query = `
         SELECT 
-          id, username, email, phone_no, status, role, page_access, 
+          id, username, email, phone_no, status, role, page_access, depo_access,
           created_at, updated_at
         FROM login
         WHERE id = $1
       `;
-      
+
       const result = await db.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         return null;
       }
-      
+
       return {
         ...result.rows[0],
         password: '••••••••'
@@ -119,20 +119,21 @@ class UserService {
    */
   async createUser(userData) {
     try {
-      const { username, password, email, phone_no, status = 'active', role, page_access = [] } = userData;
-      
+      const { username, password, email, phone_no, status = 'active', role, page_access = [], depo_access = {} } = userData;
+
       // Hash password
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-      
+
       const query = `
-        INSERT INTO login (username, password, email, phone_no, status, role, page_access)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, username, email, phone_no, status, role, page_access, created_at, updated_at
+        INSERT INTO login (username, password, email, phone_no, status, role, page_access, depo_access)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, username, email, phone_no, status, role, page_access, depo_access, created_at, updated_at
       `;
-      
-      // Serialize page_access: convert object/array to JSON string for jsonb column
+
+      // Serialize: convert object/array to JSON string for jsonb columns
       const pageAccessValue = page_access ? JSON.stringify(page_access) : JSON.stringify({})
-      
+      const depoAccessValue = depo_access ? JSON.stringify(depo_access) : JSON.stringify({})
+
       const result = await db.query(query, [
         username,
         hashedPassword,
@@ -140,16 +141,17 @@ class UserService {
         phone_no,
         status,
         role,
-        pageAccessValue
+        pageAccessValue,
+        depoAccessValue
       ]);
-      
+
       return {
         ...result.rows[0],
         password: '••••••••'
       };
     } catch (error) {
       Logger.error('Error creating user', error);
-      
+
       // Handle unique constraint violations
       if (error.code === '23505') {
         if (error.constraint === 'login_username_key') {
@@ -159,7 +161,7 @@ class UserService {
           throw new Error('Email already exists');
         }
       }
-      
+
       throw error;
     }
   }
@@ -172,8 +174,8 @@ class UserService {
    */
   async updateUser(id, userData) {
     try {
-      const { username, password, email, phone_no, status, role, page_access } = userData;
-      
+      const { username, password, email, phone_no, status, role, page_access, depo_access } = userData;
+
       // Build dynamic update query
       const updateFields = [];
       const queryParams = [];
@@ -183,39 +185,44 @@ class UserService {
         updateFields.push(`username = $${paramIndex++}`);
         queryParams.push(username);
       }
-      
+
       if (password !== undefined && password !== '••••••••' && password.trim() !== '') {
         const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
         updateFields.push(`password = $${paramIndex++}`);
         queryParams.push(hashedPassword);
       }
-      
+
       if (email !== undefined) {
         // If email is empty string, set it to NULL
         const emailValue = email === "" ? null : email;
         updateFields.push(`email = $${paramIndex++}`);
         queryParams.push(emailValue);
       }
-      
+
       if (phone_no !== undefined) {
         updateFields.push(`phone_no = $${paramIndex++}`);
         queryParams.push(phone_no);
       }
-      
+
       if (status !== undefined) {
         updateFields.push(`status = $${paramIndex++}`);
         queryParams.push(status);
       }
-      
+
       if (role !== undefined) {
         updateFields.push(`role = $${paramIndex++}`);
         queryParams.push(role);
       }
-      
+
       if (page_access !== undefined) {
         updateFields.push(`page_access = $${paramIndex++}`);
         // Serialize: accepts both object and array formats
         queryParams.push(JSON.stringify(page_access));
+      }
+
+      if (depo_access !== undefined) {
+        updateFields.push(`depo_access = $${paramIndex++}`);
+        queryParams.push(JSON.stringify(depo_access));
       }
 
       if (updateFields.length === 0) {
@@ -223,27 +230,27 @@ class UserService {
       }
 
       queryParams.push(id);
-      
+
       const query = `
         UPDATE login 
         SET ${updateFields.join(', ')}
         WHERE id = $${paramIndex}
-        RETURNING id, username, email, phone_no, status, role, page_access, created_at, updated_at
+        RETURNING id, username, email, phone_no, status, role, page_access, depo_access, created_at, updated_at
       `;
-      
+
       const result = await db.query(query, queryParams);
-      
+
       if (result.rows.length === 0) {
         return null;
       }
-      
+
       return {
         ...result.rows[0],
         password: '••••••••'
       };
     } catch (error) {
       Logger.error('Error updating user', error);
-      
+
       // Handle unique constraint violations
       if (error.code === '23505') {
         if (error.constraint === 'login_username_key') {
@@ -253,7 +260,7 @@ class UserService {
           throw new Error('Email already exists');
         }
       }
-      
+
       throw error;
     }
   }
@@ -267,7 +274,7 @@ class UserService {
     try {
       const query = 'DELETE FROM login WHERE id = $1 RETURNING id';
       const result = await db.query(query, [id]);
-      
+
       return result.rows.length > 0;
     } catch (error) {
       Logger.error('Error deleting user', error);
@@ -284,24 +291,24 @@ class UserService {
   async authenticateUser(username, password) {
     try {
       const query = `
-        SELECT id, username, password, email, phone_no, status, role, page_access, created_at, updated_at
+        SELECT id, username, password, email, phone_no, status, role, page_access, depo_access, created_at, updated_at
         FROM login
         WHERE username = $1 AND status = 'active'
       `;
-      
+
       const result = await db.query(query, [username]);
-      
+
       if (result.rows.length === 0) {
         return null;
       }
-      
+
       const user = result.rows[0];
       const isValid = await bcrypt.compare(password, user.password);
-      
+
       if (!isValid) {
         return null;
       }
-      
+
       // Return user without password
       const { password: _, ...userWithoutPassword } = user;
       return userWithoutPassword;

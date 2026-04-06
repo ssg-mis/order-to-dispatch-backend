@@ -19,6 +19,7 @@ const getPendingDispatches = async (req, res, next) => {
       d_sr_number,
       so_no,
       party_name,
+      depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : req.query.depo_names.split(',')) : undefined,
       ...otherFilters
     };
     
@@ -57,6 +58,7 @@ const getDispatchHistory = async (req, res, next) => {
       d_sr_number,
       so_no,
       party_name,
+      depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : req.query.depo_names.split(',')) : undefined,
       ...otherFilters
     };
     

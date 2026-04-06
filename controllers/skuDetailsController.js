@@ -7,23 +7,49 @@ const { Logger } = require('../utils');
  */
 const getAllSkuDetails = async (req, res, next) => {
   try {
-    const { all } = req.query;
-    let sql = 'SELECT * FROM sku_details ';
-    const params = [];
+    const { all, page = 1, limit = 20, search = "" } = req.query;
+    const offset = (page - 1) * limit;
+    const values = [];
+    let whereClause = "";
 
     if (all !== 'true') {
-      sql += 'WHERE status = $1 ';
-      params.push('Active');
+      whereClause = "WHERE status = 'Active' ";
     }
 
-    sql += 'ORDER BY id DESC';
+    if (search) {
+      const searchPattern = `%${search}%`;
+      const searchIndex = values.length + 1;
+      values.push(searchPattern);
+      whereClause += whereClause ? "AND " : "WHERE ";
+      whereClause += `(sku_name ILIKE $${searchIndex} OR sku_code ILIKE $${searchIndex}) `;
+    }
 
-    const result = await query(sql, params);
+    // Get total count
+    const countQuery = `SELECT COUNT(*) FROM sku_details ${whereClause}`;
+    const countResult = await query(countQuery, values);
+    const total = parseInt(countResult.rows[0].count);
+
+    // Get data
+    const dataQuery = `
+      SELECT * FROM sku_details 
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+    `;
+    
+    values.push(limit, offset);
+    const result = await query(dataQuery, values);
 
     res.json({
       success: true,
-      count: result.rowCount,
-      data: result.rows
+      data: {
+        skuDetails: result.rows,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit)
+        }
+      }
     });
   } catch (error) {
     next(error);

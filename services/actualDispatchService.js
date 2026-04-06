@@ -25,38 +25,44 @@ class ActualDispatchService {
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
-      
+
       // Since Stages 6 & 7 are consolidated, we only need to check Stage 5 (actual_1)
       let whereConditions = ['lrc.planned_1 IS NOT NULL', 'lrc.actual_1 IS NULL'];
       let queryParams = [];
       let paramIndex = 1;
-      
+
       // ... (rest of the code similar to before but keeping it clean)
       if (filters.d_sr_number) {
         whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
         paramIndex++;
       }
-      
+
       if (filters.so_no) {
         whereConditions.push(`lrc.so_no = $${paramIndex}`);
         queryParams.push(filters.so_no);
         paramIndex++;
       }
-      
+
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
-      
+
+      if (filters.depo_names && filters.depo_names.length > 0) {
+        whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+        queryParams.push(filters.depo_names);
+        paramIndex++;
+      }
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-      
+
       // Count total
       const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
-      
+
       const dataQuery = `
         SELECT 
           lrc.*,
@@ -85,16 +91,17 @@ class ActualDispatchService {
           od.final_rate,
           od.overall_status_of_order,
           od.transfer,
-          od.bill_company_name
+          od.bill_company_name,
+          od.depo_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY lrc.timestamp DESC, lrc.d_sr_number DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      
+
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      
+
       return {
         success: true,
         data: dataResult.rows,
@@ -111,35 +118,41 @@ class ActualDispatchService {
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
-      
+
       let whereConditions = ['lrc.planned_1 IS NOT NULL', 'lrc.actual_1 IS NOT NULL'];
       let queryParams = [];
       let paramIndex = 1;
-      
+
       if (filters.d_sr_number) {
         whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
         paramIndex++;
       }
-      
+
       if (filters.so_no) {
         whereConditions.push(`lrc.so_no = $${paramIndex}`);
         queryParams.push(filters.so_no);
         paramIndex++;
       }
-      
+
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
-      
+
+      if (filters.depo_names && filters.depo_names.length > 0) {
+        whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+        queryParams.push(filters.depo_names);
+        paramIndex++;
+      }
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-      
+
       const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
-      
+
       const dataQuery = `
         SELECT 
           lrc.*,
@@ -169,16 +182,17 @@ class ActualDispatchService {
           od.order_punch_remarks,
           od.actual_1 AS order_actual_1,
           od.transfer,
-          od.bill_company_name
+          od.bill_company_name,
+          od.depo_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
         ORDER BY lrc.actual_1 DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      
+
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      
+
       return {
         success: true,
         data: dataResult.rows,
@@ -194,7 +208,7 @@ class ActualDispatchService {
     try {
       Logger.info(`Submitting actual dispatch for DSR: ${dsrNumber}`);
       Logger.debug(`[ACTUAL DISPATCH] Raw body data:`, { data });
-      
+
       // Explicitly pick only the fields the user wants to submit
       // This avoids sending fields that don't exist in the table (like planned_2)
       const updateData = {
@@ -232,67 +246,76 @@ class ActualDispatchService {
         security_guard_status: null,
         revert_security_remarks: null
       };
-      
+
       const client = await db.getClient();
       try {
         await client.query('BEGIN');
 
-        // Step 1: Get original dispatch info (planned quantity and SO number)
-        const currentQuery = `SELECT so_no, qty_to_be_dispatched FROM lift_receiving_confirmation WHERE d_sr_number = $1`;
+        // Step 1: Get original dispatch info (planned quantity, SO number, and category)
+        const currentQuery = `
+          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_category
+          FROM lift_receiving_confirmation lrc
+          LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+          WHERE lrc.d_sr_number = $1
+        `;
         const currentResult = await client.query(currentQuery, [dsrNumber]);
-        
+
         if (currentResult.rows.length === 0) {
           throw new Error('Dispatch record not found');
         }
-        
+
         const originalDispatch = currentResult.rows[0];
         const plannedQty = parseFloat(originalDispatch.qty_to_be_dispatched || 0);
         const actualQty = parseFloat(data.actual_qty_dispatch || data.actual_qty || plannedQty);
         const diffQty = plannedQty - actualQty;
         const soNo = originalDispatch.so_no;
+        const orderCategory = (originalDispatch.order_category || '').toUpperCase();
 
         // Step 2: Update lift_receiving_confirmation
         const fields = Object.keys(updateData);
         const values = Object.values(updateData);
         const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-        
+
         const query = `
           UPDATE lift_receiving_confirmation 
           SET ${setClause}
           WHERE d_sr_number = $${fields.length + 1}
           RETURNING *
         `;
-        
+
         const result = await client.query(query, [...values, dsrNumber]);
 
         // Step 3: Handle partial dispatch by updating order_dispatch
         if (diffQty !== 0 && soNo) {
-          Logger.info(`[ACTUAL DISPATCH] Partial dispatch detected for SO: ${soNo}. Planned: ${plannedQty}, Actual: ${actualQty}, Difference: ${diffQty}`);
-          
+          Logger.info(`[ACTUAL DISPATCH] Partial dispatch detected for SO: ${soNo}. Category: ${orderCategory}, Planned: ${plannedQty}, Actual: ${actualQty}, Difference: ${diffQty}`);
+
           // Get current remaining_dispatch_qty from order_dispatch
           const orderQuery = `SELECT remaining_dispatch_qty FROM order_dispatch WHERE order_no = $1`;
           const orderResult = await client.query(orderQuery, [soNo]);
-          
+
           if (orderResult.rows.length > 0) {
             const currentOrder = orderResult.rows[0];
             const oldRemaining = parseFloat(currentOrder.remaining_dispatch_qty || 0);
-            const newRemaining = Math.max(0, oldRemaining + diffQty);
-            
-            Logger.info(`[ACTUAL DISPATCH] Updating order_dispatch. Old Remaining: ${oldRemaining}, New Remaining: ${newRemaining}`);
-            
+
+            // SPECIAL RULE for Stock Transfer: Zero out the difference effectively "pre-closing" the order
+            const isStockTransfer = orderCategory === 'STOCK TRANSFER';
+            const newRemaining = isStockTransfer ? 0 : Math.max(0, oldRemaining + diffQty);
+
+            Logger.info(`[ACTUAL DISPATCH] Updating order_dispatch. Category: ${orderCategory}, Old Remaining: ${oldRemaining}, New Remaining: ${newRemaining}`);
+
             // If newRemaining > 0, we must set actual_3 to NULL so it appears back in Dispatch Planning
-            // If newRemaining == 0, we can keep actual_3 as is (it should already be set)
+            // For Stock Transfer, newRemaining will be 0, so actual_3 remains NOT NULL (Completed)
             let updateOrderQuery;
             let updateOrderParams;
-            
-            if (newRemaining > 0) {
+
+            if (newRemaining > 0 && !isStockTransfer) {
               updateOrderQuery = `UPDATE order_dispatch SET remaining_dispatch_qty = $1, actual_3 = NULL WHERE order_no = $2`;
               updateOrderParams = [newRemaining, soNo];
             } else {
               updateOrderQuery = `UPDATE order_dispatch SET remaining_dispatch_qty = $1 WHERE order_no = $2`;
               updateOrderParams = [0, soNo];
             }
-            
+
             await client.query(updateOrderQuery, updateOrderParams);
           }
         }
@@ -323,7 +346,7 @@ class ActualDispatchService {
   async revertActualDispatch(dsrNumber, username, remarks) {
     try {
       Logger.info(`Reverting actual dispatch for DSR: ${dsrNumber} by user: ${username}`, { remarks });
-      
+
       const client = await db.getClient();
       try {
         await client.query('BEGIN');
@@ -336,11 +359,11 @@ class ActualDispatchService {
           WHERE lrc.d_sr_number = $1
         `;
         const infoResult = await client.query(infoQuery, [dsrNumber]);
-        
+
         if (infoResult.rows.length === 0) {
           throw new Error('Dispatch record not found');
         }
-        
+
         const { so_no: soNo, qty_to_be_dispatched: qtyToRevert, order_type: orderType, product_name: productName, rate_of_material: rateOfMaterial } = infoResult.rows[0];
         const revertAmt = parseFloat(qtyToRevert || 0);
 
@@ -398,7 +421,7 @@ class ActualDispatchService {
 
               // 2. Derive consolidated rates for the whole group (mapped by oil type)
               const consolidatedRatesMap = await deriveConsolidatedRatesForGroup(groupProducts);
-              
+
               if (consolidatedRatesMap) {
                 // 3. Update products in the group with their specific oil-type rates
                 for (const p of groupProducts) {
@@ -416,7 +439,7 @@ class ActualDispatchService {
                     // Fallback to individual derivation if oil type not in map
                     const derivedRes = await deriveRatesForRegularOrder(p.product_name, parseFloat(p.rate_of_material));
                     if (derivedRes) {
-                      await client.query(`UPDATE order_dispatch SET rate_per_15kg = $1, rate_per_ltr = $2, oil_type = $3 WHERE id = $4`, 
+                      await client.query(`UPDATE order_dispatch SET rate_per_15kg = $1, rate_per_ltr = $2, oil_type = $3 WHERE id = $4`,
                         [derivedRes.rate_per_15kg, derivedRes.rate_per_ltr, oilType, p.id]);
                     }
                   }

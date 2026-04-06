@@ -118,10 +118,10 @@ class ReportsService {
           if (!skuMap.has(key)) {
             const skuName = (o.sku_name || o.product_name || '').toUpperCase().trim();
             const skuDetail = skuDetailsMap.get(skuName);
-            skuMap.set(key, { 
-              oil_type: rawOil || 'Unknown', 
+            skuMap.set(key, {
+              oil_type: rawOil || 'Unknown',
               sku: o.sku_name || o.product_name || 'Unknown',
-              total_kg: 0, 
+              total_kg: 0,
               total_qty: 0,      // box / nos count (from alternate_qty_kg field)
               total_qty_kg: 0,   // qty × sku_weight in KG
               sku_weight: skuDetail ? parseFloat(skuDetail.sku_weight) || 0 : 0,

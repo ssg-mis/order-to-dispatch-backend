@@ -2,10 +2,9 @@ const { skuSellingPriceService, updateSkuSellingPriceService } = require("../ser
 
 const skuSellingPriceController = async (req, res) => {
     try {
-        const result = await skuSellingPriceService();
+        const result = await skuSellingPriceService(req.query);
         return res.status(200).json({
             success: true,
-            message: "Data fetched successfully",
             data: result
         });
     }

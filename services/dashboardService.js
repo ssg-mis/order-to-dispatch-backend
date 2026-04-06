@@ -106,12 +106,33 @@ class DashboardService {
           const isCompleted = completedBaseNos.has(group[0] ? this.getBaseOrderNo(group[0].order_no) : '');
           if (isCompleted) return false;
 
-          return group.some(o => 
-            o.overall_status_of_order &&
-            (o.overall_status_of_order.toLowerCase().includes('reject') ||
-             o.overall_status_of_order.toLowerCase().includes('cancel'))
-          );
+          return group.some(o => {
+            // Check all rejection flags in Stage 2 (Approval of Order)
+            const isRejectedByFlag = 
+              o.overall_status_of_order === false ||
+              o.rate_is_rightly_as_per_current_market_rate === false ||
+              o.we_are_dealing_in_ordered_sku === false ||
+              o.dispatch_date_confirmed === false ||
+              o.order_confirmation_with_customer === false;
+
+            if (isRejectedByFlag) return true;
+
+            // Check the status string
+            if (typeof o.overall_status_of_order === 'string') {
+              const s = o.overall_status_of_order.toLowerCase();
+              return s.includes('reject') || s.includes('cancel');
+            }
+            return false;
+          });
         }).length;
+
+        // Total Payment Amount: Sum bill_amount for all confirmed orders in lift_receiving_confirmation
+        const paymentResult = await client.query('SELECT SUM(COALESCE(bill_amount, 0)) as total FROM lift_receiving_confirmation');
+        const totalPaymentAmount = parseFloat(paymentResult.rows[0].total) || 0;
+
+        // Damages Quantity: Sum damage_qty in lift_receiving_confirmation
+        const damagesResult = await client.query('SELECT SUM(COALESCE(damage_qty, 0)) as total FROM lift_receiving_confirmation');
+        const totalDamageQty = parseFloat(damagesResult.rows[0].total) || 0;
 
         // Stage-wise counts: unique base orders per stage
         const stageCounts = STAGE_DEFS.map((stage, idx) => {
@@ -195,6 +216,8 @@ class DashboardService {
           completed: completedOrders,
           delayed: delayedOrders,
           cancelled: rejectedOrders,
+          totalPaymentAmount: totalPaymentAmount,
+          totalDamageQty: totalDamageQty,
           stageCounts,
           recentOrders: enrichedOrders,
           pendingOrdersList: enrichedOrders,

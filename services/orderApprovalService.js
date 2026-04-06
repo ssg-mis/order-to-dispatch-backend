@@ -32,7 +32,7 @@ class OrderApprovalService {
       we_are_dealing_in_ordered_sku, party_credit_status,
       dispatch_date_confirmed, overall_status_of_order,
       order_confirmation_with_customer,
-      planned_3, actual_3, delay_3, created_at
+      planned_3, actual_3, delay_3, created_at, order_category
     `.replace(/\s+/g, ' ').trim();
   }
 
@@ -189,10 +189,11 @@ class OrderApprovalService {
    * @returns {Promise<Object>} Updated order
    */
   async submitApproval(id, data = {}) {
+    const client = await db.getClient();
+    
     try {
+      await client.query('BEGIN');
       Logger.info(`submitApproval called for ID: ${id}`, { data });
-      
-      Logger.info(`[DEBUG-TRACKING] Raw data received in submitApproval:`, { data });
       
       const updateData = {
         actual_2: new Date().toISOString(),
@@ -200,52 +201,108 @@ class OrderApprovalService {
         ...data
       };
 
-      Logger.info(`[DEBUG-TRACKING] Prepared updateData for order_dispatch (Approval):`, { 
-        order_approval_user: updateData.order_approval_user,
-        hasUsername: !!updateData.username,
-        usernameValue: updateData.username
-      });
-
-      // Remove username from data if it exists to avoid trying to update a non-existent column in the spread (...data)
+      // Remove username/remark from data to avoid column errors
       if (updateData.username) delete updateData.username;
       if (updateData.remark !== undefined) delete updateData.remark;
       
-      Logger.info(`Update data prepared:`, updateData);
-      
       const fields = Object.keys(updateData);
       const values = Object.values(updateData);
-      
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
       
       const approvalFields = this.getApprovalFields();
-      const query = `
+      const updateQuery = `
         UPDATE order_dispatch 
         SET ${setClause}
         WHERE id = $${fields.length + 1}
         RETURNING ${approvalFields}
       `;
       
-      Logger.info(`Executing update query for ID: ${id}`, { setClause });
+      const updateResult = await client.query(updateQuery, [...values, id]);
       
-      const result = await db.query(query, [...values, id]);
-      
-      if (result.rows.length === 0) {
+      if (updateResult.rows.length === 0) {
         throw new Error('Order not found');
       }
-      
-      Logger.info(`Approval submitted successfully for order ID: ${id}`, { 
-        updatedFields: fields,
-        rowId: result.rows[0].id 
-      });
+
+      const updatedOrder = updateResult.rows[0];
+
+      // SKIP STAGE 4 logic:
+      // If approved, jump to Actual Dispatch (Stage 5)
+      // overall_status_of_order will be 'true' if approved
+      if (updatedOrder.overall_status_of_order === true || updatedOrder.overall_status_of_order === 'true') {
+        Logger.info(`[SKIP STAGE 4] Order approved. Moving directly to Actual Dispatch for ID: ${id}`);
+
+        const qtyToDispatch = updatedOrder.remaining_dispatch_qty || updatedOrder.approval_qty || updatedOrder.order_quantity || 0;
+
+        // 1. Mark Stage 4 as completed and keep planned_3 NULL manually as requested by USER
+        // And set remaining_dispatch_qty to 0 as requested by USER
+        const stage4SkipQuery = `
+          UPDATE order_dispatch 
+          SET 
+            planned_3 = NULL,
+            actual_3 = NOW(),
+            remaining_dispatch_qty = 0
+          WHERE id = $1
+          RETURNING *
+        `;
+        const skipResult = await client.query(stage4SkipQuery, [id]);
+        const finalOrder = skipResult.rows[0];
+
+        // 2. Insert into lift_receiving_confirmation (Stage 5 trigger)
+        // Generate DSR number
+        const seqQuery = "SELECT nextval('dsr_number_seq') as val";
+        const seqResult = await client.query(seqQuery);
+        const dsrCount = seqResult.rows[0].val;
+        const dsrNumber = `DSR-${String(dsrCount).padStart(3, '0')}`;
+
+        const insertLrcQuery = `
+          INSERT INTO lift_receiving_confirmation (
+            timestamp, d_sr_number, so_no, party_name, 
+            product_name, qty_to_be_dispatched, 
+            type_of_transporting, dispatch_from, processid
+          ) VALUES (
+            NOW(), $1, $2, $3, $4, $5, $6, $7, $8
+          ) RETURNING *
+        `;
+        
+        const insertParams = [
+          dsrNumber,
+          finalOrder.order_no,
+          finalOrder.customer_name,
+          finalOrder.product_name,
+          qtyToDispatch,
+          finalOrder.type_of_transporting,
+          data.dispatch_from || null,
+          finalOrder.processid || data.processid || null
+        ];
+        
+        await client.query(insertLrcQuery, insertParams);
+
+        Logger.info(`[SKIP STAGE 4] Successfully mapped to Actual Dispatch (LRC) with DSR: ${dsrNumber}`);
+
+        await client.query('COMMIT');
+        
+        return {
+          success: true,
+          message: 'Approval submitted and moved to Actual Dispatch (Stage 4 skipped)',
+          data: finalOrder
+        };
+      }
+
+      // If not approved (rejected), just commit the Stage 3 update
+      await client.query('COMMIT');
       
       return {
         success: true,
         message: 'Approval submitted successfully',
-        data: result.rows[0]
+        data: updatedOrder
       };
+
     } catch (error) {
-      Logger.error('Error submitting approval', error);
+      await client.query('ROLLBACK');
+      Logger.error('Error in submitApproval', error);
       throw error;
+    } finally {
+      client.release();
     }
   }
 

@@ -11,12 +11,11 @@ const Logger = require('../utils/logger');
  */
 async function getAllBrokers(req, res) {
   try {
-    const brokers = await brokerService.getAllBrokers(req.query);
+    const result = await brokerService.getAllBrokers(req.query);
     
     res.status(200).json({
       success: true,
-      data: brokers,
-      count: brokers.length
+      data: result
     });
   } catch (error) {
     Logger.error('Error in getAllBrokers controller:', error);

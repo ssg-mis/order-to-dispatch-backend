@@ -1,12 +1,42 @@
 const db = require("../config/db.js")
 
-const skuSellingPriceService = async () => {
-    const result = await db.query(`SELECT * FROM sku_selling_price`);
-    if (!result.rows.length) {
-        return [];
+const skuSellingPriceService = async (params = {}) => {
+    const { page = 1, limit = 20, search = "" } = params;
+    const offset = (page - 1) * limit;
+    const values = [];
+    let whereClause = "";
+
+    if (search) {
+        const searchPattern = `%${search}%`;
+        const searchIndex = values.length + 1;
+        values.push(searchPattern);
+        whereClause = ` WHERE packing_material ILIKE $${searchIndex} OR sku_unit ILIKE $${searchIndex} OR conversion_formula ILIKE $${searchIndex}`;
     }
 
-    return result.rows;
+    // Get count
+    const countQuery = `SELECT COUNT(*) FROM sku_selling_price ${whereClause}`;
+    const countResult = await db.query(countQuery, values);
+    const total = parseInt(countResult.rows[0].count);
+
+    // Get paginated data
+    const query = `
+        SELECT * FROM sku_selling_price 
+        ${whereClause}
+        ORDER BY id DESC
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+    `;
+    
+    values.push(limit, offset);
+    const result = await db.query(query, values);
+    
+    return {
+        skus: result.rows,
+        pagination: {
+            total,
+            page: parseInt(page),
+            limit: parseInt(limit)
+        }
+    };
 };
 
 const updateSkuSellingPriceService = async (id, data) => {

@@ -12,35 +12,52 @@ class CustomerService {
    */
   async getAllCustomers(params = {}) {
     try {
-      const { all } = params;
-      let query = `
-        SELECT 
-          id,
-          customer_id,
-          customer_name,
-          status,
-          contact_person,
-          contact,
-          email,
-          address_line_1,
-          address_line_2,
-          state,
-          pincode,
-          pan,
-          gstin,
-          gst_registered
-        FROM customer_details
-      `;
+      const { all, page = 1, limit = 20, search = '' } = params;
+      const offset = (page - 1) * limit;
+      const values = [];
+      let whereClause = "";
       
       if (!all) {
-        query += " WHERE status = 'Active'";
+        whereClause = " WHERE status = 'Active'";
       }
       
-      query += " ORDER BY customer_name ASC";
+      if (search) {
+        const searchPattern = `%${search}%`;
+        const searchIndex = values.length + 1;
+        values.push(searchPattern);
+        whereClause += whereClause ? " AND " : " WHERE ";
+        whereClause += `(customer_name ILIKE $${searchIndex} OR customer_id ILIKE $${searchIndex} OR contact_person ILIKE $${searchIndex} OR contact ILIKE $${searchIndex} OR email ILIKE $${searchIndex})`;
+      }
+
+      // Get total count
+      const countQuery = `SELECT COUNT(*) FROM customer_details ${whereClause}`;
+      const countResult = await pool.query(countQuery, values);
+      const total = parseInt(countResult.rows[0].count);
+
+      // Get paginated data
+      let query = `
+        SELECT 
+          id, customer_id, customer_name, status, contact_person, contact, 
+          email, address_line_1, address_line_2, state, pincode, 
+          pan, gstin, gst_registered
+        FROM customer_details
+        ${whereClause}
+        ORDER BY customer_name ASC
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      `;
       
-      const result = await pool.query(query);
-      Logger.info(`Fetched ${result.rows.length} customers (all: ${!!all})`);
-      return result.rows;
+      values.push(limit, offset);
+      const result = await pool.query(query, values);
+      
+      Logger.info(`Fetched ${result.rows.length} customers (total: ${total}, search: "${search}")`);
+      return {
+        customers: result.rows,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit)
+        }
+      };
     } catch (error) {
       Logger.error('Error fetching customers:', error);
       throw error;

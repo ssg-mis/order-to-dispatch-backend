@@ -112,7 +112,7 @@ const submitApproval = async (req, res, next) => {
           do_number: result.data.order_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Dispatch Planning');
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Actual Dispatch');
         }
       }
     } catch (notifyError) {

@@ -10,34 +10,55 @@ class SkuService {
   /**
    * Get all active SKUs
    */
-  async getAllSkus() {
+  async getAllSkus(params = {}) {
     try {
+      const { all, page = 1, limit = 20, search = "" } = params;
+      const offset = (page - 1) * limit;
+      const values = [];
+      let whereClause = "";
+      
+      if (!all) {
+        whereClause = " WHERE status = 'Active' OR sku_code = 'Active' OR status IS NULL";
+      }
+      
+      if (search) {
+        const searchPattern = `%${search}%`;
+        const searchIndex = values.length + 1;
+        values.push(searchPattern);
+        whereClause += whereClause ? " AND " : " WHERE ";
+        whereClause += `(sku_name ILIKE $${searchIndex} OR sku_code ILIKE $${searchIndex})`;
+      }
+
+      // Get count
+      const countQuery = `SELECT COUNT(*) FROM sku_details ${whereClause}`;
+      const countResult = await pool.query(countQuery, values);
+      const total = parseInt(countResult.rows[0].count);
+
+      // Get paginated data
       const query = `
         SELECT 
-          id,
-          sku_code,
-          sku_name,
-          status,
-          main_uom,
-          alternate_uom,
-          nos_per_main_uom,
-          units,
-          oil_filling_per_unit,
-          filling_units,
-          converted_kg,
-          packing_weight_per_main_unit,
-          weight_difference,
-          sku_weight,
-          packing_weight,
-          gross_weight
+          id, sku_code, sku_name, status, main_uom, alternate_uom, 
+          nos_per_main_uom, units, oil_filling_per_unit, 
+          filling_units, converted_kg, packing_weight_per_main_unit, 
+          weight_difference, sku_weight, packing_weight, gross_weight
         FROM sku_details
-        WHERE status = 'Active' OR sku_code = 'Active' OR status IS NULL
+        ${whereClause}
         ORDER BY sku_name ASC
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
       `;
       
-      const result = await pool.query(query);
-      Logger.info(`Fetched ${result.rows.length} active SKUs`);
-      return result.rows;
+      values.push(limit, offset);
+      const result = await pool.query(query, values);
+      
+      Logger.info(`Fetched ${result.rows.length} active SKUs (total: ${total}, search: "${search}")`);
+      return {
+        skuDetails: result.rows,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit)
+        }
+      };
     } catch (error) {
       Logger.error('Error fetching SKUs:', error);
       throw error;

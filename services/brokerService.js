@@ -12,28 +12,49 @@ class BrokerService {
    */
   async getAllBrokers(params = {}) {
     try {
-      const { all } = params;
-      let query = `
-        SELECT 
-          broker_id,
-          salesman_name,
-          status,
-          email_id,
-          mobile_no,
-          depot_name,
-          depot_id
-        FROM broker_details
-      `;
+      const { all, page = 1, limit = 20, search = '' } = params;
+      const offset = (page - 1) * limit;
+      const values = [];
+      let whereClause = "";
       
       if (!all) {
-        query += " WHERE status = 'Active'";
+        whereClause = " WHERE status = 'Active'";
       }
       
-      query += " ORDER BY salesman_name ASC";
+      if (search) {
+        const searchPattern = `%${search}%`;
+        const searchIndex = values.length + 1;
+        values.push(searchPattern);
+        whereClause += whereClause ? " AND " : " WHERE ";
+        whereClause += `(salesman_name ILIKE $${searchIndex} OR broker_id ILIKE $${searchIndex} OR depot_name ILIKE $${searchIndex} OR email_id ILIKE $${searchIndex})`;
+      }
+
+      // Get count
+      const countQuery = `SELECT COUNT(*) FROM broker_details ${whereClause}`;
+      const countResult = await pool.query(countQuery, values);
+      const total = parseInt(countResult.rows[0].count);
+
+      // Get paginated data
+      let query = `
+        SELECT broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id
+        FROM broker_details
+        ${whereClause}
+        ORDER BY salesman_name ASC
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      `;
       
-      const result = await pool.query(query);
-      Logger.info(`Fetched ${result.rows.length} brokers (all: ${!!all})`);
-      return result.rows;
+      values.push(limit, offset);
+      const result = await pool.query(query, values);
+      
+      Logger.info(`Fetched ${result.rows.length} brokers (total: ${total}, search: "${search}")`);
+      return {
+        brokers: result.rows,
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit)
+        }
+      };
     } catch (error) {
       Logger.error('Error fetching brokers:', error);
       throw error;
