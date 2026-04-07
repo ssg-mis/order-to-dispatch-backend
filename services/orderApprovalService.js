@@ -226,10 +226,16 @@ class OrderApprovalService {
       const updatedOrder = updateResult.rows[0];
 
       // SKIP STAGE 4 logic:
-      // If approved, jump to Actual Dispatch (Stage 5)
-      // overall_status_of_order will be 'true' if approved
-      if (updatedOrder.overall_status_of_order === true || updatedOrder.overall_status_of_order === 'true') {
-        Logger.info(`[SKIP STAGE 4] Order approved. Moving directly to Actual Dispatch for ID: ${id}`);
+      // Only skip Dispatch Planning (Stage 4) if order_category is 'Stock Transfer'
+      // All other categories (Sales, null, etc.) follow the normal process
+      const isStockTransfer = updatedOrder.order_category &&
+        updatedOrder.order_category.toLowerCase().trim() === 'stock transfer';
+
+      if (
+        (updatedOrder.overall_status_of_order === true || updatedOrder.overall_status_of_order === 'true') &&
+        isStockTransfer
+      ) {
+        Logger.info(`[SKIP STAGE 4] Stock Transfer order approved. Moving directly to Actual Dispatch for ID: ${id}`);
 
         const qtyToDispatch = updatedOrder.remaining_dispatch_qty || updatedOrder.approval_qty || updatedOrder.order_quantity || 0;
 
@@ -283,12 +289,12 @@ class OrderApprovalService {
         
         return {
           success: true,
-          message: 'Approval submitted and moved to Actual Dispatch (Stage 4 skipped)',
+          message: 'Approval submitted and moved to Actual Dispatch (Stage 4 skipped - Stock Transfer)',
           data: finalOrder
         };
       }
 
-      // If not approved (rejected), just commit the Stage 3 update
+      // Normal process: commit Stage 3 update, order goes to Dispatch Planning (Stage 4)
       await client.query('COMMIT');
       
       return {
