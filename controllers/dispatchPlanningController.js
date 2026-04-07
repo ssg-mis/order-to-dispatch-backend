@@ -20,13 +20,15 @@ const getPendingDispatches = async (req, res, next) => {
       customer_name,
       start_date,
       end_date,
-      depo_names: (depo_names && depo_names !== 'undefined') ? (Array.isArray(depo_names) ? depo_names : depo_names.split(',')) : undefined,
+      depo_names: (depo_names !== undefined && depo_names !== 'undefined') 
+        ? (Array.isArray(depo_names) ? depo_names : (depo_names === "" ? [] : depo_names.split(','))) 
+        : undefined,
       ...otherFilters
     };
     
-    // Remove undefined/null filters
+    // Remove only undefined/null filters (keep empty arrays for strict access)
     Object.keys(filters).forEach(key => {
-      if (!filters[key]) delete filters[key];
+      if (filters[key] === undefined || filters[key] === null) delete filters[key];
     });
     
     Logger.info('Fetching pending dispatches', { filters, page, limit });
@@ -60,13 +62,15 @@ const getDispatchHistory = async (req, res, next) => {
       customer_name,
       start_date,
       end_date,
-      depo_names: (depo_names && depo_names !== 'undefined') ? (Array.isArray(depo_names) ? depo_names : depo_names.split(',')) : undefined,
+      depo_names: (depo_names !== undefined && depo_names !== 'undefined') 
+        ? (Array.isArray(depo_names) ? depo_names : (depo_names === "" ? [] : depo_names.split(','))) 
+        : undefined,
       ...otherFilters
     };
     
-    // Remove undefined/null filters
+    // Remove only undefined/null filters (keep empty arrays for strict access)
     Object.keys(filters).forEach(key => {
-      if (!filters[key]) delete filters[key];
+      if (filters[key] === undefined || filters[key] === null) delete filters[key];
     });
     
     Logger.info('Fetching dispatch history', { filters, page, limit });

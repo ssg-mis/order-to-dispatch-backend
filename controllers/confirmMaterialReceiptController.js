@@ -11,12 +11,12 @@ async function getPendingReceipts(req, res) {
       so_no: req.query.so_no,
       party_name: req.query.party_name
     };
-    
+
     const pagination = {
       page: req.query.page,
       limit: req.query.limit
     };
-    
+
     const result = await confirmMaterialReceiptService.getPendingReceipts(filters, pagination);
     res.json(result);
   } catch (error) {
@@ -33,12 +33,12 @@ async function getReceiptHistory(req, res) {
       so_no: req.query.so_no,
       party_name: req.query.party_name
     };
-    
+
     const pagination = {
       page: req.query.page,
       limit: req.query.limit
     };
-    
+
     const result = await confirmMaterialReceiptService.getReceiptHistory(filters, pagination);
     res.json(result);
   } catch (error) {
@@ -52,13 +52,13 @@ async function submitReceipt(req, res) {
   try {
     const { id } = req.params;
     const data = req.body;
-    
+
     if (!id) {
       return res.status(400).json({ error: 'Record ID is required' });
     }
-    
+
     const result = await confirmMaterialReceiptService.submitReceipt(id, data);
-    
+
     // Trigger WhatsApp notification for the next stage
     try {
       if (result.success && result.data && result.data.so_no) {
@@ -73,7 +73,7 @@ async function submitReceipt(req, res) {
     } catch (notifyError) {
       Logger.warn('Failed to send WhatsApp notifications for Material Receipt', notifyError);
     }
-    
+
     res.json(result);
   } catch (error) {
     Logger.error('Error in submitReceipt controller', error);
