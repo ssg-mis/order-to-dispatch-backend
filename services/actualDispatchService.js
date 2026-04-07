@@ -50,7 +50,7 @@ class ActualDispatchService {
         paramIndex++;
       }
 
-      if (filters.depo_names && Array.isArray(filters.depo_names) && filters.depo_names.length > 0) {
+      if (filters.depo_names && filters.depo_names.length > 0) {
         whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
         queryParams.push(filters.depo_names);
         paramIndex++;
@@ -141,7 +141,7 @@ class ActualDispatchService {
         paramIndex++;
       }
 
-      if (filters.depo_names && Array.isArray(filters.depo_names) && filters.depo_names.length > 0) {
+      if (filters.depo_names && filters.depo_names.length > 0) {
         whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
         queryParams.push(filters.depo_names);
         paramIndex++;

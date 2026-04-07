@@ -28,7 +28,7 @@ class ConfirmMaterialReceiptService {
       let queryParams = [];
       let paramIndex = 1;
 
-      // Add optional filters
+      // Add filters
       if (filters.d_sr_number) {
         whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
@@ -36,21 +36,31 @@ class ConfirmMaterialReceiptService {
       }
 
       if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
+        // Enhanced search: match so_no OR party_name if only one search string is given
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.so_no}%`);
         paramIndex++;
-      }
-
-      if (filters.party_name) {
+      } else if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
 
+      if (filters.depo_names && Array.isArray(filters.depo_names) && filters.depo_names.length > 0) {
+        whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+        queryParams.push(filters.depo_names);
+        paramIndex++;
+      }
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
+      // Count total (needs join for depo_name filter)
+      const countQuery = `
+        SELECT COUNT(*) 
+        FROM lift_receiving_confirmation lrc 
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+      `;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -90,7 +100,7 @@ class ConfirmMaterialReceiptService {
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
         ${whereClause}
-        ORDER BY lrc.planned_8 ASC, lrc.d_sr_number ASC
+        ORDER BY lrc.planned_8 DESC, lrc.id DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 
@@ -133,7 +143,7 @@ class ConfirmMaterialReceiptService {
       let queryParams = [];
       let paramIndex = 1;
 
-      // Add optional filters
+      // Add filters
       if (filters.d_sr_number) {
         whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
@@ -141,21 +151,31 @@ class ConfirmMaterialReceiptService {
       }
 
       if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
+        // Enhanced search: match so_no OR party_name if only one search string is given
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.so_no}%`);
         paramIndex++;
-      }
-
-      if (filters.party_name) {
+      } else if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
 
+      if (filters.depo_names && Array.isArray(filters.depo_names) && filters.depo_names.length > 0) {
+        whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+        queryParams.push(filters.depo_names);
+        paramIndex++;
+      }
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
+      // Count total (needs join for depo_name filter)
+      const countQuery = `
+        SELECT COUNT(*) 
+        FROM lift_receiving_confirmation lrc 
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+      `;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -193,7 +213,7 @@ class ConfirmMaterialReceiptService {
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
-        ORDER BY lrc.actual_8 DESC, lrc.d_sr_number ASC
+        ORDER BY lrc.actual_8 DESC, lrc.id DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 

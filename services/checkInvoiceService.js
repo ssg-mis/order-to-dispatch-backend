@@ -230,6 +230,16 @@ class CheckInvoiceService {
     try {
       Logger.info(`Submitting check invoice for ID: ${id}`, { data });
 
+      // Step 1: Fetch depository information to check for skipping Stage 11 (Gate Out)
+      const infoQuery = `
+        SELECT lrc.so_no, od.depo_name 
+        FROM lift_receiving_confirmation lrc 
+        JOIN order_dispatch od ON lrc.so_no = od.order_no 
+        WHERE lrc.id = $1
+      `;
+      const infoResult = await db.query(infoQuery, [id]);
+      const depoName = infoResult.rows[0]?.depo_name || '';
+
       const updateData = {
         actual_6: data.status_1 === "Issue" ? null : new Date().toISOString(),
         check_invoice_user: data.username || null,
@@ -237,6 +247,15 @@ class CheckInvoiceService {
         status_1: data.status_1 || null,
         remarks_2: data.remarks_2 || null
       };
+
+      // Step 2: Apply Gate Out skip logic for non-BANARI depots
+      // If not an issue and depot is not BANARI, mark Gate Out (Stage 11) as skipped/completed
+      if (data.status_1 !== "Issue" && depoName.toUpperCase() !== 'BANARI') {
+        Logger.info(`Skipping Gate Out (Stage 11) for depot: ${depoName} (Order: ${infoResult.rows[0]?.so_no})`);
+        updateData.planned_7 = null;
+        updateData.actual_7 = new Date().toISOString();
+        updateData.gate_out_user = 'SYSTEM_SKIP';
+      }
 
       // Remove undefined fields so they don't get set in the query
       Object.keys(updateData).forEach(key => {
