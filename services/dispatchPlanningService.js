@@ -48,9 +48,13 @@ class DispatchPlanningService {
       }
 
       if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        whereConditions.push(`depo_name = ANY($${paramIndex})`);
-        queryParams.push(filters.depo_names);
-        paramIndex++;
+        if (filters.depo_names.length === 0) {
+          whereConditions.push('1=0');
+        } else {
+          whereConditions.push(`depo_name = ANY($${paramIndex})`);
+          queryParams.push(filters.depo_names);
+          paramIndex++;
+        }
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
@@ -126,9 +130,13 @@ class DispatchPlanningService {
       }
 
       if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        whereConditions.push(`depo_name = ANY($${paramIndex})`);
-        queryParams.push(filters.depo_names);
-        paramIndex++;
+        if (filters.depo_names.length === 0) {
+          whereConditions.push('1=0');
+        } else {
+          whereConditions.push(`depo_name = ANY($${paramIndex})`);
+          queryParams.push(filters.depo_names);
+          paramIndex++;
+        }
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;

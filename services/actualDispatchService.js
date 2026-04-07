@@ -50,16 +50,25 @@ class ActualDispatchService {
         paramIndex++;
       }
 
-      if (filters.depo_names && filters.depo_names.length > 0) {
-        whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
-        queryParams.push(filters.depo_names);
-        paramIndex++;
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        if (filters.depo_names.length === 0) {
+          whereConditions.push('1=0');
+        } else {
+          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+          queryParams.push(filters.depo_names);
+          paramIndex++;
+        }
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
+      // Count total - joined with order_dispatch for depot filtering
+      const countQuery = `
+        SELECT COUNT(*) 
+        FROM lift_receiving_confirmation lrc 
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+      `;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -141,15 +150,25 @@ class ActualDispatchService {
         paramIndex++;
       }
 
-      if (filters.depo_names && filters.depo_names.length > 0) {
-        whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
-        queryParams.push(filters.depo_names);
-        paramIndex++;
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        if (filters.depo_names.length === 0) {
+          whereConditions.push('1=0');
+        } else {
+          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+          queryParams.push(filters.depo_names);
+          paramIndex++;
+        }
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
+      // Count total - joined with order_dispatch for depot filtering
+      const countQuery = `
+        SELECT COUNT(*) 
+        FROM lift_receiving_confirmation lrc 
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+      `;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 

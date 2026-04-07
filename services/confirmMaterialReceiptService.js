@@ -46,10 +46,14 @@ class ConfirmMaterialReceiptService {
         paramIndex++;
       }
 
-      if (filters.depo_names && Array.isArray(filters.depo_names) && filters.depo_names.length > 0) {
-        whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
-        queryParams.push(filters.depo_names);
-        paramIndex++;
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        if (filters.depo_names.length === 0) {
+          whereConditions.push('1=0');
+        } else {
+          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+          queryParams.push(filters.depo_names);
+          paramIndex++;
+        }
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
@@ -161,10 +165,14 @@ class ConfirmMaterialReceiptService {
         paramIndex++;
       }
 
-      if (filters.depo_names && Array.isArray(filters.depo_names) && filters.depo_names.length > 0) {
-        whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
-        queryParams.push(filters.depo_names);
-        paramIndex++;
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        if (filters.depo_names.length === 0) {
+          whereConditions.push('1=0');
+        } else {
+          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+          queryParams.push(filters.depo_names);
+          paramIndex++;
+        }
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
