@@ -24,7 +24,7 @@ class OrderApprovalService {
       type_of_transporting, customer_contact_person_name,
       customer_contact_person_whatsapp_no, customer_address,
       payment_terms, advance_payment_to_be_taken, advance_amount,
-      is_order_through_broker, broker_name, upload_so, depo_name,
+      is_order_through_broker, broker_name, is_order_through, upload_so, depo_name,
       planned_1, actual_1, delay_1, sku_name, approval_qty,
       take_required_rates_each_item, order_punch_remarks, final_rate,
       planned_2, actual_2, delay_2,

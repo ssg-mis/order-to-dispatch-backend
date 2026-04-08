@@ -51,6 +51,7 @@ class OrderDispatch {
 
     this.is_order_through_broker = data.is_order_through_broker || false;
     this.broker_name = data.broker_name || null;
+    this.is_order_through = data.is_order_through || null;
 
     this.upload_so = data.upload_so || null;
 
@@ -140,6 +141,7 @@ class OrderDispatch {
       advance_amount: this.advance_amount,
       is_order_through_broker: this.is_order_through_broker,
       broker_name: this.broker_name,
+      is_order_through: this.is_order_through,
       upload_so: this.upload_so,
       planned_1: this.planned_1,
       actual_1: this.actual_1,

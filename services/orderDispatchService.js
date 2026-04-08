@@ -533,6 +533,7 @@ class OrderDispatchService {
           advance_amount: originalOrder.advance_amount,
           is_order_through_broker: originalOrder.is_order_through_broker,
           broker_name: originalOrder.broker_name,
+          is_order_through: originalOrder.is_order_through,
           type_of_transporting: originalOrder.type_of_transporting,
           depo_name: originalOrder.depo_name,
           order_punch_remarks: originalOrder.order_punch_remarks,
