@@ -48,37 +48,37 @@ class OrderApprovalService {
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
-      
+
       let whereConditions = ['planned_2 IS NOT NULL', 'actual_2 IS NULL'];
       let queryParams = [];
       let paramIndex = 1;
-      
+
       // Add optional filters
       if (filters.order_no) {
         whereConditions.push(`order_no = $${paramIndex}`);
         queryParams.push(filters.order_no);
         paramIndex++;
       }
-      
+
       if (filters.customer_name) {
         whereConditions.push(`customer_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.customer_name}%`);
         paramIndex++;
       }
-      
+
       if (filters.start_date && filters.end_date) {
         whereConditions.push(`delivery_date BETWEEN $${paramIndex} AND $${paramIndex + 1}`);
         queryParams.push(filters.start_date, filters.end_date);
         paramIndex += 2;
       }
-      
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-      
+
       // Count total
       const countQuery = `SELECT COUNT(*) FROM order_dispatch ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
-      
+
       // Get data with all specified fields
       const fields = this.getApprovalFields();
       const dataQuery = `
@@ -88,11 +88,11 @@ class OrderApprovalService {
         ORDER BY created_at DESC, order_no ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      
+
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      
+
       Logger.info(`Fetched ${dataResult.rows.length} pending approval orders`);
-      
+
       return {
         success: true,
         data: dataResult.rows,
@@ -121,37 +121,37 @@ class OrderApprovalService {
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
-      
+
       let whereConditions = ['planned_2 IS NOT NULL', 'actual_2 IS NOT NULL'];
       let queryParams = [];
       let paramIndex = 1;
-      
+
       // Add optional filters
       if (filters.order_no) {
         whereConditions.push(`order_no = $${paramIndex}`);
         queryParams.push(filters.order_no);
         paramIndex++;
       }
-      
+
       if (filters.customer_name) {
         whereConditions.push(`customer_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.customer_name}%`);
         paramIndex++;
       }
-      
+
       if (filters.start_date && filters.end_date) {
         whereConditions.push(`delivery_date BETWEEN $${paramIndex} AND $${paramIndex + 1}`);
         queryParams.push(filters.start_date, filters.end_date);
         paramIndex += 2;
       }
-      
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-      
+
       // Count total
       const countQuery = `SELECT COUNT(*) FROM order_dispatch ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
-      
+
       // Get data with all specified fields
       const fields = this.getApprovalFields();
       const dataQuery = `
@@ -161,11 +161,11 @@ class OrderApprovalService {
         ORDER BY actual_2 DESC, order_no ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      
+
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      
+
       Logger.info(`Fetched ${dataResult.rows.length} approval history records`);
-      
+
       return {
         success: true,
         data: dataResult.rows,
@@ -190,11 +190,11 @@ class OrderApprovalService {
    */
   async submitApproval(id, data = {}) {
     const client = await db.getClient();
-    
+
     try {
       await client.query('BEGIN');
       Logger.info(`submitApproval called for ID: ${id}`, { data });
-      
+
       const updateData = {
         actual_2: new Date().toISOString(),
         order_approval_user: data.username || null,
@@ -204,11 +204,11 @@ class OrderApprovalService {
       // Remove username/remark from data to avoid column errors
       if (updateData.username) delete updateData.username;
       if (updateData.remark !== undefined) delete updateData.remark;
-      
+
       const fields = Object.keys(updateData);
       const values = Object.values(updateData);
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-      
+
       const approvalFields = this.getApprovalFields();
       const updateQuery = `
         UPDATE order_dispatch 
@@ -216,9 +216,9 @@ class OrderApprovalService {
         WHERE id = $${fields.length + 1}
         RETURNING ${approvalFields}
       `;
-      
+
       const updateResult = await client.query(updateQuery, [...values, id]);
-      
+
       if (updateResult.rows.length === 0) {
         throw new Error('Order not found');
       }
@@ -269,7 +269,7 @@ class OrderApprovalService {
             NOW(), $1, $2, $3, $4, $5, $6, $7, $8
           ) RETURNING *
         `;
-        
+
         const insertParams = [
           dsrNumber,
           finalOrder.order_no,
@@ -280,13 +280,13 @@ class OrderApprovalService {
           data.dispatch_from || null,
           finalOrder.processid || data.processid || null
         ];
-        
+
         await client.query(insertLrcQuery, insertParams);
 
         Logger.info(`[SKIP STAGE 4] Successfully mapped to Actual Dispatch (LRC) with DSR: ${dsrNumber}`);
 
         await client.query('COMMIT');
-        
+
         return {
           success: true,
           message: 'Approval submitted and moved to Actual Dispatch (Stage 4 skipped - Stock Transfer)',
@@ -296,7 +296,7 @@ class OrderApprovalService {
 
       // Normal process: commit Stage 3 update, order goes to Dispatch Planning (Stage 4)
       await client.query('COMMIT');
-      
+
       return {
         success: true,
         message: 'Approval submitted successfully',
@@ -325,13 +325,13 @@ class OrderApprovalService {
         FROM order_dispatch 
         WHERE id = $1
       `;
-      
+
       const result = await db.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error('Order not found');
       }
-      
+
       return {
         success: true,
         data: result.rows[0]

@@ -252,11 +252,12 @@ class CheckInvoiceService {
 
       // Step 2: Apply Gate Out skip logic for non-BANARI depots
       // If not an issue and depot is not BANARI, mark Gate Out (Stage 11) as skipped/completed
-      if (data.status_1 !== "Issue" && depoName.toUpperCase() !== 'BANARI') {
+      if (data.status_1 !== "Issue" && depoName.toUpperCase() !== "BANARI") {
         Logger.info(`Skipping Gate Out (Stage 11) for depot: ${depoName} (Order: ${infoResult.rows[0]?.so_no})`);
-        updateData.planned_7 = null;
-        updateData.actual_7 = new Date().toISOString();
-        updateData.gate_out_user = 'SYSTEM_SKIP';
+        const now = new Date().toISOString();
+        updateData.planned_7 = now;
+        updateData.actual_7 = now;
+        updateData.gate_out_user = data.username || "SYSTEM_SKIP";
       }
 
       // Remove undefined fields so they don't get set in the query

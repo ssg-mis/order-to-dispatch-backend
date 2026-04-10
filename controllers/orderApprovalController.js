@@ -13,7 +13,7 @@ const { whatsappShareService } = require('../services/whatsappShareService');
 const getPendingApprovals = async (req, res, next) => {
   try {
     const { page, limit, order_no, customer_name, start_date, end_date, ...otherFilters } = req.query;
-    
+
     const filters = {
       order_no,
       customer_name,
@@ -21,16 +21,16 @@ const getPendingApprovals = async (req, res, next) => {
       end_date,
       ...otherFilters
     };
-    
+
     // Remove undefined/null filters
     Object.keys(filters).forEach(key => {
       if (!filters[key]) delete filters[key];
     });
-    
+
     Logger.info('Fetching pending approvals', { filters, page, limit });
-    
+
     const result = await orderApprovalService.getPendingApprovals(filters, { page, limit });
-    
+
     return ResponseUtil.success(
       res,
       {
@@ -52,7 +52,7 @@ const getPendingApprovals = async (req, res, next) => {
 const getApprovalHistory = async (req, res, next) => {
   try {
     const { page, limit, order_no, customer_name, start_date, end_date, ...otherFilters } = req.query;
-    
+
     const filters = {
       order_no,
       customer_name,
@@ -60,16 +60,16 @@ const getApprovalHistory = async (req, res, next) => {
       end_date,
       ...otherFilters
     };
-    
+
     // Remove undefined/null filters
     Object.keys(filters).forEach(key => {
       if (!filters[key]) delete filters[key];
     });
-    
+
     Logger.info('Fetching approval history', { filters, page, limit });
-    
+
     const result = await orderApprovalService.getApprovalHistory(filters, { page, limit });
-    
+
     return ResponseUtil.success(
       res,
       {
@@ -92,18 +92,18 @@ const submitApproval = async (req, res, next) => {
   try {
     const { id } = req.params;
     const additionalData = req.body;
-    
-    Logger.info(`[SUBMIT APPROVAL] Received request for ID: ${id}`, { 
-      params: req.params, 
+
+    Logger.info(`[SUBMIT APPROVAL] Received request for ID: ${id}`, {
+      params: req.params,
       body: additionalData,
-      headers: { 
+      headers: {
         'content-type': req.headers['content-type'],
         'origin': req.headers['origin']
       }
     });
-    
+
     const result = await orderApprovalService.submitApproval(id, additionalData);
-    
+
     // Trigger WhatsApp notification for the next stage
     try {
       if (result.success && result.data && result.data.order_no) {
@@ -118,9 +118,9 @@ const submitApproval = async (req, res, next) => {
     } catch (notifyError) {
       Logger.warn('Failed to send WhatsApp notifications for Approval of Order', notifyError);
     }
-    
+
     Logger.info(`[SUBMIT APPROVAL] Success for ID: ${id}`);
-    
+
     return ResponseUtil.success(
       res,
       result.data,
@@ -142,11 +142,11 @@ const submitApproval = async (req, res, next) => {
 const getApprovalById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    
+
     Logger.info(`Fetching approval for order ID: ${id}`);
-    
+
     const result = await orderApprovalService.getApprovalById(id);
-    
+
     return ResponseUtil.success(
       res,
       result.data,

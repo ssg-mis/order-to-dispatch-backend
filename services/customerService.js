@@ -26,7 +26,7 @@ class CustomerService {
         const searchIndex = values.length + 1;
         values.push(searchPattern);
         whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(customer_name ILIKE $${searchIndex} OR customer_id ILIKE $${searchIndex} OR contact_person ILIKE $${searchIndex} OR contact ILIKE $${searchIndex} OR email ILIKE $${searchIndex})`;
+        whereClause += `(customer_name ILIKE $${searchIndex} OR customer_id ILIKE $${searchIndex} OR gstin ILIKE $${searchIndex} OR contact_person ILIKE $${searchIndex} OR contact ILIKE $${searchIndex} OR email ILIKE $${searchIndex})`;
       }
 
       // Get total count

@@ -274,7 +274,7 @@ class ActualDispatchService {
 
         // Step 1: Get original dispatch info (planned quantity, SO number, and category)
         const currentQuery = `
-          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_category
+          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_category, od.depo_name
           FROM lift_receiving_confirmation lrc
           LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
           WHERE lrc.d_sr_number = $1
@@ -290,14 +290,14 @@ class ActualDispatchService {
         const actualQty = parseFloat(data.actual_qty_dispatch || data.actual_qty || plannedQty);
         const diffQty = plannedQty - actualQty;
         const soNo = originalDispatch.so_no;
-        const orderCategory = (originalDispatch.order_category || '').toUpperCase();
-        const isStockTransfer = orderCategory === 'STOCK TRANSFER';
+        const orderCategory = (originalDispatch.order_category || "").toUpperCase();
+        const depotName = (originalDispatch.depo_name || "").toUpperCase();
 
-        // SPECIAL RULE: For Stock Transfer, skip Stage 8 (Security Guard Approval) 
-        // and go straight to Stage 9 (Make Invoice)
-        if (isStockTransfer) {
-          updateData.planned_4 = null;
-          updateData.planned_5 = new Date().toISOString();
+        // SPECIAL RULE: Skip Security Guard Approval only if depot is NOT "BANARI"
+        if (depotName !== "BANARI") {
+          const now = new Date().toISOString();
+          updateData.planned_4 = now;
+          updateData.actual_4 = now;
         }
 
         // Step 2: Update lift_receiving_confirmation

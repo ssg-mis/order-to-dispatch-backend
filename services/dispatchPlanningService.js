@@ -30,12 +30,11 @@ class DispatchPlanningService {
 
       // Add optional filters
       if (filters.order_no) {
-        whereConditions.push(`order_no = $${paramIndex}`);
-        queryParams.push(filters.order_no);
+        // Optimized search: match order_no OR customer_name with partial match
+        whereConditions.push(`(order_no ILIKE $${paramIndex} OR customer_name ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.order_no}%`);
         paramIndex++;
-      }
-
-      if (filters.customer_name) {
+      } else if (filters.customer_name) {
         whereConditions.push(`customer_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.customer_name}%`);
         paramIndex++;
@@ -59,18 +58,35 @@ class DispatchPlanningService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM order_dispatch ${whereClause}`;
+      // Unified Base DO Expression for grouping (e.g. extracts DO-657 from DO-657D)
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+
+      // Count total (Unique Base Order Numbers)
+      const countQuery = `SELECT COUNT(DISTINCT ${baseDoExp}) FROM order_dispatch ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
-      // Get data
+      // Get data (Paginated by Base Order Groups)
       const dataQuery = `
+        WITH paginated_dos AS (
+          SELECT 
+            ${baseDoExp} as base_do, 
+            MIN(created_at) as sort_date
+          FROM order_dispatch
+          ${whereClause}
+          GROUP BY base_do
+          ORDER BY sort_date DESC
+          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        )
         SELECT *
-        FROM order_dispatch 
-        ${whereClause}
+        FROM order_dispatch
+        WHERE ${baseDoExp} IN (SELECT base_do FROM paginated_dos)
+        AND id IN (
+          SELECT id 
+          FROM order_dispatch 
+          ${whereClause}
+        )
         ORDER BY created_at DESC, order_no ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
@@ -112,12 +128,11 @@ class DispatchPlanningService {
 
       // Add optional filters
       if (filters.order_no) {
-        whereConditions.push(`order_no = $${paramIndex}`);
-        queryParams.push(filters.order_no);
+        // Optimized search: match order_no OR customer_name with partial match
+        whereConditions.push(`(order_no ILIKE $${paramIndex} OR customer_name ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.order_no}%`);
         paramIndex++;
-      }
-
-      if (filters.customer_name) {
+      } else if (filters.customer_name) {
         whereConditions.push(`customer_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.customer_name}%`);
         paramIndex++;
@@ -141,18 +156,35 @@ class DispatchPlanningService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM order_dispatch ${whereClause}`;
+      // Unified Base DO Expression for grouping (e.g. extracts DO-657 from DO-657D)
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+
+      // Count total (Unique Base Order Numbers)
+      const countQuery = `SELECT COUNT(DISTINCT ${baseDoExp}) FROM order_dispatch ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
-      // Get data
+      // Get data (Paginated by Base Order Groups)
       const dataQuery = `
+        WITH paginated_dos AS (
+          SELECT 
+            ${baseDoExp} as base_do, 
+            MIN(created_at) as sort_date
+          FROM order_dispatch
+          ${whereClause}
+          GROUP BY base_do
+          ORDER BY sort_date DESC
+          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        )
         SELECT *
-        FROM order_dispatch 
-        ${whereClause}
+        FROM order_dispatch
+        WHERE ${baseDoExp} IN (SELECT base_do FROM paginated_dos)
+        AND id IN (
+          SELECT id 
+          FROM order_dispatch 
+          ${whereClause}
+        )
         ORDER BY created_at DESC, order_no ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
