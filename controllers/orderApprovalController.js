@@ -161,9 +161,23 @@ const getApprovalById = async (req, res, next) => {
   }
 };
 
+/**
+ * Get dynamic filter options for Approval stage
+ */
+const getFilterOptions = async (req, res, next) => {
+  try {
+    const result = await orderApprovalService.getFilterOptions();
+    return ResponseUtil.success(res, result.data, 'Filter options fetched successfully');
+  } catch (error) {
+    Logger.error('Error in getFilterOptions controller', error);
+    next(error);
+  }
+};
+
 module.exports = {
   getPendingApprovals,
   getApprovalHistory,
   submitApproval,
-  getApprovalById
+  getApprovalById,
+  getFilterOptions
 };

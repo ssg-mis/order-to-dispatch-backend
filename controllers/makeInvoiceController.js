@@ -11,12 +11,12 @@ async function getPendingInvoices(req, res) {
       so_no: req.query.so_no,
       party_name: req.query.party_name
     };
-    
+
     const pagination = {
       page: req.query.page,
       limit: req.query.limit
     };
-    
+
     const result = await makeInvoiceService.getPendingInvoices(filters, pagination);
     res.json(result);
   } catch (error) {
@@ -33,12 +33,12 @@ async function getInvoiceHistory(req, res) {
       so_no: req.query.so_no,
       party_name: req.query.party_name
     };
-    
+
     const pagination = {
       page: req.query.page,
       limit: req.query.limit
     };
-    
+
     const result = await makeInvoiceService.getInvoiceHistory(filters, pagination);
     res.json(result);
   } catch (error) {
@@ -52,13 +52,13 @@ async function submitInvoice(req, res) {
   try {
     const { id } = req.params;
     const data = req.body;
-    
+
     if (!id) {
       return res.status(400).json({ error: 'Record ID is required' });
     }
-    
+
     const result = await makeInvoiceService.submitInvoice(id, data);
-    
+
     // Trigger WhatsApp notification for the next stage
     try {
       if (result.success && result.data && result.data.so_no) {
@@ -73,7 +73,7 @@ async function submitInvoice(req, res) {
     } catch (notifyError) {
       Logger.warn('Failed to send WhatsApp notifications for Make Invoice', notifyError);
     }
-    
+
     res.json(result);
   } catch (error) {
     Logger.error('Error in submitInvoice controller', error);
@@ -85,11 +85,11 @@ async function submitInvoice(req, res) {
 async function getInvoiceById(req, res) {
   try {
     const { id } = req.params;
-    
+
     if (!id) {
       return res.status(400).json({ error: 'Record ID is required' });
     }
-    
+
     const result = await makeInvoiceService.getInvoiceById(id);
     res.json(result);
   } catch (error) {

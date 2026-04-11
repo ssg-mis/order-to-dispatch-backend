@@ -271,10 +271,14 @@ class DispatchPlanningService {
         ) RETURNING *
       `;
 
+      const partyName = (data.transfer === 'yes' && data.bill_company_name)
+        ? data.bill_company_name
+        : order.customer_name;
+
       const insertParams = [
         dsrNumber,
         order.order_no,
-        order.customer_name,
+        partyName,
         order.product_name,
         dispatchQty,
         order.type_of_transporting,

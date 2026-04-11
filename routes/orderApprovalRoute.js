@@ -33,6 +33,16 @@ router.get(
 );
 
 /**
+ * @route   GET /api/v1/approval/filters
+ * @desc    Get unique filter options for the approval stage
+ * @access  Public
+ */
+router.get(
+  '/filters',
+  orderApprovalController.getFilterOptions
+);
+
+/**
  * @route   GET /api/v1/approval/:id
  * @desc    Get approval by order ID
  * @access  Public

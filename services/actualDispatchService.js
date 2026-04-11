@@ -26,27 +26,21 @@ class ActualDispatchService {
       const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
 
-      // Since Stages 6 & 7 are consolidated, we only need to check Stage 5 (actual_1)
+      const baseDoExp = `COALESCE(substring(lrc.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), lrc.so_no)`;
+
       let whereConditions = ['lrc.planned_1 IS NOT NULL', 'lrc.actual_1 IS NULL'];
       let queryParams = [];
       let paramIndex = 1;
 
-      // ... (rest of the code similar to before but keeping it clean)
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
+      if (filters.search) {
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.search}%`);
         paramIndex++;
       }
 
-      if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
-        paramIndex++;
-      }
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
+      if (filters.customer_name) {
+        whereConditions.push(`lrc.party_name = $${paramIndex}`);
+        queryParams.push(filters.customer_name);
         paramIndex++;
       }
 
@@ -62,15 +56,55 @@ class ActualDispatchService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total - joined with order_dispatch for depot filtering
+      // Step 1: Get paginated Base DOs using CTE for grouping
+      const groupQuery = `
+        SELECT ${baseDoExp} as base_do, MIN(lrc.timestamp) as sort_date
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+        GROUP BY base_do
+        ORDER BY sort_date DESC
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+      `;
+
+      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
+      const baseDos = groupResult.rows.map(r => r.base_do);
+
+      if (baseDos.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: { page, limit, total: 0, totalPages: 0 }
+        };
+      }
+
+      // Step 2: Get total count of groups
       const countQuery = `
-        SELECT COUNT(*) 
-        FROM lift_receiving_confirmation lrc 
+        SELECT COUNT(DISTINCT ${baseDoExp}) as total
+        FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
       `;
       const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
+      const total = parseInt(countResult.rows[0].total);
+
+      // Step 3: Fetch all rows for these Base DOs
+      // Re-create where conditions with shifted indices because $1 is now reserved for baseDos
+      let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
+      let dataParamIndex = 2;
+      
+      if (filters.search) {
+        dataWhereConditions.push(`(lrc.so_no ILIKE $${dataParamIndex} OR lrc.party_name ILIKE $${dataParamIndex})`);
+        dataParamIndex++;
+      }
+      if (filters.customer_name) {
+        dataWhereConditions.push(`lrc.party_name = $${dataParamIndex}`);
+        dataParamIndex++;
+      }
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        dataWhereConditions.push(`od.depo_name = ANY($${dataParamIndex})`);
+        dataParamIndex++;
+      }
 
       const dataQuery = `
         SELECT 
@@ -105,12 +139,12 @@ class ActualDispatchService {
           od.depo_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
-        ${whereClause}
-        ORDER BY lrc.timestamp DESC, lrc.d_sr_number DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        WHERE ${dataWhereConditions.join(' AND ')}
+        AND lrc.planned_1 IS NOT NULL AND lrc.actual_1 IS NULL
+        ORDER BY lrc.timestamp DESC, lrc.so_no ASC
       `;
 
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      const dataResult = await db.query(dataQuery, [baseDos, ...queryParams]);
 
       return {
         success: true,
@@ -129,25 +163,21 @@ class ActualDispatchService {
       const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
 
+      const baseDoExp = `COALESCE(substring(lrc.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), lrc.so_no)`;
+
       let whereConditions = ['lrc.planned_1 IS NOT NULL', 'lrc.actual_1 IS NOT NULL'];
       let queryParams = [];
       let paramIndex = 1;
 
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
+      if (filters.search) {
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.search}%`);
         paramIndex++;
       }
 
-      if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
-        paramIndex++;
-      }
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
+      if (filters.customer_name) {
+        whereConditions.push(`lrc.party_name = $${paramIndex}`);
+        queryParams.push(filters.customer_name);
         paramIndex++;
       }
 
@@ -163,15 +193,54 @@ class ActualDispatchService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total - joined with order_dispatch for depot filtering
+      // Step 1: Get paginated Base DOs
+      const groupQuery = `
+        SELECT ${baseDoExp} as base_do, MAX(lrc.actual_1) as sort_date
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+        GROUP BY base_do
+        ORDER BY sort_date DESC
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+      `;
+
+      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
+      const baseDos = groupResult.rows.map(r => r.base_do);
+
+      if (baseDos.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: { page, limit, total: 0, totalPages: 0 }
+        };
+      }
+
+      // Step 2: Get total count of groups
       const countQuery = `
-        SELECT COUNT(*) 
-        FROM lift_receiving_confirmation lrc 
+        SELECT COUNT(DISTINCT ${baseDoExp}) as total
+        FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
       `;
       const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
+      const total = parseInt(countResult.rows[0].total);
+
+      // Step 3: Fetch all rows for these Base DOs
+      let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
+      let dataParamIndex = 2;
+
+      if (filters.search) {
+        dataWhereConditions.push(`(lrc.so_no ILIKE $${dataParamIndex} OR lrc.party_name ILIKE $${dataParamIndex})`);
+        dataParamIndex++;
+      }
+      if (filters.customer_name) {
+        dataWhereConditions.push(`lrc.party_name = $${dataParamIndex}`);
+        dataParamIndex++;
+      }
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        dataWhereConditions.push(`od.depo_name = ANY($${dataParamIndex})`);
+        dataParamIndex++;
+      }
 
       const dataQuery = `
         SELECT 
@@ -207,12 +276,12 @@ class ActualDispatchService {
           od.depo_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
-        ${whereClause}
-        ORDER BY lrc.actual_1 DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        WHERE ${dataWhereConditions.join(' AND ')}
+        AND lrc.planned_1 IS NOT NULL AND lrc.actual_1 IS NOT NULL
+        ORDER BY lrc.actual_1 DESC, lrc.so_no ASC
       `;
 
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      const dataResult = await db.query(dataQuery, [baseDos, ...queryParams]);
 
       return {
         success: true,
@@ -492,6 +561,31 @@ class ActualDispatchService {
     } catch (error) {
       Logger.error('Error reverting actual dispatch', error);
       throw error;
+    }
+  }
+
+  /**
+   * Get dynamic filter options for Actual Dispatch stage
+   * @returns {Promise<Object>} Unique party names
+   */
+  async getFilterOptions() {
+    try {
+      const query = `
+        SELECT DISTINCT lrc.party_name
+        FROM lift_receiving_confirmation lrc
+        WHERE lrc.planned_1 IS NOT NULL AND lrc.actual_1 IS NULL
+        ORDER BY lrc.party_name ASC
+      `;
+      const result = await db.query(query);
+      return {
+        success: true,
+        data: {
+          customerNames: result.rows.map(r => r.party_name).filter(Boolean)
+        }
+      };
+    } catch (error) {
+      Logger.error('Error fetching filter options for Actual Dispatch', error);
+      throw new Error('Failed to fetch filter options');
     }
   }
 }

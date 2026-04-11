@@ -13,6 +13,9 @@ router.get('/pending', securityGuardApprovalController.getPendingApprovals);
 // GET /api/v1/security-approval/history - Get security guard approval history
 router.get('/history', securityGuardApprovalController.getApprovalHistory);
 
+// GET /api/v1/security-approval/filters - Get filter options
+router.get('/filters', securityGuardApprovalController.getFilterOptions);
+
 // POST /api/v1/security-approval/submit/:id - Submit security guard approval
 router.post('/submit/:id', securityGuardApprovalController.submitApproval);
 

@@ -13,12 +13,11 @@ const { whatsappShareService } = require('../services/whatsappShareService');
  */
 const getPendingDispatches = async (req, res, next) => {
   try {
-    const { page, limit, d_sr_number, so_no, party_name, depo_names, ...otherFilters } = req.query;
+    const { page, limit, search, party_name, depo_names, ...otherFilters } = req.query;
     
     const filters = {
-      d_sr_number,
-      so_no,
-      party_name,
+      search,
+      customer_name: party_name,
       depo_names: (depo_names !== undefined && depo_names !== 'undefined') 
         ? (Array.isArray(depo_names) ? depo_names : (depo_names === "" ? [] : depo_names.split(','))) 
         : undefined,
@@ -54,12 +53,11 @@ const getPendingDispatches = async (req, res, next) => {
  */
 const getDispatchHistory = async (req, res, next) => {
   try {
-    const { page, limit, d_sr_number, so_no, party_name, depo_names, ...otherFilters } = req.query;
+    const { page, limit, search, party_name, depo_names, ...otherFilters } = req.query;
     
     const filters = {
-      d_sr_number,
-      so_no,
-      party_name,
+      search,
+      customer_name: party_name,
       depo_names: (depo_names !== undefined && depo_names !== 'undefined') 
         ? (Array.isArray(depo_names) ? depo_names : (depo_names === "" ? [] : depo_names.split(','))) 
         : undefined,
@@ -163,9 +161,24 @@ const revertActualDispatch = async (req, res, next) => {
   }
 };
 
+/**
+ * Get dynamic filter options for Actual Dispatch stage
+ * @route GET /api/v1/actual-dispatch/filters
+ */
+const getFilterOptions = async (req, res, next) => {
+  try {
+    const result = await actualDispatchService.getFilterOptions();
+    return ResponseUtil.success(res, result.data, 'Filter options fetched successfully');
+  } catch (error) {
+    Logger.error('Error in getFilterOptions controller', error);
+    next(error);
+  }
+};
+
 module.exports = {
   getPendingDispatches,
   getDispatchHistory,
   submitActualDispatch,
-  revertActualDispatch
+  revertActualDispatch,
+  getFilterOptions
 };

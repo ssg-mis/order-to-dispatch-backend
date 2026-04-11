@@ -12,7 +12,46 @@ const { Logger } = require('../utils');
 
 class SecurityGuardApprovalService {
   /**
+   * Get unique filter options for Security Guard stage
+   * @returns {Promise<Object>} Object containing customer names and depots
+   */
+  async getFilterOptions() {
+    try {
+      // Get unique customer names from pending items
+      const customerQuery = `
+        SELECT DISTINCT party_name 
+        FROM lift_receiving_confirmation 
+        WHERE planned_4 IS NOT NULL AND actual_4 IS NULL
+        ORDER BY party_name ASC
+      `;
+      const customerResult = await db.query(customerQuery);
+
+      // Get unique depots from pending items
+      const depoQuery = `
+        SELECT DISTINCT od.depo_name
+        FROM lift_receiving_confirmation lrc
+        JOIN order_dispatch od ON lrc.so_no = od.order_no
+        WHERE lrc.planned_4 IS NOT NULL AND lrc.actual_4 IS NULL
+        ORDER BY od.depo_name ASC
+      `;
+      const depoResult = await db.query(depoQuery);
+
+      return {
+        success: true,
+        data: {
+          customerNames: customerResult.rows.map(r => r.party_name),
+          depots: depoResult.rows.map(r => r.depo_name)
+        }
+      };
+    } catch (error) {
+      Logger.error('Error fetching security guard filter options', error);
+      return { success: false, message: 'Failed to fetch filter options' };
+    }
+  }
+
+  /**
    * Get pending security guard approvals
+
    * Pending: planned_4 IS NOT NULL AND actual_4 IS NULL
    * @param {Object} filters - Filter parameters
    * @param {Object} pagination - Pagination parameters
@@ -21,40 +60,72 @@ class SecurityGuardApprovalService {
   async getPendingApprovals(filters = {}, pagination = {}) {
     try {
       const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
+      const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
+
+      const baseDoExp = `COALESCE(substring(lrc.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), lrc.so_no)`;
 
       let whereConditions = ['lrc.planned_4 IS NOT NULL', 'lrc.actual_4 IS NULL'];
       let queryParams = [];
       let paramIndex = 1;
 
-      // Add optional filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
+      if (filters.search) {
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.truck_no ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.search}%`);
         paramIndex++;
       }
 
-      if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
+      if (filters.customer_name) {
+        whereConditions.push(`lrc.party_name = $${paramIndex}`);
+        queryParams.push(filters.customer_name);
         paramIndex++;
       }
 
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        if (filters.depo_names.length === 0) {
+          whereConditions.push('1=0');
+        } else {
+          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+          queryParams.push(filters.depo_names);
+          paramIndex++;
+        }
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
+      // Step 1: Get paginated Base DOs using CTE for grouping
+      const groupQuery = `
+        SELECT ${baseDoExp} as base_do, MIN(lrc.timestamp) as sort_date
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+        GROUP BY base_do
+        ORDER BY sort_date DESC
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+      `;
 
-      // Get data
+      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
+      const baseDos = groupResult.rows.map(r => r.base_do);
+
+      if (baseDos.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: { page, limit, total: 0, totalPages: 0 }
+        };
+      }
+
+      // Step 2: Get total count of groups
+      const countQuery = `
+        SELECT COUNT(DISTINCT ${baseDoExp}) as total
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+      `;
+      const countResult = await db.query(countQuery, queryParams);
+      const total = parseInt(countResult.rows[0].total);
+
+      // Step 3: Fetch all rows for these Base DOs
       const dataQuery = `
         SELECT 
           lrc.*,
@@ -88,14 +159,12 @@ class SecurityGuardApprovalService {
           od.bill_company_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
-        ${whereClause}
+        WHERE ${baseDoExp} = ANY($1)
+          AND lrc.planned_4 IS NOT NULL AND lrc.actual_4 IS NULL
         ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-
-      Logger.info(`Fetched ${dataResult.rows.length} pending security guard approvals`);
+      const dataResult = await db.query(dataQuery, [baseDos]);
 
       return {
         success: true,
@@ -123,40 +192,85 @@ class SecurityGuardApprovalService {
   async getApprovalHistory(filters = {}, pagination = {}) {
     try {
       const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
+      const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
 
-      let whereConditions = ['planned_4 IS NOT NULL', 'actual_4 IS NOT NULL'];
+      const baseDoExp = `COALESCE(substring(lrc.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), lrc.so_no)`;
+
+      let whereConditions = ['lrc.planned_4 IS NOT NULL', 'lrc.actual_4 IS NOT NULL'];
       let queryParams = [];
       let paramIndex = 1;
 
-      // Add optional filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
+      if (filters.search) {
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.truck_no ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.search}%`);
         paramIndex++;
       }
 
-      if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
+      if (filters.customer_name) {
+        whereConditions.push(`lrc.party_name = $${paramIndex}`);
+        queryParams.push(filters.customer_name);
         paramIndex++;
       }
 
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        if (filters.depo_names.length === 0) {
+          whereConditions.push('1=0');
+        } else {
+          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
+          queryParams.push(filters.depo_names);
+          paramIndex++;
+        }
+      }
+
+      // Add date range filters for history
+      if (filters.start_date) {
+        whereConditions.push(`lrc.actual_4 >= $${paramIndex}`);
+        queryParams.push(filters.start_date);
+        paramIndex++;
+      }
+
+      if (filters.end_date) {
+        whereConditions.push(`lrc.actual_4 <= $${paramIndex}::timestamp + interval '1 day'`);
+        queryParams.push(filters.end_date);
         paramIndex++;
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
+      // Step 1: Get paginated Base DOs
+      const groupQuery = `
+        SELECT ${baseDoExp} as base_do, MAX(lrc.actual_4) as sort_date
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+        GROUP BY base_do
+        ORDER BY sort_date DESC
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+      `;
 
-      // Get data
+      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
+      const baseDos = groupResult.rows.map(r => r.base_do);
+
+      if (baseDos.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: { page, limit, total: 0, totalPages: 0 }
+        };
+      }
+
+      // Step 2: Get total count
+      const countQuery = `
+        SELECT COUNT(DISTINCT ${baseDoExp}) as total
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        ${whereClause}
+      `;
+      const countResult = await db.query(countQuery, queryParams);
+      const total = parseInt(countResult.rows[0].total);
+
+      // Step 3: Fetch rows
       const dataQuery = `
         SELECT 
           lrc.*,
@@ -190,14 +304,12 @@ class SecurityGuardApprovalService {
           od.bill_company_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
-        ${whereClause}
-        ORDER BY actual_4 DESC, d_sr_number ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        WHERE ${baseDoExp} = ANY($1)
+          AND lrc.planned_4 IS NOT NULL AND lrc.actual_4 IS NOT NULL
+        ORDER BY lrc.actual_4 DESC, lrc.d_sr_number ASC
       `;
 
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-
-      Logger.info(`Fetched ${dataResult.rows.length} security guard approval history records`);
+      const dataResult = await db.query(dataQuery, [baseDos]);
 
       return {
         success: true,

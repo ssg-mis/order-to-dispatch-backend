@@ -23,7 +23,16 @@ router.get(
 );
 
 /**
- * @route   GET /api/v1/actual-dispatch/history
+ * @route   GET /api/v1/actual-dispatch/filters
+ * @desc    Get dynamic filter options (unique party names)
+ * @access  Public
+ */
+router.get(
+  '/filters',
+  actualDispatchController.getFilterOptions
+);
+
+/**
  * @desc    Get actual dispatch history (planned_1 NOT NULL, actual_1 NOT NULL)
  * @access  Public
  * @query   page, limit, d_sr_number, so_no, party_name

@@ -23,37 +23,37 @@ class MakeInvoiceService {
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 1000;
       const offset = (page - 1) * limit;
-      
+
       let whereConditions = ['lrc.planned_5 IS NOT NULL', 'lrc.actual_5 IS NULL'];
       let queryParams = [];
       let paramIndex = 1;
-      
+
       // Add optional filters
       if (filters.d_sr_number) {
         whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
         paramIndex++;
       }
-      
+
       if (filters.so_no) {
         whereConditions.push(`lrc.so_no = $${paramIndex}`);
         queryParams.push(filters.so_no);
         paramIndex++;
       }
-      
+
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
-      
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-      
+
       // Count total
       const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
-      
+
       // Get data with JOIN to order_dispatch for complete order details
       const dataQuery = `
         SELECT 
@@ -95,11 +95,11 @@ class MakeInvoiceService {
         ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      
+
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      
+
       Logger.info(`Fetched ${dataResult.rows.length} pending invoices`);
-      
+
       return {
         success: true,
         data: {
@@ -130,37 +130,37 @@ class MakeInvoiceService {
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 1000;
       const offset = (page - 1) * limit;
-      
+
       let whereConditions = ['lrc.planned_5 IS NOT NULL', 'lrc.actual_5 IS NOT NULL'];
       let queryParams = [];
       let paramIndex = 1;
-      
+
       // Add optional filters
       if (filters.d_sr_number) {
         whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
         paramIndex++;
       }
-      
+
       if (filters.so_no) {
         whereConditions.push(`lrc.so_no = $${paramIndex}`);
         queryParams.push(filters.so_no);
         paramIndex++;
       }
-      
+
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
       }
-      
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-      
+
       // Count total
       const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
-      
+
       // Get data
       const dataQuery = `
         SELECT 
@@ -199,11 +199,11 @@ class MakeInvoiceService {
         ORDER BY lrc.actual_5 DESC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      
+
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      
+
       Logger.info(`Fetched ${dataResult.rows.length} invoice history records`);
-      
+
       return {
         success: true,
         data: {
@@ -231,7 +231,7 @@ class MakeInvoiceService {
   async submitInvoice(id, data = {}) {
     try {
       Logger.info(`Submitting invoice for ID: ${id}`, { data });
-      
+
       const updateData = {
         actual_5: new Date().toISOString(),
         bill_type: data.bill_type || null,
@@ -242,27 +242,27 @@ class MakeInvoiceService {
         bill_amount: data.bill_amount || null,
         make_invoice_user: data.username || null,
       };
-      
+
       const fields = Object.keys(updateData);
       const values = Object.values(updateData);
-      
+
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-      
+
       const query = `
         UPDATE lift_receiving_confirmation 
         SET ${setClause}
         WHERE id = $${fields.length + 1}
         RETURNING *
       `;
-      
+
       const result = await db.query(query, [...values, id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error('Record not found');
       }
-      
+
       Logger.info(`Invoice submitted successfully for ID: ${id}`);
-      
+
       return {
         success: true,
         message: 'Invoice submitted successfully',
@@ -285,13 +285,13 @@ class MakeInvoiceService {
         SELECT * FROM lift_receiving_confirmation 
         WHERE id = $1
       `;
-      
+
       const result = await db.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error('Record not found');
       }
-      
+
       return {
         success: true,
         data: result.rows[0]

@@ -53,45 +53,76 @@ class OrderApprovalService {
       let queryParams = [];
       let paramIndex = 1;
 
-      // Add optional filters
-      if (filters.order_no) {
-        whereConditions.push(`order_no = $${paramIndex}`);
-        queryParams.push(filters.order_no);
+      // Base DO Expression for grouping
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+
+      // Enhanced Search (filters both order_no and customer_name)
+      if (filters.search) {
+        whereConditions.push(`(order_no ILIKE $${paramIndex} OR customer_name ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.search}%`);
         paramIndex++;
       }
 
       if (filters.customer_name) {
-        whereConditions.push(`customer_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.customer_name}%`);
+        whereConditions.push(`customer_name = $${paramIndex}`);
+        queryParams.push(filters.customer_name);
         paramIndex++;
-      }
-
-      if (filters.start_date && filters.end_date) {
-        whereConditions.push(`delivery_date BETWEEN $${paramIndex} AND $${paramIndex + 1}`);
-        queryParams.push(filters.start_date, filters.end_date);
-        paramIndex += 2;
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM order_dispatch ${whereClause}`;
+      // Count unique Groups (Base DOs)
+      const countQuery = `SELECT COUNT(DISTINCT ${baseDoExp}) as count FROM order_dispatch ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
-      // Get data with all specified fields
-      const fields = this.getApprovalFields();
-      const dataQuery = `
-        SELECT ${fields}
-        FROM order_dispatch 
+      // Get paginated Base DOs
+      const groupQuery = `
+        SELECT ${baseDoExp} as base_do, MIN(created_at) as sort_date
+        FROM order_dispatch
         ${whereClause}
-        ORDER BY created_at DESC, order_no ASC
+        GROUP BY base_do
+        ORDER BY sort_date DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
+      const baseDos = groupResult.rows.map(r => r.base_do);
 
-      Logger.info(`Fetched ${dataResult.rows.length} pending approval orders`);
+      if (baseDos.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
+        };
+      }
+
+      // Fetch all rows for these Base DOs
+      // Re-create where conditions with shifted indices because $1 is now reserved for baseDos
+      let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
+      let dataParamIndex = 2;
+      
+      if (filters.search) {
+        dataWhereConditions.push(`(order_no ILIKE $${dataParamIndex} OR customer_name ILIKE $${dataParamIndex})`);
+        dataParamIndex++;
+      }
+      if (filters.customer_name) {
+        dataWhereConditions.push(`customer_name = $${dataParamIndex}`);
+        dataParamIndex++;
+      }
+
+      const fields = this.getApprovalFields();
+      const dataQuery = `
+        SELECT ${fields}
+        FROM order_dispatch
+        WHERE ${dataWhereConditions.join(' AND ')}
+        AND planned_2 IS NOT NULL AND actual_2 IS NULL
+        ORDER BY created_at DESC, order_no ASC
+      `;
+
+      const dataResult = await db.query(dataQuery, [baseDos, ...queryParams]);
+
+      Logger.info(`Fetched ${dataResult.rows.length} rows for ${baseDos.length} pending approval base DOs`);
 
       return {
         success: true,
@@ -126,45 +157,76 @@ class OrderApprovalService {
       let queryParams = [];
       let paramIndex = 1;
 
-      // Add optional filters
-      if (filters.order_no) {
-        whereConditions.push(`order_no = $${paramIndex}`);
-        queryParams.push(filters.order_no);
+      // Base DO Expression for grouping
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+
+      // Enhanced Search
+      if (filters.search) {
+        whereConditions.push(`(order_no ILIKE $${paramIndex} OR customer_name ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.search}%`);
         paramIndex++;
       }
 
       if (filters.customer_name) {
-        whereConditions.push(`customer_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.customer_name}%`);
+        whereConditions.push(`customer_name = $${paramIndex}`);
+        queryParams.push(filters.customer_name);
         paramIndex++;
-      }
-
-      if (filters.start_date && filters.end_date) {
-        whereConditions.push(`delivery_date BETWEEN $${paramIndex} AND $${paramIndex + 1}`);
-        queryParams.push(filters.start_date, filters.end_date);
-        paramIndex += 2;
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM order_dispatch ${whereClause}`;
+      // Count unique Groups
+      const countQuery = `SELECT COUNT(DISTINCT ${baseDoExp}) as count FROM order_dispatch ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
-      // Get data with all specified fields
-      const fields = this.getApprovalFields();
-      const dataQuery = `
-        SELECT ${fields}
-        FROM order_dispatch 
+      // Get paginated Base DOs
+      const groupQuery = `
+        SELECT ${baseDoExp} as base_do, MAX(actual_2) as last_action_date
+        FROM order_dispatch
         ${whereClause}
-        ORDER BY actual_2 DESC, order_no ASC
+        GROUP BY base_do
+        ORDER BY last_action_date DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
+      const baseDos = groupResult.rows.map(r => r.base_do);
 
-      Logger.info(`Fetched ${dataResult.rows.length} approval history records`);
+      if (baseDos.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
+        };
+      }
+
+      // Fetch all rows for these Base DOs
+      // Re-create where conditions with shifted indices
+      let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
+      let dataParamIndex = 2;
+
+      if (filters.search) {
+        dataWhereConditions.push(`(order_no ILIKE $${dataParamIndex} OR customer_name ILIKE $${dataParamIndex})`);
+        dataParamIndex++;
+      }
+      if (filters.customer_name) {
+        dataWhereConditions.push(`customer_name = $${dataParamIndex}`);
+        dataParamIndex++;
+      }
+
+      const fields = this.getApprovalFields();
+      const dataQuery = `
+        SELECT ${fields}
+        FROM order_dispatch
+        WHERE ${dataWhereConditions.join(' AND ')}
+        AND planned_2 IS NOT NULL AND actual_2 IS NOT NULL
+        ORDER BY actual_2 DESC, order_no ASC
+      `;
+
+      const dataResult = await db.query(dataQuery, [baseDos, ...queryParams]);
+
+      Logger.info(`Fetched ${dataResult.rows.length} rows for ${baseDos.length} approval history base DOs`);
 
       return {
         success: true,
@@ -339,6 +401,33 @@ class OrderApprovalService {
     } catch (error) {
       Logger.error('Error fetching approval by ID', error);
       throw error;
+    }
+  }
+
+  /**
+   * Get dynamic filter options for Approval stage
+   * @returns {Promise<Object>} Unique filter values
+   */
+  async getFilterOptions() {
+    try {
+      // Get unique customer names from pending approvals
+      const query = `
+        SELECT DISTINCT customer_name 
+        FROM order_dispatch 
+        WHERE planned_2 IS NOT NULL AND actual_2 IS NULL
+        ORDER BY customer_name ASC
+      `;
+      const result = await db.query(query);
+      
+      return {
+        success: true,
+        data: {
+          customerNames: result.rows.map(r => r.customer_name).filter(Boolean)
+        }
+      };
+    } catch (error) {
+      Logger.error('Error fetching filter options for approval', error);
+      throw new Error('Failed to fetch filter options');
     }
   }
 }

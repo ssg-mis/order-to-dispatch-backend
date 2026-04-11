@@ -14,9 +14,9 @@ const { whatsappShareService } = require('../services/whatsappShareService');
 const getPendingApprovals = async (req, res, next) => {
   try {
     const filters = {
-      d_sr_number: req.query.d_sr_number,
-      so_no: req.query.so_no,
-      party_name: req.query.party_name,
+      search: req.query.search,
+      customer_name: req.query.customer_name,
+      depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : [req.query.depo_names]) : undefined,
     };
     
     const pagination = {
@@ -50,9 +50,11 @@ const getPendingApprovals = async (req, res, next) => {
 const getApprovalHistory = async (req, res, next) => {
   try {
     const filters = {
-      d_sr_number: req.query.d_sr_number,
-      so_no: req.query.so_no,
-      party_name: req.query.party_name,
+      search: req.query.search,
+      customer_name: req.query.customer_name,
+      depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : [req.query.depo_names]) : undefined,
+      start_date: req.query.start_date,
+      end_date: req.query.end_date,
     };
     
     const pagination = {
@@ -75,6 +77,23 @@ const getApprovalHistory = async (req, res, next) => {
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to fetch security guard approval history'
+    });
+  }
+};
+
+/**
+ * Get security guard filter options
+ * GET /api/v1/security-approval/filters
+ */
+const getFilterOptions = async (req, res, next) => {
+  try {
+    const result = await securityGuardApprovalService.getFilterOptions();
+    res.status(200).json(result);
+  } catch (error) {
+    Logger.error('Error in getFilterOptions controller', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch filter options'
     });
   }
 };
@@ -139,6 +158,7 @@ const getApprovalById = async (req, res, next) => {
 module.exports = {
   getPendingApprovals,
   getApprovalHistory,
+  getFilterOptions,
   submitApproval,
   getApprovalById,
 };
