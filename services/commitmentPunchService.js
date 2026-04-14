@@ -95,6 +95,30 @@ class CommitmentPunchService {
    * Ensure base_order_no column exists on commitment_main.
    * Uses ALTER TABLE ... ADD COLUMN IF NOT EXISTS (safe / idempotent).
    */
+  /**
+   * Ensure necessary columns exist. (Idempotent)
+   */
+  async ensureColumns() {
+    try {
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS base_order_no VARCHAR(50)`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS broker_name VARCHAR(255)`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS sku_weight_mt NUMERIC(15,4)`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS order_type_delivery_purpose TEXT`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS depo_name TEXT`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS advance_payment TEXT`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS advance_ammount_to_be_taken TEXT`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS order_type_delivery_purpose TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS depo_name TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS advance_amount NUMERIC(15,2)`);
+    } catch (err) {
+      Logger.warn('Error in ensureColumns (safe to ignore if columns exist):', err.message);
+    }
+  }
+
   async ensureBaseOrderNoColumn(client) {
     await client.query(
       `ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS base_order_no VARCHAR(50)`
@@ -262,6 +286,7 @@ class CommitmentPunchService {
 
   async getPending(filters = {}, pagination = {}) {
     try {
+      await this.ensureColumns();
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 50;
       const offset = (page - 1) * limit;
@@ -276,10 +301,10 @@ class CommitmentPunchService {
         idx++;
       }
 
-      // Add remaining-qty filter directly into WHERE — avoids GROUP BY requirement
+      // Add remaining-qty filter directly into WHERE
       where.push(`cm.quantity > COALESCE((
-        SELECT SUM(cd.sku_quantity) FROM commitment_details cd
-        WHERE cd.commitment_id = cm.id
+        SELECT SUM(sku_weight_mt) FROM commitment_details
+        WHERE commitment_id = cm.id
       ), 0)`);
 
       const whereClause = `WHERE ${where.join(' AND ')}`;
@@ -297,12 +322,12 @@ class CommitmentPunchService {
           cm.planned1,
           cm.timestamp,
           COALESCE((
-            SELECT SUM(cd.sku_quantity)
+            SELECT SUM(cd.sku_weight_mt)
             FROM commitment_details cd
             WHERE cd.commitment_id = cm.id
           ), 0) AS processed_qty,
           cm.quantity - COALESCE((
-            SELECT SUM(cd.sku_quantity)
+            SELECT SUM(cd.sku_weight_mt)
             FROM commitment_details cd
             WHERE cd.commitment_id = cm.id
           ), 0) AS remaining_qty
@@ -338,19 +363,7 @@ class CommitmentPunchService {
   // ─────────────────────────────────────────────────────────────────────────
 
   async processCommitment(id, data = {}) {
-    // ── Step 0: Ensure base_order_no column exists BEFORE starting the transaction.
-    // ALTER TABLE inside a transaction invalidates PostgreSQL's column plan for
-    // subsequent DML on the same connection, causing "column id does not exist".
-    // Running it with the pool (auto-committed) avoids this entirely.
-    try {
-      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS base_order_no VARCHAR(50)`);
-      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS broker_name VARCHAR(255)`);
-      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
-      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
-    } catch (alterErr) {
-      Logger.warn('Could not ensure columns (may already exist):', alterErr.message);
-    }
-
+    await this.ensureColumns();
     const client = await db.getClient();
     try {
       await client.query('BEGIN');
@@ -364,20 +377,36 @@ class CommitmentPunchService {
       const cm = cmRes.rows[0];
 
 
-      // ── Step 2: Validate quantity ──────────────────────────────────
+      // ── Step 2: Fetch SKU factor and calculate MT ──────────────────
+      const skuQty = parseFloat(data.sku_quantity) || 0;
+      if (skuQty <= 0) throw new Error('SKU quantity must be greater than 0');
+
+      const skuRes = await client.query(
+        `SELECT oil_filling_per_unit, nos_per_main_uom
+         FROM sku_details
+         WHERE sku_name = $1`,
+        [data.sku]
+      );
+      if (skuRes.rows.length === 0) throw new Error(`SKU "${data.sku}" not found in master`);
+      
+      const fillingPerUnit = parseFloat(skuRes.rows[0].oil_filling_per_unit) || 0;
+      const unitsPerCase = parseFloat(skuRes.rows[0].nos_per_main_uom) || 0;
+      
+      // Formula: gm * units * qty / 1000 / 1000 = Metric Tons
+      const requestedMt = (fillingPerUnit * unitsPerCase * skuQty) / 1000000;
+
+      // Calculate already processed MT for this commitment
       const processedRes = await client.query(
-        `SELECT COALESCE(SUM(sku_quantity), 0) AS processed_qty
+        `SELECT COALESCE(SUM(sku_weight_mt), 0) AS processed_mt
          FROM commitment_details WHERE commitment_id = $1`,
         [id]
       );
-      const processedQty = parseFloat(processedRes.rows[0].processed_qty) || 0;
-      const remainingQty = parseFloat(cm.quantity) - processedQty;
+      const processedMt = parseFloat(processedRes.rows[0].processed_mt) || 0;
+      const remainingMt = parseFloat(cm.quantity) - processedMt;
 
-      const skuQty = parseFloat(data.sku_quantity) || 0;
-      if (skuQty <= 0) throw new Error('SKU quantity must be greater than 0');
-      if (skuQty > remainingQty + 0.001) {
+      if (requestedMt > remainingMt + 0.0001) {
         throw new Error(
-          `SKU quantity (${skuQty}) exceeds remaining commitment quantity (${remainingQty.toFixed(2)})`
+          `Requested SKU weight (${requestedMt.toFixed(4)} MT) exceeds remaining commitment balance (${remainingMt.toFixed(4)} MT)`
         );
       }
 
@@ -411,8 +440,8 @@ class CommitmentPunchService {
       // ── Step 5: Insert into commitment_details ─────────────────────
       const detailRes = await client.query(
         `INSERT INTO commitment_details
-          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name, sku_weight_mt, order_type_delivery_purpose, depo_name, advance_payment, advance_ammount_to_be_taken, payment_terms)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          RETURNING *`,
         [
           id,
@@ -427,6 +456,12 @@ class CommitmentPunchService {
           transportTitleCase,
           data.broker_name || null,
           data.salesperson_name || null,
+          requestedMt,
+          data.order_type_delivery_purpose || null,
+          data.depo_name || null,
+          data.advance_payment || null,
+          data.advance_payment_taken || null,
+          data.payment_terms || null,
         ]
       );
 
@@ -439,26 +474,32 @@ class CommitmentPunchService {
            party_so_date,
            planned_2, remaining_dispatch_qty,
            timestamp_created, created_at,
-           broker_name, salesperson_name, is_order_through_broker)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+           broker_name, salesperson_name, is_order_through_broker,
+           order_type_delivery_purpose, depo_name, payment_terms, advance_amount, advance_payment_to_be_taken)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
         [
           orderNo,
           orderTitleCase,
           cm.party_name || null,
           data.sku || null,
           cm.oil_type || null,
-          skuQty,
+          requestedMt,
           parseFloat(data.sku_rate) || parseFloat(cm.rate) || null,
-          cm.unit || null,
+          cm.unit || 'Metric Ton',
           transportTitleCase,
           cm.commitment_date || null,
           nowIso,
-          skuQty,
+          requestedMt,
           nowIso,
           nowIso,
           data.broker_name || null,
           data.salesperson_name || null,
-          !!data.broker_name
+          !!data.broker_name,
+          data.order_type_delivery_purpose || null,
+          data.depo_name || null,
+          data.payment_terms || null,
+          data.advance_payment ? parseFloat(data.advance_payment) : null,
+          data.advance_payment_taken || null
         ]
       );
 
