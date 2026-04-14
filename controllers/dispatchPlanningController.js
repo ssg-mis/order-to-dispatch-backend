@@ -111,7 +111,7 @@ const submitDispatchPlanning = async (req, res, next) => {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `📦 *Dispatch Planned*`,
+          stage: `📦 *Dispatch Planned*\n📍 *Pending in Actual Dispatch*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {

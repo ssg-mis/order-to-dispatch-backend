@@ -63,7 +63,7 @@ async function submitGateOut(req, res) {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `🚪 *Gate Out Completed*`,
+          stage: `🚪 *Gate Out Completed*\n📍 *Pending in Make Invoice*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {

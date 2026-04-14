@@ -1,148 +1,216 @@
 const axios = require("axios");
 
-const whatsappShareService = async (docDetails, pageAccessDetails, targetPage) => {
-    const productId = process.env.WHATSAPP_PRODUCT_ID;
-    const phoneId = process.env.WHATSAPP_PHONE_ID;
-    const apiToken = process.env.WHATSAPP_API_TOKEN;
+// ================================================================
+// SEQUENTIAL MESSAGE QUEUE
+// Ensures messages are sent one-by-one across all concurrent requests
+// ================================================================
+const messageQueue = [];
+let isProcessingQueue = false;
 
-    if (!productId || !phoneId || !apiToken) {
-        const error = new Error("Maytapi credentials not configured");
-        throw error;
+/**
+ * Processes the global message queue sequentially.
+ */
+const processQueue = async () => {
+    if (isProcessingQueue || messageQueue.length === 0) return;
+    isProcessingQueue = true;
+
+    while (messageQueue.length > 0) {
+        const { apiUrl, payload, headers, resolve, reject } = messageQueue.shift();
+        try {
+            const response = await axios.post(apiUrl, payload, { headers });
+            
+            // Delay between messages (e.g. 800ms) to ensure "one-by-one" requirement
+            await new Promise(r => setTimeout(r, 800));
+            
+            resolve(response.data);
+        } catch (error) {
+            console.error(`[WHATSAPP-QUEUE] Failed to send to ${payload.to}:`, error.response?.data || error.message);
+            reject(error);
+        }
     }
 
-    const apiUrl = `https://api.maytapi.com/api/${productId}/${phoneId}/sendMessage`;
+    isProcessingQueue = false;
+};
+
+/**
+ * Adds a message to the global queue and returns a promise that resolves when sent.
+ */
+const enqueueMessage = (apiUrl, payload, headers) => {
+    return new Promise((resolve, reject) => {
+        messageQueue.push({ apiUrl, payload, headers, resolve, reject });
+        processQueue();
+    });
+};
+
+/**
+ * WhatsApp notification service using Meta WhatsApp Cloud API.
+ */
+const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPage = '') => {
+    const accessToken   = process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+    if (!accessToken || !phoneNumberId) {
+        throw new Error("Meta WhatsApp Cloud API credentials not configured");
+    }
+
+    // Meta Cloud API endpoint
+    const apiUrl = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
     const headers = {
-        "x-maytapi-key": apiToken,
+        "Authorization": `Bearer ${accessToken}`,
         "Content-Type": "application/json",
     };
 
-    // Enable detailed debug logging
-    const DEBUG_MODE = process.env.WHATSAPP_DEBUG === 'true' || true;
+    const DEBUG_MODE = true;
+
+    // Handle case where some controllers might pass (phone, docDetails, pageAccess)
+    // If the first argument is a string (phone), we swap them or handle it specifically
+    let recipients = [];
+    let finalDocDetails = docDetails;
+
+    if (typeof docDetails === 'string' && typeof pageAccessDetails === 'object' && !Array.isArray(pageAccessDetails)) {
+        // Looks like (phone, docDetails, pageAccess) call
+        const phone = docDetails;
+        finalDocDetails = pageAccessDetails;
+        recipients = [{ phone_no: phone, username: 'Manual Share', has_access: true }];
+        if (DEBUG_MODE) console.log(`[WHATSAPP-DEBUG] Detected manual share call with phone: ${phone}`);
+    } else if (Array.isArray(pageAccessDetails)) {
+        recipients = pageAccessDetails;
+    }
 
     if (DEBUG_MODE) {
-        console.log(`\n[WHATSAPP-DEBUG] === STARTING NOTIFICATION PROCESS ===`);
+        console.log(`\n[WHATSAPP-DEBUG] === STARTING NOTIFICATION PROCESS (Meta Cloud API) ===`);
         console.log(`[WHATSAPP-DEBUG] Target Page: "${targetPage}"`);
-        console.log(`[WHATSAPP-DEBUG] Document Details:`, JSON.stringify(docDetails));
-        console.log(`[WHATSAPP-DEBUG] Total Users to Check: ${pageAccessDetails.length}`);
+        console.log(`[WHATSAPP-DEBUG] Document Details:`, JSON.stringify(finalDocDetails));
+        console.log(`[WHATSAPP-DEBUG] Total Users to Check: ${recipients.length}`);
     }
 
-    if (docDetails.do_number && (!docDetails.order_type || !docDetails.oil_type)) {
+    // Enrichment logic (preserve original)
+    if (finalDocDetails.do_number && (!finalDocDetails.order_type || !finalDocDetails.oil_type)) {
         try {
             const db = require('../config/db');
-            const result = await db.query('SELECT * FROM order_dispatch WHERE order_no = $1 LIMIT 1', [docDetails.do_number]);
+            const result = await db.query(
+                'SELECT * FROM order_dispatch WHERE order_no = $1 LIMIT 1',
+                [finalDocDetails.do_number]
+            );
             if (result.rows.length > 0) {
                 const order = result.rows[0];
-                docDetails.order_type = docDetails.order_type || order.order_type;
-                docDetails.do_date = docDetails.do_date || order.delivery_date || order.party_so_date;
-                docDetails.customer_name = docDetails.customer_name || order.customer_name;
-                docDetails.oil_type = docDetails.oil_type || order.oil_type;
-                docDetails.rate_15_kg = docDetails.rate_15_kg || order.rate_per_15kg;
-                docDetails.rate_1_ltr = docDetails.rate_1_ltr || order.rate_per_ltr;
-                docDetails.order_punch_remarks = docDetails.order_punch_remarks || order.order_punch_remarks;
+                finalDocDetails.order_type          = finalDocDetails.order_type          || order.order_type;
+                finalDocDetails.do_date             = finalDocDetails.do_date             || order.delivery_date || order.party_so_date;
+                finalDocDetails.customer_name       = finalDocDetails.customer_name       || order.customer_name;
+                finalDocDetails.oil_type            = finalDocDetails.oil_type            || order.oil_type;
+                finalDocDetails.rate_15_kg          = finalDocDetails.rate_15_kg          || order.rate_per_15kg;
+                finalDocDetails.rate_1_ltr          = finalDocDetails.rate_1_ltr          || order.rate_per_ltr;
+                finalDocDetails.order_punch_remarks = finalDocDetails.order_punch_remarks || order.order_punch_remarks;
             }
         } catch (dbErr) {
-            console.error('[WHATSAPP-NOTIFY] Failed to fetch order details for notifications', dbErr);
+            console.error('[WHATSAPP-NOTIFY] Failed to fetch order details', dbErr);
         }
     }
 
-    const isRegularOrder = docDetails?.order_type?.toLowerCase() === 'regular';
-    const isPreApproval = docDetails?.order_type?.toLowerCase() === 'pre approval';
+    const isPreApproval = finalDocDetails?.order_type?.toLowerCase() === 'pre approval';
+    const templateName  = isPreApproval ? 'order_preapproval_notify' : 'order_dispatch_notify';
 
-    const templateLines = [
-        docDetails.stage || `📄 *Document Shared*`,
-        "",
-        `*Order Type:* ${docDetails?.order_type || '-'}`,
-        `*DO Date:* ${docDetails?.do_date || '-'}`,
-        `*DO Number:* ${docDetails?.do_number || '-'}`,
-        `*Customer Name:* ${docDetails?.customer_name || '-'}`,
-    ];
+    const cleanParam = (val, fallback = '-') => {
+        if (!val) return fallback;
+        return String(val)
+            .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
+            .replace(/[\u2600-\u27FF]/gu, '')
+            .replace(/\*/g, '')
+            .replace(/\s*\(.*?\)\s*$/, '')
+            .trim() || fallback;
+    };
 
-    if (isPreApproval) {
-        templateLines.push(
-            `*Oil Type:* ${docDetails?.oil_type || '-'}`,
-            `*Rate per 15 Kg:* ₹${docDetails?.rate_15_kg || '-'}`,
-            `*Rate per 1 Ltr:* ₹${docDetails?.rate_1_ltr || '-'}`
-        );
-    }
+    const buildTemplateComponents = () => {
+        if (isPreApproval) {
+            return [{
+                type: "body",
+                parameters: [
+                    { type: "text", text: cleanParam(finalDocDetails?.stage,              'Pre-Approval') },
+                    { type: "text", text: cleanParam(finalDocDetails?.order_type,         'Pre Approval') },
+                    { type: "text", text: cleanParam(finalDocDetails?.do_date,            '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.do_number,          '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.customer_name,      '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.oil_type,           '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.rate_15_kg,         '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.rate_1_ltr,         '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.order_punch_remarks,'-') },
+                ]
+            }];
+        } else {
+            return [{
+                type: "body",
+                parameters: [
+                    { type: "text", text: cleanParam(finalDocDetails?.stage,              'New Order') },
+                    { type: "text", text: cleanParam(finalDocDetails?.order_type,         '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.do_date,            '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.do_number,          '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.customer_name,      '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.order_punch_remarks,'-') },
+                ]
+            }];
+        }
+    };
 
-    templateLines.push(`*Remarks:* ${docDetails?.order_punch_remarks || '-'}`);
+    let lastResponse = null;
 
-    const textMessage = templateLines.join('\n');
+    // Loop over recipients and enqueue messages
+    for (const recipient of recipients) {
+        if (!recipient.phone_no) continue;
 
-    let response = null;
+        let hasModifyAccess = false;
+        
+        // If it's a manual share (recipient.has_access is set) or targetPage is empty, skip access check
+        if (recipient.has_access || !targetPage) {
+            hasModifyAccess = true;
+        } else {
+            const normalizedTarget = targetPage.toLowerCase().trim();
+            let accessData = recipient.page_access;
+            if (typeof accessData === 'string') {
+                try { accessData = JSON.parse(accessData); } 
+                catch (e) { accessData = accessData.split(',').map(s => s.trim()); }
+            }
 
-    for (const users of pageAccessDetails) {
-        if (!users.phone_no) continue; // Skip if no phone number exists
-
-        let hasAccess = false;
-        const normalizedTarget = targetPage.toLowerCase().trim();
-
-        // Robust parsing of page_access
-        let accessData = users.page_access;
-        if (typeof accessData === 'string') {
-            try {
-                accessData = JSON.parse(accessData);
-            } catch (e) {
-                // If not JSON, try comma separated
-                accessData = accessData.split(',').map(s => s.trim());
+            if (Array.isArray(accessData)) {
+                hasModifyAccess = accessData.some(p => p && p.toLowerCase().trim() === normalizedTarget);
+            } else if (accessData && typeof accessData === 'object') {
+                hasModifyAccess = Object.keys(accessData).some(k =>
+                    k.toLowerCase().trim() === normalizedTarget &&
+                    accessData[k] && accessData[k].toLowerCase().trim() === 'modify'
+                );
             }
         }
 
-        if (Array.isArray(accessData)) {
-            hasAccess = accessData.some(p => p && typeof p === 'string' && p.toLowerCase().trim() === normalizedTarget);
-        } else if (accessData && typeof accessData === 'object') {
-            hasAccess = Object.keys(accessData).some(k =>
-                k.toLowerCase().trim() === normalizedTarget &&
-                accessData[k] &&
-                accessData[k].toLowerCase().trim() !== 'view_only'
-            );
-        }
-
-        if (hasAccess) {
-            // Clean up phone number (remove +, spaces, dashes, ensure country code)
-            let cleanPhone = users.phone_no.replace(/[\s\+\-\(\)]/g, '');
-            if (cleanPhone.length === 10) {
-                cleanPhone = `91${cleanPhone}`; // Default to India (+91) if 10 digits
-            }
-
-            // Maytapi formatting: usually requires @c.us for individual numbers
-            const maytapiNumber = cleanPhone.includes('@c.us') ? cleanPhone : `${cleanPhone}@c.us`;
-
-            if (DEBUG_MODE) {
-                console.log(`[WHATSAPP-DEBUG] ✅ Match! User "${users.username}" has access.`);
-                console.log(`[WHATSAPP-DEBUG] Original Phone: ${users.phone_no} | Cleaned: ${cleanPhone} | Maytapi ID: ${maytapiNumber}`);
-            }
+        if (hasModifyAccess) {
+            let cleanPhone = recipient.phone_no.replace(/[\s\+\-\(\)]/g, '');
+            if (cleanPhone.length === 10) cleanPhone = `91${cleanPhone}`;
 
             try {
+                const components = buildTemplateComponents();
                 const payload = {
-                    to_number: 917223820412,
-                    type: "text",
-                    message: textMessage,
+                    messaging_product: "whatsapp",
+                    to: cleanPhone,
+                    type: "template",
+                    template: {
+                        name: templateName,
+                        language: { code: "en" },
+                        components
+                    }
                 };
 
-                if (DEBUG_MODE) console.log(`[WHATSAPP-DEBUG] Sending Payload:`, JSON.stringify(payload));
-
-                response = await axios.post(apiUrl, payload, { headers });
-
-                if (DEBUG_MODE) {
-                    console.log(`[WHATSAPP-DEBUG] 🟢 API Success for ${users.username}:`, JSON.stringify(response.data));
-                }
-            } catch (apiError) {
-                console.error(`[WHATSAPP-DEBUG] 🔴 API Error for ${users.username}:`, apiError.response?.data || apiError.message);
-                if (apiError.response?.status === 400 && DEBUG_MODE) {
-                    console.log(`[WHATSAPP-DEBUG] HINT: A 400 error often means the phone number is invalid or not registered on WhatsApp.`);
-                }
-            }
-        } else {
-            if (DEBUG_MODE) {
-                console.log(`[WHATSAPP-DEBUG] ❌ User "${users.username}" does not have access. Access data:`, JSON.stringify(accessData));
+                console.log(`[WHATSAPP] ⚡ Enqueuing "${templateName}" to "${recipient.username}" (${cleanPhone})...`);
+                
+                // Use the sequential queue
+                lastResponse = await enqueueMessage(apiUrl, payload, headers);
+                
+                console.log(`[WHATSAPP] ✅ Message sent to "${recipient.username}" (${cleanPhone})`);
+            } catch (err) {
+                console.error(`[WHATSAPP] ❌ Failed for "${recipient.username}" (${cleanPhone}):`, err.message);
             }
         }
     }
 
     if (DEBUG_MODE) console.log(`[WHATSAPP-DEBUG] === FINISHED NOTIFICATION PROCESS ===\n`);
-
-    return response ? response.data : null;
+    return lastResponse;
 };
 
 module.exports = { whatsappShareService };

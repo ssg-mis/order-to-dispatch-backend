@@ -63,7 +63,7 @@ async function submitInvoice(req, res) {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `🧾 *Make Invoice Completed*`,
+          stage: `🧾 *Make Invoice Completed*\n📍 *Pending in Check Invoice*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {

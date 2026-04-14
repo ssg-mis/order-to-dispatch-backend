@@ -95,7 +95,7 @@ const submitPreApproval = async (req, res, next) => {
     // Trigger WhatsApp notifications for the next stage: Approval of Order
     try {
       const docDetails = {
-        stage: `✅ *Pre-Approval Completed*`,
+        stage: `✅ *Pre-Approval Completed*\n📍 *Pending in Approval of Order*`,
         order_type: result.data.approved?.order_type,
         do_date: result.data.approved?.delivery_date,
         do_number: result.data.approved?.order_no,

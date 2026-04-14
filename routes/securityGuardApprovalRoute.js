@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const securityGuardApprovalController = require('../controllers/securityGuardApprovalController');
+const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 // GET /api/v1/security-approval/pending - Get pending security guard approvals
 router.get('/pending', securityGuardApprovalController.getPendingApprovals);
@@ -17,7 +18,7 @@ router.get('/history', securityGuardApprovalController.getApprovalHistory);
 router.get('/filters', securityGuardApprovalController.getFilterOptions);
 
 // POST /api/v1/security-approval/submit/:id - Submit security guard approval
-router.post('/submit/:id', securityGuardApprovalController.submitApproval);
+router.post('/submit/:id', pageAccess, securityGuardApprovalController.submitApproval);
 
 // GET /api/v1/security-approval/:id - Get security guard approval by ID
 router.get('/:id', securityGuardApprovalController.getApprovalById);

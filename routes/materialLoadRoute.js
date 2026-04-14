@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const materialLoadController = require('../controllers/materialLoadController');
+const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 // GET /api/v1/material-load/pending - Get pending material loads
 router.get('/pending', materialLoadController.getPendingMaterialLoads);
@@ -14,7 +15,7 @@ router.get('/pending', materialLoadController.getPendingMaterialLoads);
 router.get('/history', materialLoadController.getMaterialLoadHistory);
 
 // POST /api/v1/material-load/submit/:id - Submit material load
-router.post('/submit/:id', materialLoadController.submitMaterialLoad);
+router.post('/submit/:id', pageAccess, materialLoadController.submitMaterialLoad);
 
 // GET /api/v1/material-load/:id - Get material load by ID
 router.get('/:id', materialLoadController.getMaterialLoadById);

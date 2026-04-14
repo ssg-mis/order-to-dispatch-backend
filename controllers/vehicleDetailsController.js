@@ -96,7 +96,7 @@ const submitVehicleDetails = async (req, res, next) => {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `🚛 *Vehicle Details Added*`,
+          stage: `🚛 *Vehicle Details Added*\n📍 *Pending in Material Load*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {

@@ -9,6 +9,7 @@
 const express = require('express');
 const router = express.Router();
 const dispatchPlanningController = require('../controllers/dispatchPlanningController');
+const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 /**
  * @route   GET /api/v1/dispatch-planning/pending
@@ -40,6 +41,7 @@ router.get(
  */
 router.post(
   '/submit/:id',
+  pageAccess,
   dispatchPlanningController.submitDispatchPlanning
 );
 

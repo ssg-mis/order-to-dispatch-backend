@@ -63,7 +63,7 @@ async function submitReceipt(req, res) {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `📦 *Material Receipt Confirmed*`,
+          stage: `📦 *Material Receipt Confirmed*\n📍 *Pending in Damage Adjustment*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {

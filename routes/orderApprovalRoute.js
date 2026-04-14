@@ -9,6 +9,7 @@
 const express = require('express');
 const router = express.Router();
 const orderApprovalController = require('../controllers/orderApprovalController');
+const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 /**
  * @route   GET /api/v1/approval/pending
@@ -60,6 +61,7 @@ router.get(
  */
 router.post(
   '/submit/:id',
+  pageAccess,
   orderApprovalController.submitApproval
 );
 

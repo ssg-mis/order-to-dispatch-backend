@@ -115,7 +115,7 @@ const submitApproval = async (req, res, next) => {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `👮 *Security Guard Approval Completed*`,
+          stage: `👮 *Security Guard Approval Completed*\n📍 *Pending in Gate Out*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {

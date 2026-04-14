@@ -108,11 +108,11 @@ const submitApproval = async (req, res, next) => {
     try {
       if (result.success && result.data && result.data.order_no) {
         const docDetails = {
-          stage: `✅ *Approval of Order Completed*`,
+          stage: `✅ *Approval of Order Completed*\n📍 *Pending in Dispatch Planning*`,
           do_number: result.data.order_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Actual Dispatch');
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Dispatch Planning');
         }
       }
     } catch (notifyError) {

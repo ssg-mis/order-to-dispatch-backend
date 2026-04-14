@@ -96,7 +96,7 @@ const submitMaterialLoad = async (req, res, next) => {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `🏗️ *Material Load Completed*`,
+          stage: `🏗️ *Material Load Completed*\n📍 *Pending in Security Guard Approval*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {

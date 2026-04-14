@@ -10,6 +10,7 @@
 const express = require('express');
 const router = express.Router();
 const actualDispatchController = require('../controllers/actualDispatchController');
+const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 /**
  * @route   GET /api/v1/actual-dispatch/pending
@@ -50,6 +51,7 @@ router.get(
  */
 router.post(
   '/submit/:dsrNumber',
+  pageAccess,
   actualDispatchController.submitActualDispatch
 );
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const makeInvoiceController = require('../controllers/makeInvoiceController');
+const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 // Get pending invoices
 router.get('/pending', makeInvoiceController.getPendingInvoices);
@@ -9,7 +10,7 @@ router.get('/pending', makeInvoiceController.getPendingInvoices);
 router.get('/history', makeInvoiceController.getInvoiceHistory);
 
 // Submit invoice (update actual_5 and invoice fields)
-router.post('/submit/:id', makeInvoiceController.submitInvoice);
+router.post('/submit/:id', pageAccess, makeInvoiceController.submitInvoice);
 
 // Get invoice details by ID
 router.get('/:id', makeInvoiceController.getInvoiceById);

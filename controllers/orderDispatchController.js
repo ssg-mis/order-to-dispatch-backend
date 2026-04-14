@@ -38,7 +38,7 @@ const createOrder = async (req, res, next) => {
       const orderTypeLower = orderData.order_type?.toLowerCase() || '';
       const targetPage = orderTypeLower === 'pre approval' ? 'Pre Approval' : 'Approval of Order';
       const docDetails = {
-        stage: `🆕 *New Order Punched* (${targetPage})`,
+        stage: `🆕 *New Order Punched*\n📍 *Pending in ${targetPage}*`,
         order_type: orderData.order_type,
         do_date: orderData.delivery_date,
         do_number: result.data.order_no,

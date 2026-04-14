@@ -63,7 +63,7 @@ async function submitCheck(req, res) {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `🔍 *Check Invoice Completed*`,
+          stage: `🔍 *Check Invoice Completed*\n📍 *Pending in Confirm Material Receipt*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {

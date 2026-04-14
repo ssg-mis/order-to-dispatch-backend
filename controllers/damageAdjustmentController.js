@@ -63,11 +63,11 @@ async function submitAdjustment(req, res) {
     try {
       if (result.success && result.data && result.data.so_no) {
         const docDetails = {
-          stage: `🔧 *Damage Adjustment Completed*`,
+          stage: `🔧 *Damage Adjustment Completed*\n📍 *Order Completed*`,
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Dashboard'); // Final stage
+          await whatsappShareService(docDetails, req.pageAccessDetails, 'Dashboard');
         }
       }
     } catch (notifyError) {

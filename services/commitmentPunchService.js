@@ -343,12 +343,12 @@ class CommitmentPunchService {
     // subsequent DML on the same connection, causing "column id does not exist".
     // Running it with the pool (auto-committed) avoids this entirely.
     try {
-      await db.query(
-        `ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS base_order_no VARCHAR(50)`
-      );
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS base_order_no VARCHAR(50)`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS broker_name VARCHAR(255)`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
     } catch (alterErr) {
-      // Non-fatal: column may already exist or DB permissions don't allow ALTER
-      Logger.warn('Could not ensure base_order_no column (may already exist):', alterErr.message);
+      Logger.warn('Could not ensure columns (may already exist):', alterErr.message);
     }
 
     const client = await db.getClient();
@@ -405,11 +405,14 @@ class CommitmentPunchService {
         );
       }
 
+      const orderTitleCase = data.order_type ? (data.order_type.charAt(0).toUpperCase() + data.order_type.slice(1)) : 'Regular';
+      const transportTitleCase = data.transport_type ? (data.transport_type.charAt(0).toUpperCase() + data.transport_type.slice(1)) : (cm.transport_type || 'Ex-Depot');
+
       // ── Step 5: Insert into commitment_details ─────────────────────
       const detailRes = await client.query(
         `INSERT INTO commitment_details
-          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          RETURNING *`,
         [
           id,
@@ -420,38 +423,42 @@ class CommitmentPunchService {
           data.sku || null,
           skuQty,
           data.sku_rate || null,
-          'Regular',
-          cm.transport_type || null,
+          orderTitleCase,
+          transportTitleCase,
+          data.broker_name || null,
+          data.salesperson_name || null,
         ]
       );
 
       // ── Step 6: Insert into order_dispatch ────────────────────────
-      // order_type = Regular → planned_2 is set (varchar), planned_1 is null
-      // We set order_no explicitly so the DB trigger skips auto-generation.
-      const nowIso = new Date().toISOString(); // planned_2 is varchar in order_dispatch
+      const nowIso = new Date().toISOString(); 
       await client.query(
         `INSERT INTO order_dispatch
           (order_no, order_type, customer_name, product_name, oil_type,
            order_quantity, rate_of_material, uom, type_of_transporting,
            party_so_date,
            planned_2, remaining_dispatch_qty,
-           timestamp_created, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+           timestamp_created, created_at,
+           broker_name, salesperson_name, is_order_through_broker)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [
-          orderNo,                          // explicit → trigger skips auto-gen
-          'Regular',
+          orderNo,                          
+          orderTitleCase,
           cm.party_name || null,
-          data.sku || null,                 // product_name = SKU name
+          data.sku || null,                 
           cm.oil_type || null,
           skuQty,
           parseFloat(data.sku_rate) || parseFloat(cm.rate) || null,
           cm.unit || null,
-          cm.transport_type || null,
-          cm.commitment_date || null,       // party_so_date = commitment_date
-          nowIso,                           // planned_2 = varchar: ISO string
-          skuQty,                           // remaining_dispatch_qty
-          nowIso,                           // timestamp_created
-          nowIso,                           // created_at
+          transportTitleCase,
+          cm.commitment_date || null,      
+          nowIso,                          
+          skuQty,                          
+          nowIso,                          
+          nowIso,                          
+          data.broker_name || null,
+          data.salesperson_name || null,
+          !!data.broker_name
         ]
       );
 
