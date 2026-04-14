@@ -34,7 +34,7 @@ class CommitmentPunchService {
    */
   async generateCommitmentNo(client) {
     const fy = this.getFinancialYear();
-    const prefix = `CN/${fy}/`;
+    const prefix = `COMM/${fy}/`;
 
     const result = await client.query(
       `SELECT commitment_no FROM commitment_main
@@ -431,7 +431,7 @@ class CommitmentPunchService {
       );
 
       // ── Step 6: Insert into order_dispatch ────────────────────────
-      const nowIso = new Date().toISOString(); 
+      const nowIso = new Date().toISOString();
       await client.query(
         `INSERT INTO order_dispatch
           (order_no, order_type, customer_name, product_name, oil_type,
@@ -442,20 +442,20 @@ class CommitmentPunchService {
            broker_name, salesperson_name, is_order_through_broker)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [
-          orderNo,                          
+          orderNo,
           orderTitleCase,
           cm.party_name || null,
-          data.sku || null,                 
+          data.sku || null,
           cm.oil_type || null,
           skuQty,
           parseFloat(data.sku_rate) || parseFloat(cm.rate) || null,
           cm.unit || null,
           transportTitleCase,
-          cm.commitment_date || null,      
-          nowIso,                          
-          skuQty,                          
-          nowIso,                          
-          nowIso,                          
+          cm.commitment_date || null,
+          nowIso,
+          skuQty,
+          nowIso,
+          nowIso,
           data.broker_name || null,
           data.salesperson_name || null,
           !!data.broker_name
