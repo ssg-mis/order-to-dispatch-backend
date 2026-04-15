@@ -101,6 +101,11 @@ class CommitmentPunchService {
   async ensureColumns() {
     try {
       await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS base_order_no VARCHAR(50)`);
+      // Customer contact info on commitment_main
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS customer_contact_person_name TEXT`);
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS whatsapp_no VARCHAR(15)`);
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS address TEXT`);
+      // commitment_details columns
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS broker_name VARCHAR(255)`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS sku_weight_mt NUMERIC(15,4)`);
@@ -109,11 +114,27 @@ class CommitmentPunchService {
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS advance_payment TEXT`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS advance_ammount_to_be_taken TEXT`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS is_order_through TEXT`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS order_type_regular_preapproval TEXT`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS start_date DATE`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS end_date DATE`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS actual_delivery_date DATE`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS upload_copy TEXT`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS remarks TEXT`);
+      // order_dispatch columns
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS order_type_delivery_purpose TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS depo_name TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS advance_amount NUMERIC(15,2)`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS advance_payment_to_be_taken TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS start_date DATE`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS end_date DATE`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS delivery_date DATE`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS is_order_through TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS order_type_regular_preapproval TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS remarks TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS upload_copy TEXT`);
     } catch (err) {
       Logger.warn('Error in ensureColumns (safe to ignore if columns exist):', err.message);
     }
@@ -131,47 +152,31 @@ class CommitmentPunchService {
    * @param {string|null} existingBase - If already assigned, reuse it; otherwise generate new
    * @returns {{ orderNo: string, baseOrderNo: string }}
    */
-  async generateOrderNo(client, existingBase) {
-    let base = existingBase;
+  async generateOrderNo(client) {
+    const fy = this.getFinancialYear(); // e.g. "26-27"
+    const prefix = `DO/${fy}/`;
 
-    if (!base) {
-      const fy = this.getFinancialYear(); // e.g. "26-27"
-      const prefix = `DO/${fy}/`;
+    // Find the latest order_no — includes old letter-suffixed ones like DO/26-27/0063A
+    const latestRes = await client.query(
+      `SELECT order_no FROM order_dispatch
+       WHERE order_no LIKE $1
+       ORDER BY order_no DESC
+       LIMIT 1`,
+      [`${prefix}%`]
+    );
 
-      // Find the latest order_no in order_dispatch matching DO/YY-YY/NNNN format
-      const latestRes = await client.query(
-        `SELECT order_no FROM order_dispatch
-         WHERE order_no LIKE $1
-         ORDER BY order_no DESC
-         LIMIT 1`,
-        [`${prefix}%`]
-      );
-
-      let nextNum = 1;
-      if (latestRes.rows.length > 0) {
-        // Extract numeric part: DO/26-27/0033A → "0033" → 33
-        const latestNo = latestRes.rows[0].order_no;
-        const numPart = latestNo.replace(prefix, '').replace(/[A-Z]+$/i, '');
-        const parsed = parseInt(numPart, 10);
-        if (!isNaN(parsed)) nextNum = parsed + 1;
-      }
-
-      // Format: DO/26-27/0034 (4-digit zero-padded)
-      base = `${prefix}${String(nextNum).padStart(4, '0')}`;
+    let nextNum = 1;
+    if (latestRes.rows.length > 0) {
+      // Strip any trailing letters: DO/26-27/0063A → "0063" → 63
+      const latestNo = latestRes.rows[0].order_no;
+      const numPart = latestNo.replace(prefix, '').replace(/[A-Za-z]+$/, '');
+      const parsed = parseInt(numPart, 10);
+      if (!isNaN(parsed)) nextNum = parsed + 1;
     }
 
-    // Count how many order_dispatch rows already use this base prefix
-    const countRes = await client.query(
-      `SELECT COUNT(*) FROM order_dispatch WHERE order_no LIKE $1`,
-      [`${base}%`]
-    );
-    const existingCount = parseInt(countRes.rows[0].count) || 0;
-
-    // A=0, B=1, C=2 ...
-    const letter = String.fromCharCode(65 + existingCount);
-    const orderNo = `${base}${letter}`;
-
-    return { orderNo, baseOrderNo: base };
+    // Format: DO/26-27/0064 (4-digit zero-padded) — no letter suffix
+    const orderNo = `${prefix}${String(nextNum).padStart(4, '0')}`;
+    return { orderNo };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -195,8 +200,9 @@ class CommitmentPunchService {
 
         const res = await client.query(
           `INSERT INTO commitment_main
-            (commitment_no, commitment_date, party_name, oil_type, quantity, unit, rate, planned1)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            (commitment_no, commitment_date, party_name, oil_type, quantity, unit, rate, planned1,
+             customer_contact_person_name, whatsapp_no, address)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
            RETURNING *`,
           [
             commitmentNo,
@@ -207,6 +213,9 @@ class CommitmentPunchService {
             item.unit || null,
             item.rate || null,
             data.commitment_date || null,
+            data.customer_contact_person_name || null,
+            data.whatsapp_no || null,
+            data.address || null,
           ]
         );
         inserted.push(res.rows[0]);
@@ -420,19 +429,8 @@ class CommitmentPunchService {
       }
 
       // ── Step 4: Generate DO order number ──────────────────────────
-      // base_order_no on commitment_main tracks the base DO for all partial processes
-      const { orderNo, baseOrderNo } = await this.generateOrderNo(
-        client,
-        cm.base_order_no || null
-      );
-
-      // Save base_order_no to commitment_main if this is the first process
-      if (!cm.base_order_no) {
-        await client.query(
-          `UPDATE commitment_main SET base_order_no = $1 WHERE id = $2`,
-          [baseOrderNo, id]
-        );
-      }
+      // Always generate a fresh sequential number for each process submission
+      const { orderNo } = await this.generateOrderNo(client);
 
       const orderTitleCase = data.order_type ? (data.order_type.charAt(0).toUpperCase() + data.order_type.slice(1)) : 'Regular';
       const transportTitleCase = data.transport_type ? (data.transport_type.charAt(0).toUpperCase() + data.transport_type.slice(1)) : (cm.transport_type || 'Ex-Depot');
@@ -440,8 +438,8 @@ class CommitmentPunchService {
       // ── Step 5: Insert into commitment_details ─────────────────────
       const detailRes = await client.query(
         `INSERT INTO commitment_details
-          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name, sku_weight_mt, order_type_delivery_purpose, depo_name, advance_payment, advance_ammount_to_be_taken, payment_terms)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name, sku_weight_mt, order_type_delivery_purpose, depo_name, advance_payment, advance_ammount_to_be_taken, payment_terms, is_order_through, order_type_regular_preapproval, start_date, end_date, actual_delivery_date, upload_copy, remarks)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
          RETURNING *`,
         [
           id,
@@ -462,6 +460,13 @@ class CommitmentPunchService {
           data.advance_payment || null,
           data.advance_payment_taken || null,
           data.payment_terms || null,
+          data.is_order_through || null,
+          data.order_type_regular_preapproval || null,
+          data.start_date || null,
+          data.end_date || null,
+          data.actual_delivery_date || null,
+          data.upload_copy || null,
+          data.remarks || null,
         ]
       );
 
@@ -475,21 +480,24 @@ class CommitmentPunchService {
            planned_2, remaining_dispatch_qty,
            timestamp_created, created_at,
            broker_name, salesperson_name, is_order_through_broker,
-           order_type_delivery_purpose, depo_name, payment_terms, advance_amount, advance_payment_to_be_taken)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
+           order_type_delivery_purpose, depo_name, payment_terms, advance_amount, advance_payment_to_be_taken,
+           start_date, end_date, delivery_date,
+           is_order_through, order_type_regular_preapproval,
+           remarks, upload_copy)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)`,
         [
           orderNo,
           orderTitleCase,
           cm.party_name || null,
           data.sku || null,
           cm.oil_type || null,
-          requestedMt,
+          skuQty,
           parseFloat(data.sku_rate) || parseFloat(cm.rate) || null,
           cm.unit || 'Metric Ton',
           transportTitleCase,
           cm.commitment_date || null,
           nowIso,
-          requestedMt,
+          skuQty,
           nowIso,
           nowIso,
           data.broker_name || null,
@@ -499,7 +507,14 @@ class CommitmentPunchService {
           data.depo_name || null,
           data.payment_terms || null,
           data.advance_payment ? parseFloat(data.advance_payment) : null,
-          data.advance_payment_taken || null
+          data.advance_payment_taken || null,
+          data.start_date || null,
+          data.end_date || null,
+          data.actual_delivery_date || null,
+          data.is_order_through || null,
+          data.order_type_regular_preapproval || null,
+          data.remarks || null,
+          data.upload_copy || null,
         ]
       );
 
