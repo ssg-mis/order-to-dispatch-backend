@@ -52,6 +52,21 @@ const getPending = async (req, res, next) => {
 };
 
 /**
+ * GET /api/v1/commitment-punch/:id/details
+ * Fetch all processed details (commitment_details rows) for a commitment
+ */
+const getDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await commitmentPunchService.getDetails(id);
+    return ResponseUtil.success(res, result.data, result.message);
+  } catch (error) {
+    Logger.error('Error fetching commitment details', error);
+    next(error);
+  }
+};
+
+/**
  * PUT /api/v1/commitment-punch/:id/process
  * Process a commitment (set PO details, SKU details, mark actual1)
  */
@@ -66,5 +81,5 @@ const processCommitment = async (req, res, next) => {
   }
 };
 
-module.exports = { createCommitment, getAll, getPending, processCommitment };
+module.exports = { createCommitment, getAll, getPending, processCommitment, getDetails };
 

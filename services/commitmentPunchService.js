@@ -541,6 +541,86 @@ class CommitmentPunchService {
       client.release();
     }
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET DETAILS FOR A COMMITMENT
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Fetch all commitment_details rows for a given commitment ID.
+   * Also returns the parent commitment_main row for context.
+   */
+  async getDetails(id) {
+    try {
+      await this.ensureColumns();
+
+      // Parent commitment info
+      const cmRes = await db.query(
+        `SELECT commitment_no, commitment_date, party_name, oil_type, quantity, unit, rate
+         FROM commitment_main WHERE id = $1`,
+        [id]
+      );
+      if (cmRes.rows.length === 0) throw new Error('Commitment not found');
+      const commitment = cmRes.rows[0];
+
+      // All processed detail rows for this commitment
+      const detailRes = await db.query(
+        `SELECT
+           cd.id,
+           cd.actual1,
+           cd.po_no,
+           cd.po_date,
+           cd.sku,
+           cd.sku_quantity,
+           cd.sku_rate,
+           cd.sku_weight_mt,
+           cd.order_type,
+           cd.transport_type,
+           cd.broker_name,
+           cd.salesperson_name,
+           cd.order_type_delivery_purpose,
+           cd.depo_name,
+           cd.advance_payment,
+           cd.advance_ammount_to_be_taken,
+           cd.payment_terms,
+           cd.is_order_through,
+           cd.order_type_regular_preapproval,
+           cd.start_date,
+           cd.end_date,
+           cd.actual_delivery_date,
+           cd.remarks,
+           cd.upload_copy,
+           od.order_no
+         FROM commitment_details cd
+         LEFT JOIN order_dispatch od
+           ON od.order_no LIKE $2
+           AND od.party_so_date = (SELECT commitment_date FROM commitment_main WHERE id = $1)
+           AND od.customer_name = $3
+         WHERE cd.commitment_id = $1
+         ORDER BY cd.id ASC`,
+        [id, 'DO/%', commitment.party_name]
+      );
+
+      // Total processed
+      const totalProcessed = detailRes.rows.reduce(
+        (sum, r) => sum + (parseFloat(r.sku_weight_mt) || 0), 0
+      );
+
+      return {
+        success: true,
+        message: 'Commitment details fetched',
+        data: {
+          commitment,
+          details: detailRes.rows,
+          total_processed_mt: totalProcessed,
+          raise_count: detailRes.rows.length,
+        },
+      };
+    } catch (error) {
+      Logger.error('Error fetching commitment details', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new CommitmentPunchService();
