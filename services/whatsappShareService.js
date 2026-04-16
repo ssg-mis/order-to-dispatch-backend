@@ -116,6 +116,8 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
             .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
             .replace(/[\u2600-\u27FF]/gu, '')
             .replace(/\*/g, '')
+            .replace(/[\n\r\t]/g, ' ')   // WhatsApp rejects newlines/tabs in template params
+            .replace(/\s{5,}/g, '    ')  // WhatsApp rejects 5+ consecutive spaces
             .replace(/\s*\(.*?\)\s*$/, '')
             .trim() || fallback;
     };
