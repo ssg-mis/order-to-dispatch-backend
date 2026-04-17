@@ -135,6 +135,9 @@ class CommitmentPunchService {
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS order_type_regular_preapproval TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS remarks TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS upload_copy TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS future_period_date DATE`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS future_period_date DATE`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS order_no VARCHAR(50)`);
     } catch (err) {
       Logger.warn('Error in ensureColumns (safe to ignore if columns exist):', err.message);
     }
@@ -438,8 +441,8 @@ class CommitmentPunchService {
       // ── Step 5: Insert into commitment_details ─────────────────────
       const detailRes = await client.query(
         `INSERT INTO commitment_details
-          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name, sku_weight_mt, order_type_delivery_purpose, depo_name, advance_payment, advance_ammount_to_be_taken, payment_terms, is_order_through, order_type_regular_preapproval, start_date, end_date, actual_delivery_date, upload_copy, remarks)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name, sku_weight_mt, order_type_delivery_purpose, depo_name, advance_payment, advance_ammount_to_be_taken, payment_terms, is_order_through, order_type_regular_preapproval, start_date, end_date, actual_delivery_date, upload_copy, remarks, future_period_date, order_no)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
          RETURNING *`,
         [
           id,
@@ -467,6 +470,8 @@ class CommitmentPunchService {
           data.actual_delivery_date || null,
           data.upload_copy || null,
           data.remarks || null,
+          data.future_period_date || null,
+          orderNo,
         ]
       );
 
@@ -483,8 +488,8 @@ class CommitmentPunchService {
            order_type_delivery_purpose, depo_name, payment_terms, advance_amount, advance_payment_to_be_taken,
            start_date, end_date, delivery_date,
            is_order_through, order_type_regular_preapproval,
-           remarks, upload_copy)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)`,
+           remarks, upload_copy, future_period_date)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)`,
         [
           orderNo,
           orderTitleCase,
@@ -515,6 +520,7 @@ class CommitmentPunchService {
           data.order_type_regular_preapproval || null,
           data.remarks || null,
           data.upload_copy || null,
+          data.future_period_date || null,
         ]
       );
 
@@ -584,21 +590,21 @@ class CommitmentPunchService {
            cd.advance_ammount_to_be_taken,
            cd.payment_terms,
            cd.is_order_through,
-           cd.order_type_regular_preapproval,
-           cd.start_date,
-           cd.end_date,
            cd.actual_delivery_date,
            cd.remarks,
            cd.upload_copy,
-           od.order_no
+           COALESCE(cd.order_no, (
+             SELECT order_no FROM order_dispatch 
+             WHERE customer_name = $2
+             AND product_name = cd.sku 
+             AND order_quantity = cd.sku_quantity
+             AND party_so_date = (SELECT commitment_date FROM commitment_main WHERE id = $1)
+             LIMIT 1
+           )) as order_no
          FROM commitment_details cd
-         LEFT JOIN order_dispatch od
-           ON od.order_no LIKE $2
-           AND od.party_so_date = (SELECT commitment_date FROM commitment_main WHERE id = $1)
-           AND od.customer_name = $3
          WHERE cd.commitment_id = $1
          ORDER BY cd.id ASC`,
-        [id, 'DO/%', commitment.party_name]
+        [id, commitment.party_name]
       );
 
       // Total processed
