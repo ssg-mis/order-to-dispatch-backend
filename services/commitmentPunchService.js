@@ -138,6 +138,7 @@ class CommitmentPunchService {
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS future_period_date DATE`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS future_period_date DATE`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS order_no VARCHAR(50)`);
+      await client.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS ordercategory VARCHAR(50)`);
     } catch (err) {
       Logger.warn('Error in ensureColumns (safe to ignore if columns exist):', err.message);
     }
@@ -394,18 +395,17 @@ class CommitmentPunchService {
       if (skuQty <= 0) throw new Error('SKU quantity must be greater than 0');
 
       const skuRes = await client.query(
-        `SELECT oil_filling_per_unit, nos_per_main_uom
+        `SELECT sku_weight
          FROM sku_details
          WHERE sku_name = $1`,
         [data.sku]
       );
       if (skuRes.rows.length === 0) throw new Error(`SKU "${data.sku}" not found in master`);
       
-      const fillingPerUnit = parseFloat(skuRes.rows[0].oil_filling_per_unit) || 0;
-      const unitsPerCase = parseFloat(skuRes.rows[0].nos_per_main_uom) || 0;
+      const skuWeightKg = parseFloat(skuRes.rows[0].sku_weight) || 0;
       
-      // Formula: gm * units * qty / 1000 / 1000 = Metric Tons
-      const requestedMt = (fillingPerUnit * unitsPerCase * skuQty) / 1000000;
+      // Formula: (Weight in KG per box / 1000) * quantity = Metric Tons
+      const requestedMt = (skuWeightKg / 1000) * skuQty;
 
       // Calculate already processed MT for this commitment
       const processedRes = await client.query(
@@ -441,8 +441,8 @@ class CommitmentPunchService {
       // ── Step 5: Insert into commitment_details ─────────────────────
       const detailRes = await client.query(
         `INSERT INTO commitment_details
-          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name, sku_weight_mt, order_type_delivery_purpose, depo_name, advance_payment, advance_ammount_to_be_taken, payment_terms, is_order_through, order_type_regular_preapproval, start_date, end_date, actual_delivery_date, upload_copy, remarks, future_period_date, order_no)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+          (commitment_id, actual1, delay1, po_no, po_date, sku, sku_quantity, sku_rate, order_type, transport_type, broker_name, salesperson_name, sku_weight_mt, order_type_delivery_purpose, depo_name, advance_payment, advance_ammount_to_be_taken, payment_terms, is_order_through, order_type_regular_preapproval, start_date, end_date, actual_delivery_date, upload_copy, remarks, future_period_date, order_no, ordercategory)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
          RETURNING *`,
         [
           id,
@@ -472,6 +472,7 @@ class CommitmentPunchService {
           data.remarks || null,
           data.future_period_date || null,
           orderNo,
+          data.order_category || 'Sales',
         ]
       );
 
@@ -488,8 +489,9 @@ class CommitmentPunchService {
            order_type_delivery_purpose, depo_name, payment_terms, advance_amount, advance_payment_to_be_taken,
            start_date, end_date, delivery_date,
            is_order_through, order_type_regular_preapproval,
-           remarks, upload_copy, future_period_date)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)`,
+           remarks, upload_copy, future_period_date, order_category,
+           customer_contact_person_name, customer_contact_person_whatsapp_no, customer_address)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)`,
         [
           orderNo,
           orderTitleCase,
@@ -521,6 +523,10 @@ class CommitmentPunchService {
           data.remarks || null,
           data.upload_copy || null,
           data.future_period_date || null,
+          data.order_category || 'Sales',
+          cm.customer_contact_person_name || null,
+          cm.whatsapp_no || null,
+          cm.address || null,
         ]
       );
 
@@ -593,6 +599,7 @@ class CommitmentPunchService {
            cd.actual_delivery_date,
            cd.remarks,
            cd.upload_copy,
+           cd.ordercategory as order_category,
            COALESCE(cd.order_no, (
              SELECT order_no FROM order_dispatch 
              WHERE customer_name = $2

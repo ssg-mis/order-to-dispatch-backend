@@ -648,7 +648,7 @@ class OrderDispatchService {
         // Remove prefix to see what's left
         if (orderNo.startsWith(prefix)) {
           const suffixPart = orderNo.substring(prefix.length);
-          const match = suffixPart.match(/^([A-Z])/i);
+          const match = suffixPart.match(/([A-Z])/i);
           return match ? match[1].toUpperCase() : null;
         }
         return null;

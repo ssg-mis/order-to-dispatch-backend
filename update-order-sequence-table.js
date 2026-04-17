@@ -147,9 +147,12 @@ async function updateOrderNumberSystem() {
                   LIMIT 1;
                   
                   -- Count current session/transaction items already in order_dispatch
-                  SELECT COUNT(*) INTO existing_count
+                  -- Count unique letter suffixes used for this base order number (handles A, A-1, B etc.)
+                  SELECT COUNT(DISTINCT substring(order_no from length(base_order_no) + 1 for 1)) 
+                  INTO existing_count
                   FROM order_dispatch
-                  WHERE order_no LIKE base_order_no || '%';
+                  WHERE order_no LIKE base_order_no || '%'
+                  AND substring(order_no from length(base_order_no) + 1 for 1) ~ '[A-Za-z]';
                   
                   UPDATE current_order_batch SET last_used = CURRENT_TIMESTAMP WHERE fy_str = target_fy;
               END IF;

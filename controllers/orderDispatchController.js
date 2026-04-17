@@ -119,7 +119,7 @@ const getAllOrders = async (req, res, next) => {
  */
 const getOrderByNumber = async (req, res, next) => {
   try {
-    const { orderNo } = req.params;
+    const orderNo = req.query.orderNo || req.params.orderNo;
     
     const result = await orderDispatchService.getOrderByNumber(orderNo);
     
@@ -201,7 +201,7 @@ const deleteOrder = async (req, res, next) => {
  */
 const getOrderSuffixes = async (req, res, next) => {
   try {
-    const { prefix } = req.params;
+    const prefix = req.query.prefix || req.params.prefix;
     
     if (!prefix) {
       return ResponseUtil.badRequest(res, 'Prefix is required');

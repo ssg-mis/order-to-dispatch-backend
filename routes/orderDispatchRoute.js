@@ -39,23 +39,22 @@ router.get(
 );
 
 /**
- * @route   GET /api/v1/orders/suffixes/:prefix
- * @desc    Get all suffixes for a given order prefix (non-standard route, must be before /:orderNo)
+ * @route   GET /api/v1/orders/suffixes
+ * @desc    Get all suffixes for a given order prefix (passed via ?prefix=)
  * @access  Public
  */
 router.get(
-  '/suffixes/:prefix',
+  '/suffixes',
   orderDispatchController.getOrderSuffixes
 );
 
 /**
- * @route   GET /api/v1/orders/:orderNo
- * @desc    Get all rows for a specific order number (DO-001, etc.)
+ * @route   GET /api/v1/orders/lookup/number
+ * @desc    Get all rows for a specific order number (passed via ?orderNo=)
  * @access  Public
  */
 router.get(
-  '/:orderNo',
-  orderDispatchValidator.validateOrderNumber,
+  '/lookup/number',
   orderDispatchController.getOrderByNumber
 );
 
