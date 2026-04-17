@@ -9,7 +9,7 @@ async function getPendingInvoices(req, res) {
     const filters = {
       d_sr_number: req.query.d_sr_number,
       so_no: req.query.so_no,
-      party_name: req.query.party_name
+      party_name: req.query.party_name 
     };
 
     const pagination = {

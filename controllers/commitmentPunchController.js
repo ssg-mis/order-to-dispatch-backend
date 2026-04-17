@@ -4,6 +4,7 @@
 
 const commitmentPunchService = require('../services/commitmentPunchService');
 const { ResponseUtil, Logger } = require('../utils');
+const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
  * POST /api/v1/commitment-punch
@@ -74,6 +75,29 @@ const processCommitment = async (req, res, next) => {
   try {
     const { id } = req.params;
     const result = await commitmentPunchService.processCommitment(id, req.body);
+
+    // Trigger WhatsApp notification
+    try {
+      const orderData = req.body;
+      const targetPage = 'Approval of Order'; // Commitment process always creates orders pending in this stage
+      
+      const docDetails = {
+        stage: `🆕 *New Order (from Commitment)*`,
+        order_type: orderData.order_type || 'Regular',
+        do_date: orderData.actual_delivery_date || orderData.end_date,
+        do_number: result.data.order_no,
+        customer_name: result.data.detail?.customer_name, 
+        oil_type: orderData.sku, 
+        order_punch_remarks: orderData.remarks
+      };
+
+      if (req.pageAccessDetails) {
+        await whatsappShareService(docDetails, req.pageAccessDetails, targetPage);
+      }
+    } catch (notifyError) {
+      Logger.warn('Failed to send WhatsApp notification for commitment process', notifyError);
+    }
+
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     Logger.error('Error processing commitment', error);
