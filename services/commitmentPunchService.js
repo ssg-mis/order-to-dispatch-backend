@@ -134,6 +134,7 @@ class CommitmentPunchService {
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS is_order_through TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS order_type_regular_preapproval TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS remarks TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS order_punch_remarks TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS upload_copy TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS future_period_date DATE`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS future_period_date DATE`);
@@ -489,7 +490,7 @@ class CommitmentPunchService {
            order_type_delivery_purpose, depo_name, payment_terms, advance_amount, advance_payment_to_be_taken,
            start_date, end_date, delivery_date,
            is_order_through, order_type_regular_preapproval,
-           remarks, upload_copy, future_period_date, order_category,
+           order_punch_remarks, upload_copy, future_period_date, order_category,
            customer_contact_person_name, customer_contact_person_whatsapp_no, customer_address)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)`,
         [
