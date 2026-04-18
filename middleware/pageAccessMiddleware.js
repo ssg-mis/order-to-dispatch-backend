@@ -15,7 +15,7 @@ const pageAccess = async (req, res, next) => {
         }
 
         req.pageAccessDetails = result.rows;
-        console.log(req.pageAccessDetails);
+        // console.log(req.pageAccessDetails);
         next();
     }
     catch(error) {

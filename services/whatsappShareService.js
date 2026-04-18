@@ -18,10 +18,10 @@ const processQueue = async () => {
         const { apiUrl, payload, headers, resolve, reject } = messageQueue.shift();
         try {
             const response = await axios.post(apiUrl, payload, { headers });
-            
+
             // Delay between messages (e.g. 800ms) to ensure "one-by-one" requirement
             await new Promise(r => setTimeout(r, 800));
-            
+
             resolve(response.data);
         } catch (error) {
             console.error(`[WHATSAPP-QUEUE] Failed to send to ${payload.to}:`, error.response?.data || error.message);
@@ -46,8 +46,9 @@ const enqueueMessage = (apiUrl, payload, headers) => {
  * WhatsApp notification service using Meta WhatsApp Cloud API.
  */
 const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPage = '') => {
-    const accessToken   = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
+    const headerImageUrl = process.env.WHATSAPP_HEADER_IMAGE_URL?.trim();
 
     if (!accessToken || !phoneNumberId) {
         throw new Error("Meta WhatsApp Cloud API credentials not configured");
@@ -94,12 +95,12 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
             );
             if (result.rows.length > 0) {
                 const order = result.rows[0];
-                finalDocDetails.order_type          = finalDocDetails.order_type          || order.order_type;
-                finalDocDetails.do_date             = finalDocDetails.do_date             || order.delivery_date || order.party_so_date;
-                finalDocDetails.customer_name       = finalDocDetails.customer_name       || order.customer_name;
-                finalDocDetails.oil_type            = finalDocDetails.oil_type            || order.oil_type;
-                finalDocDetails.rate_15_kg          = finalDocDetails.rate_15_kg          || order.rate_per_15kg;
-                finalDocDetails.rate_1_ltr          = finalDocDetails.rate_1_ltr          || order.rate_per_ltr;
+                finalDocDetails.order_type = finalDocDetails.order_type || order.order_type;
+                finalDocDetails.do_date = finalDocDetails.do_date || order.delivery_date || order.party_so_date;
+                finalDocDetails.customer_name = finalDocDetails.customer_name || order.customer_name;
+                finalDocDetails.oil_type = finalDocDetails.oil_type || order.oil_type;
+                finalDocDetails.rate_15_kg = finalDocDetails.rate_15_kg || order.rate_per_15kg;
+                finalDocDetails.rate_1_ltr = finalDocDetails.rate_1_ltr || order.rate_per_ltr;
                 finalDocDetails.order_punch_remarks = finalDocDetails.order_punch_remarks || order.order_punch_remarks;
             }
         } catch (dbErr) {
@@ -107,9 +108,9 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
         }
     }
 
-    const orderTypeStr  = String(finalDocDetails?.order_type || '').toLowerCase().trim();
+    const orderTypeStr = String(finalDocDetails?.order_type || '').toLowerCase().trim();
     const isPreApproval = orderTypeStr === 'pre approval' || orderTypeStr === 'pre-approval';
-    const templateName  = isPreApproval ? 'order_preapproval_notify' : 'order_dispatch_notify';
+    const templateName = isPreApproval ? 'order_preapproval_notify' : 'order_dispatch_notify';
 
     const cleanParam = (val, fallback = '-') => {
         if (!val) return fallback;
@@ -124,34 +125,51 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
     };
 
     const buildTemplateComponents = () => {
-        if (isPreApproval) {
-            return [{
-                type: "body",
+        const components = [];
+        
+        // Add header image if configured
+        if (headerImageUrl) {
+            components.push({
+                type: "header",
                 parameters: [
-                    { type: "text", text: cleanParam(finalDocDetails?.stage,              'Pre-Approval') },
-                    { type: "text", text: cleanParam(finalDocDetails?.order_type,         'Pre Approval') },
-                    { type: "text", text: cleanParam(finalDocDetails?.do_date,            '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.do_number,          '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.customer_name,      '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.oil_type,           '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.rate_15_kg,         '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.rate_1_ltr,         '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.order_punch_remarks,'-') },
+                    {
+                        type: "image",
+                        image: { link: headerImageUrl }
+                    }
                 ]
-            }];
-        } else {
-            return [{
-                type: "body",
-                parameters: [
-                    { type: "text", text: cleanParam(finalDocDetails?.stage,              'New Order') },
-                    { type: "text", text: cleanParam(finalDocDetails?.order_type,         '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.do_date,            '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.do_number,          '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.customer_name,      '-') },
-                    { type: "text", text: cleanParam(finalDocDetails?.order_punch_remarks,'-') },
-                ]
-            }];
+            });
         }
+
+        if (isPreApproval) {
+            components.push({
+                type: "body",
+                parameters: [
+                    { type: "text", text: cleanParam(finalDocDetails?.stage, 'Pre-Approval') },
+                    { type: "text", text: cleanParam(finalDocDetails?.order_type, 'Pre Approval') },
+                    { type: "text", text: cleanParam(finalDocDetails?.do_date, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.do_number, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.customer_name, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.oil_type, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.rate_15_kg, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.rate_1_ltr, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.order_punch_remarks, '-') },
+                ]
+            });
+        } else {
+            components.push({
+                type: "body",
+                parameters: [
+                    { type: "text", text: cleanParam(finalDocDetails?.stage, 'New Order') },
+                    { type: "text", text: cleanParam(finalDocDetails?.order_type, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.do_date, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.do_number, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.customer_name, '-') },
+                    { type: "text", text: cleanParam(finalDocDetails?.order_punch_remarks, '-') },
+                ]
+            });
+        }
+        
+        return components;
     };
 
     let lastResponse = null;
@@ -161,7 +179,7 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
         if (!recipient.phone_no) continue;
 
         let hasModifyAccess = false;
-        
+
         // If it's a manual share (recipient.has_access is set) or targetPage is empty, skip access check
         if (recipient.has_access || !targetPage) {
             hasModifyAccess = true;
@@ -169,7 +187,7 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
             const normalizedTarget = targetPage.toLowerCase().trim();
             let accessData = recipient.page_access;
             if (typeof accessData === 'string') {
-                try { accessData = JSON.parse(accessData); } 
+                try { accessData = JSON.parse(accessData); }
                 catch (e) { accessData = accessData.split(',').map(s => s.trim()); }
             }
 
@@ -201,10 +219,10 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
                 };
 
                 console.log(`[WHATSAPP] ⚡ Enqueuing "${templateName}" to "${recipient.username}" (${cleanPhone})...`);
-                
+
                 // Use the sequential queue
                 lastResponse = await enqueueMessage(apiUrl, payload, headers);
-                
+
                 console.log(`[WHATSAPP] ✅ Message sent to "${recipient.username}" (${cleanPhone})`);
             } catch (err) {
                 console.error(`[WHATSAPP] ❌ Failed for "${recipient.username}" (${cleanPhone}):`, err.message);
