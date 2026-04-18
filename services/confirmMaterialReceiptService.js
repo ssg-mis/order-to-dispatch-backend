@@ -37,7 +37,7 @@ class ConfirmMaterialReceiptService {
 
       if (filters.so_no) {
         // Enhanced search: match so_no OR party_name if only one search string is given
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex})`);
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.invoice_no ILIKE $${paramIndex})`);
         queryParams.push(`%${filters.so_no}%`);
         paramIndex++;
       } else if (filters.party_name) {
@@ -157,7 +157,7 @@ class ConfirmMaterialReceiptService {
 
       if (filters.so_no) {
         // Enhanced search: match so_no OR party_name if only one search string is given
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex})`);
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.invoice_no ILIKE $${paramIndex})`);
         queryParams.push(`%${filters.so_no}%`);
         paramIndex++;
       } else if (filters.party_name) {
