@@ -188,10 +188,34 @@ const updateTransferDetails = async (req, res, next) => {
   }
 };
 
+/**
+ * Pre-close quantity for an order
+ * @route POST /api/v1/dispatch-planning/preclose/:id
+ */
+const precloseDispatchPlanning = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { preclose_qty, username } = req.body;
+
+    Logger.info(`[DISPATCH PLANNING] Pre-closing quantity for order ID: ${id}`, { preclose_qty, username });
+
+    const result = await dispatchPlanningService.precloseDispatchPlanning(id, { preclose_qty, username });
+
+    return ResponseUtil.success(res, result.data, result.message);
+  } catch (error) {
+    Logger.error('[DISPATCH PLANNING] Error in precloseDispatchPlanning controller', error);
+    if (error.message.includes('not found')) {
+      return ResponseUtil.notFound(res, error.message);
+    }
+    next(error);
+  }
+};
+
 module.exports = {
   getPendingDispatches,
   getDispatchHistory,
   submitDispatchPlanning,
   revertDispatchPlanning,
-  updateTransferDetails
+  updateTransferDetails,
+  precloseDispatchPlanning
 };

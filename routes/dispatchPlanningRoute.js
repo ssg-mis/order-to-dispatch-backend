@@ -67,4 +67,15 @@ router.post(
   dispatchPlanningController.updateTransferDetails
 );
 
+/**
+ * @route   POST /api/v1/dispatch-planning/preclose/:id
+ * @desc    Pre-close quantity for an order
+ * @access  Public
+ * @body    { preclose_qty: number, username: string }
+ */
+router.post(
+  '/preclose/:id',
+  dispatchPlanningController.precloseDispatchPlanning
+);
+
 module.exports = router;

@@ -287,6 +287,21 @@ class OrderApprovalService {
 
       const updatedOrder = updateResult.rows[0];
 
+      // REJECTION REVERSAL LOGIC:
+      // If order is rejected and customer is "Reliance", remove the deduction from commitment_details
+      const isRejected = updatedOrder.overall_status_of_order === false || updatedOrder.overall_status_of_order === 'false';
+      const isReliance = updatedOrder.customer_name && updatedOrder.customer_name.toLowerCase().includes('reliance');
+
+      if (isRejected && isReliance) {
+        Logger.info(`[REJECTION REVERSAL] Order ${updatedOrder.order_no} for Reliance rejected. Reverting commitment quantity.`);
+        
+        // Deleting from commitment_details reverts PO Raised (MT) and Remaining Balance (MT)
+        const deleteCdQuery = `DELETE FROM commitment_details WHERE order_no = $1`;
+        await client.query(deleteCdQuery, [updatedOrder.order_no]);
+        
+        Logger.info(`[REJECTION REVERSAL] Successfully deleted commitment_details record for order: ${updatedOrder.order_no}`);
+      }
+
       // SKIP STAGE 4 logic:
       // Only skip Dispatch Planning (Stage 4) if order_category is 'Stock Transfer'
       // All other categories (Sales, null, etc.) follow the normal process

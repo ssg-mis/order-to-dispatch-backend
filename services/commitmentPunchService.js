@@ -139,7 +139,9 @@ class CommitmentPunchService {
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS future_period_date DATE`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS future_period_date DATE`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS order_no VARCHAR(50)`);
-      await client.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS ordercategory VARCHAR(50)`);
+      await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS ordercategory VARCHAR(50)`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS preclose_qty NUMERIC(15,4) DEFAULT 0`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS preclose_user VARCHAR(255)`);
     } catch (err) {
       Logger.warn('Error in ensureColumns (safe to ignore if columns exist):', err.message);
     }

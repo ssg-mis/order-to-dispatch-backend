@@ -563,7 +563,131 @@ class DispatchPlanningService {
       throw error;
     }
   }
+
+  /**
+   * Pre-close quantity for an order
+   * @param {number} orderId - Order ID from order_dispatch table
+   * @param {Object} data - Pre-close data { preclose_qty, username }
+   * @returns {Promise<Object>} Status of pre-close
+   */
+  async precloseDispatchPlanning(orderId, data = {}) {
+    const client = await db.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const precloseQty = parseFloat(data.preclose_qty || 0);
+      if (precloseQty <= 0) {
+        throw new Error('Preclose quantity must be greater than 0');
+      }
+
+      // 1. Get order details
+      const orderQuery = `
+        SELECT 
+          order_no, customer_name, product_name, 
+          approval_qty, order_quantity, remaining_dispatch_qty
+        FROM order_dispatch 
+        WHERE id = $1
+      `;
+      const orderResult = await client.query(orderQuery, [orderId]);
+
+      if (orderResult.rows.length === 0) {
+        throw new Error('Order not found');
+      }
+
+      const order = orderResult.rows[0];
+
+      // 2. Validate quantity
+      const currentAvailable = order.remaining_dispatch_qty !== null
+        ? parseFloat(order.remaining_dispatch_qty)
+        : parseFloat(order.approval_qty || order.order_quantity || 0);
+
+      if (precloseQty > currentAvailable + 0.0001) {
+        throw new Error(`Preclose quantity (${precloseQty}) cannot exceed remaining quantity (${currentAvailable})`);
+      }
+
+      // 3. Update order_dispatch
+      const newRemainingQty = Math.max(0, currentAvailable - precloseQty);
+      
+      // If full remaining is preclosed, mark as complete (actual_3 = NOW())
+      let updateQuery;
+      let updateParams;
+
+      if (newRemainingQty <= 0) {
+        updateQuery = `
+          UPDATE order_dispatch 
+          SET 
+            remaining_dispatch_qty = 0, 
+            actual_3 = NOW(), 
+            preclose_user = $1,
+            preclose_qty = COALESCE(preclose_qty, 0) + $2
+          WHERE id = $3
+        `;
+        updateParams = [data.username || null, precloseQty, orderId];
+      } else {
+        updateQuery = `
+          UPDATE order_dispatch 
+          SET 
+            remaining_dispatch_qty = $1, 
+            preclose_user = $2,
+            preclose_qty = COALESCE(preclose_qty, 0) + $3
+          WHERE id = $4
+        `;
+        updateParams = [newRemainingQty, data.username || null, precloseQty, orderId];
+      }
+
+      await client.query(updateQuery, updateParams);
+
+      // 4. Reversal logic for Reliance
+      if (order.customer_name && order.customer_name.toLowerCase().includes('reliance')) {
+        Logger.info(`[PRECLOSE] Processing Reliance reversal for order ${order.order_no}, Qty: ${precloseQty}`);
+        
+        // Find commitment_details record
+        const cdQuery = `SELECT id, sku_weight_mt, sku_quantity FROM commitment_details WHERE order_no = $1`;
+        const cdResult = await client.query(cdQuery, [order.order_no]);
+
+        if (cdResult.rows.length > 0) {
+          const cd = cdResult.rows[0];
+          const totalCdQty = parseFloat(cd.sku_quantity) || 1; // avoid div by 0
+          const totalCdMt = parseFloat(cd.sku_weight_mt) || 0;
+          
+          const ratio = totalCdMt / totalCdQty;
+          const mtToReturn = ratio * precloseQty;
+
+          Logger.info(`[PRECLOSE] Reverting ${mtToReturn} MT and ${precloseQty} Boxes to commitment for order ${order.order_no}`);
+          
+          const updateCdQuery = `
+            UPDATE commitment_details 
+            SET 
+              sku_weight_mt = GREATEST(0, sku_weight_mt - $1),
+              sku_quantity = GREATEST(0, sku_quantity - $2)
+            WHERE id = $3
+          `;
+          await client.query(updateCdQuery, [mtToReturn, precloseQty, cd.id]);
+        } else {
+          Logger.warn(`[PRECLOSE] No commitment_details found for Reliance order ${order.order_no}. Reversal skipped.`);
+        }
+      }
+
+      await client.query('COMMIT');
+
+      return {
+        success: true,
+        message: 'Quantity preclosed successfully',
+        data: {
+          orderNo: order.order_no,
+          preclosedQty: precloseQty,
+          newRemainingQty
+        }
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      Logger.error('Error preclosing quantity in dispatch planning', error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 module.exports = new DispatchPlanningService();
-
