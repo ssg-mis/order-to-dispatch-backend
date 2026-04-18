@@ -35,8 +35,9 @@ const createOrder = async (req, res, next) => {
     
     // Trigger WhatsApp notifications for the relevant stage
     try {
-      const orderTypeLower = orderData.order_type?.toLowerCase() || '';
-      const targetPage = orderTypeLower === 'pre approval' ? 'Pre Approval' : 'Approval of Order';
+      const orderTypeLower = (orderData.order_type || '').toLowerCase().trim();
+      const isPreApproval = orderTypeLower === 'pre approval' || orderTypeLower === 'pre-approval';
+      const targetPage = isPreApproval ? 'Pre Approval' : 'Approval of Order';
       const docDetails = {
         stage: `🆕 *New Order Punched*\n📍 *Pending in ${targetPage}*`,
         order_type: orderData.order_type,

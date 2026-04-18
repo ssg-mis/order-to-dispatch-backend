@@ -46,8 +46,8 @@ const enqueueMessage = (apiUrl, payload, headers) => {
  * WhatsApp notification service using Meta WhatsApp Cloud API.
  */
 const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPage = '') => {
-    const accessToken   = process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken   = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
 
     if (!accessToken || !phoneNumberId) {
         throw new Error("Meta WhatsApp Cloud API credentials not configured");
@@ -107,7 +107,8 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
         }
     }
 
-    const isPreApproval = finalDocDetails?.order_type?.toLowerCase() === 'pre approval';
+    const orderTypeStr  = String(finalDocDetails?.order_type || '').toLowerCase().trim();
+    const isPreApproval = orderTypeStr === 'pre approval' || orderTypeStr === 'pre-approval';
     const templateName  = isPreApproval ? 'order_preapproval_notify' : 'order_dispatch_notify';
 
     const cleanParam = (val, fallback = '-') => {
@@ -115,7 +116,7 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
         return String(val)
             .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
             .replace(/[\u2600-\u27FF]/gu, '')
-            .replace(/\*/g, '')
+            // Removed .replace(/\*/g, '') to allow basic bolding if supported by template
             .replace(/[\n\r\t]/g, ' ')   // WhatsApp rejects newlines/tabs in template params
             .replace(/\s{5,}/g, '    ')  // WhatsApp rejects 5+ consecutive spaces
             .replace(/\s*\(.*?\)\s*$/, '')
@@ -183,7 +184,7 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
         }
 
         if (hasModifyAccess) {
-            let cleanPhone = recipient.phone_no.replace(/[\s\+\-\(\)]/g, '');
+            let cleanPhone = String(recipient.phone_no || '').replace(/[\s\+\-\(\)]/g, '');
             if (cleanPhone.length === 10) cleanPhone = `91${cleanPhone}`;
 
             try {
