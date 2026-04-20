@@ -58,6 +58,7 @@ class GateOutService {
       const dataQuery = `
         SELECT 
           lrc.*,
+          lrc.actual_1 AS lrc_actual_1,
           od.order_type_delivery_purpose,
           od.start_date,
           od.end_date,
@@ -164,6 +165,7 @@ class GateOutService {
       const dataQuery = `
         SELECT 
           lrc.*,
+          lrc.actual_1 AS lrc_actual_1,
           od.order_type_delivery_purpose,
           od.start_date,
           od.end_date,
