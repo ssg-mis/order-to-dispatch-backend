@@ -83,6 +83,7 @@ class GateOutService {
           od.sku_name,
           od.approval_qty,
           od.order_punch_remarks,
+          od.actual_1,
           od.transfer,
           od.bill_company_name,
           sd.nos_per_main_uom
