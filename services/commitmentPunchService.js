@@ -17,28 +17,46 @@ const { Logger } = require('../utils');
 
 class CommitmentPunchService {
   /**
-   * Generate financial year string (e.g., "26-27") based on current date.
-   * Financial year: April to March.
+   * Calculate Financial Year and determine if it's a legacy date.
+   * Legacy is defined as before 2026-04-01.
+   * @param {string|Date} date - Date to calculate FY for
+   * @returns {{ fy: string, isLegacy: boolean }}
    */
-  getFinancialYear() {
-    const now = new Date();
-    const month = now.getMonth();
-    const year = now.getFullYear();
+  getFinancialYearDetails(date) {
+    const d = date ? new Date(date) : new Date();
+    // Legacy format for dates before April 1, 2026
+    const isLegacy = d < new Date('2026-04-01');
+    
+    // Financial year: April to March.
+    const month = d.getMonth();
+    const year = d.getFullYear();
     const fyStart = month >= 3 ? year : year - 1;
     const fyEnd = fyStart + 1;
-    return `${String(fyStart).slice(-2)}-${String(fyEnd).slice(-2)}`;
+    const fy = `${String(fyStart).slice(-2)}-${String(fyEnd).slice(-2)}`;
+    
+    return { fy, isLegacy };
   }
 
   /**
-   * Generate next commitment number: CN/YY-YY/001
+   * Generate next commitment number:
+   *  - Legacy (before 2026-04-01): COMM-01
+   *  - New FY (from 2026-04-01): COMM/YY-YY/001
    */
-  async generateCommitmentNo(client) {
-    const fy = this.getFinancialYear();
-    const prefix = `COMM/${fy}/`;
+  async generateCommitmentNo(client, commitmentDate) {
+    const { fy, isLegacy } = this.getFinancialYearDetails(commitmentDate);
+    
+    let prefix, padding;
+    if (isLegacy) {
+      prefix = `COMM-`;
+      padding = 2;
+    } else {
+      prefix = `COMM/${fy}/`;
+      padding = 3;
+    }
 
     const result = await client.query(
       `SELECT commitment_no FROM commitment_main
-       WHERE commitment_no LIKE $1
+        WHERE commitment_no LIKE $1
        ORDER BY commitment_no DESC LIMIT 1`,
       [`${prefix}%`]
     );
@@ -47,9 +65,10 @@ class CommitmentPunchService {
     if (result.rows.length > 0) {
       const last = result.rows[0].commitment_no;
       const seqPart = last.replace(prefix, '').replace(/[A-Z]+$/, '');
-      nextSeq = parseInt(seqPart, 10) + 1;
+      const parsed = parseInt(seqPart, 10);
+      if (!isNaN(parsed)) nextSeq = parsed + 1;
     }
-    return `${prefix}${String(nextSeq).padStart(3, '0')}`;
+    return `${prefix}${String(nextSeq).padStart(padding, '0')}`;
   }
 
   /**
@@ -159,11 +178,26 @@ class CommitmentPunchService {
    * @param {string|null} existingBase - If already assigned, reuse it; otherwise generate new
    * @returns {{ orderNo: string, baseOrderNo: string }}
    */
-  async generateOrderNo(client) {
-    const fy = this.getFinancialYear(); // e.g. "26-27"
-    const prefix = `DO/${fy}/`;
+  /**
+   * Generate DO order number.
+   * Matches the logic in the database trigger generate_order_number().
+   * @param {object} client - DB client (within transaction)
+   * @param {string|Date} date - Date to determine FY format
+   * @returns {{ orderNo: string }}
+   */
+  async generateOrderNo(client, date) {
+    const { fy, isLegacy } = this.getFinancialYearDetails(date);
+    
+    let prefix, padding;
+    if (isLegacy) {
+      prefix = `DO-`;
+      padding = 3;
+    } else {
+      prefix = `DO/${fy}/`;
+      padding = 4;
+    }
 
-    // Find the latest order_no — includes old letter-suffixed ones like DO/26-27/0063A
+    // Find the latest order_no using this specific prefix
     const latestRes = await client.query(
       `SELECT order_no FROM order_dispatch
        WHERE order_no LIKE $1
@@ -174,15 +208,13 @@ class CommitmentPunchService {
 
     let nextNum = 1;
     if (latestRes.rows.length > 0) {
-      // Strip any trailing letters: DO/26-27/0063A → "0063" → 63
       const latestNo = latestRes.rows[0].order_no;
       const numPart = latestNo.replace(prefix, '').replace(/[A-Za-z]+$/, '');
       const parsed = parseInt(numPart, 10);
       if (!isNaN(parsed)) nextNum = parsed + 1;
     }
 
-    // Format: DO/26-27/0064 (4-digit zero-padded) — no letter suffix
-    const orderNo = `${prefix}${String(nextNum).padStart(4, '0')}`;
+    const orderNo = `${prefix}${String(nextNum).padStart(padding, '0')}`;
     return { orderNo };
   }
 
@@ -195,7 +227,7 @@ class CommitmentPunchService {
     try {
       await client.query('BEGIN');
 
-      const baseNo = await this.generateCommitmentNo(client);
+      const baseNo = await this.generateCommitmentNo(client, data.commitment_date);
       const inserted = [];
       const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
       const items = rows.length > 0 ? rows : [data];
@@ -436,7 +468,8 @@ class CommitmentPunchService {
 
       // ── Step 4: Generate DO order number ──────────────────────────
       // Always generate a fresh sequential number for each process submission
-      const { orderNo } = await this.generateOrderNo(client);
+      // Use the commitment date for the order FY format, consistent with trigger logic
+      const { orderNo } = await this.generateOrderNo(client, cm.commitment_date);
 
       const orderTitleCase = data.order_type ? (data.order_type.charAt(0).toUpperCase() + data.order_type.slice(1)) : 'Regular';
       const transportTitleCase = data.transport_type ? (data.transport_type.charAt(0).toUpperCase() + data.transport_type.slice(1)) : (cm.transport_type || 'Ex-Depot');
