@@ -119,11 +119,10 @@ class CommitmentPunchService {
    */
   async ensureColumns() {
     try {
-      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS base_order_no VARCHAR(50)`);
-      // Customer contact info on commitment_main
-      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS customer_contact_person_name TEXT`);
-      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS whatsapp_no VARCHAR(15)`);
       await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS address TEXT`);
+      
+      // Increase precision for quantity columns
+      await db.query(`ALTER TABLE commitment_main ALTER COLUMN quantity TYPE NUMERIC(15,4)`);
       // commitment_details columns
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS broker_name VARCHAR(255)`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
@@ -141,11 +140,14 @@ class CommitmentPunchService {
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS upload_copy TEXT`);
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS remarks TEXT`);
       // order_dispatch columns
-      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS salesperson_name VARCHAR(255)`);
-      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS order_type_delivery_purpose TEXT`);
-      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS depo_name TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS payment_terms TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS advance_amount NUMERIC(15,2)`);
+      
+      // Increase precision for order_dispatch quantity columns
+      await db.query(`ALTER TABLE order_dispatch ALTER COLUMN order_quantity TYPE NUMERIC(15,4)`);
+      await db.query(`ALTER TABLE order_dispatch ALTER COLUMN remaining_dispatch_qty TYPE NUMERIC(15,4)`);
+      
+      console.log('✅ Database schema updated for decimal precision.');
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS advance_payment_to_be_taken TEXT`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS start_date DATE`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS end_date DATE`);

@@ -101,6 +101,7 @@ class OrderDispatch {
     this.ship_address = data.ship_address || null;
     this.freight_rate = data.freight_rate || 0;
     this.order_category = data.order_category || 'Sales';
+    this.gst = data.gst || null;
   }
 
   /**
@@ -174,7 +175,8 @@ class OrderDispatch {
       ship_company_name: this.ship_company_name,
       ship_address: this.ship_address,
       freight_rate: this.freight_rate,
-      order_category: this.order_category
+      order_category: this.order_category,
+      gst: this.gst
     };
   }
 }
