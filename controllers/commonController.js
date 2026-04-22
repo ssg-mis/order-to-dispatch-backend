@@ -51,10 +51,28 @@ const getNextId = async (req, res, next) => {
         prefix = 'SLM';
         minDigits = 3; // SLM101
         break;
+      case 'vehicle':
+        tableName = 'vehicle_master';
+        idColumn = 'vehicle_master_id';
+        prefix = 'VICL';
+        minDigits = 3; // VICL001
+        break;
+      case 'driver':
+        tableName = 'driver_master';
+        idColumn = 'driver_master_id';
+        prefix = 'DRIV';
+        minDigits = 3; // DRIV001
+        break;
+      case 'transport':
+        tableName = 'transport_master';
+        idColumn = 'transport_master_id';
+        prefix = 'TRSP';
+        minDigits = 3; // TRSP001
+        break;
       default:
         return res.status(400).json({
           success: false,
-          message: 'Invalid type. Allowed: customer, depot, broker, sku, salesperson'
+          message: 'Invalid type. Allowed: customer, depot, broker, sku, salesperson, vehicle, driver, transport'
         });
     }
 
@@ -89,7 +107,13 @@ const getNextId = async (req, res, next) => {
       nextNum = startNum;
     }
 
-    const nextId = `${prefix}${nextNum}`;
+    // Handle padding for cases like VICL001
+    let nextId;
+    if (type === 'vehicle' || type === 'driver' || type === 'transport') {
+      nextId = `${prefix}${String(nextNum).padStart(3, '0')}`;
+    } else {
+      nextId = `${prefix}${nextNum}`;
+    }
 
     res.json({
       success: true,

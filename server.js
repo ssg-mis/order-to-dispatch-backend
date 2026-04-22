@@ -108,10 +108,12 @@ app.use('/api/v1/depots', depotRoute);
 app.use('/api/v1/brokers', brokerRoute);
 app.use('/api/v1/salespersons', require('./routes/salespersonRoute'));
 app.use('/api/v1/sku-details', require('./routes/skuDetailsRoute'));
+app.use('/api/v1/vehicle-master', require('./routes/vehicleMasterRoute'));
+app.use('/api/v1/driver-master', require('./routes/driverMasterRoute'));
+app.use('/api/v1/transport-master', require('./routes/transportMasterRoute'));
 app.use('/api/v1/common', require('./routes/commonRoute'));
 app.use('/api/v1/reports', require('./routes/reportsRoute'));
 app.use('/api/v1/commitment-punch', require('./routes/commitmentPunchRoutes'));
-
 
 // Test database connection
 const db = require('./config/db');
