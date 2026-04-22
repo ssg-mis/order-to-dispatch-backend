@@ -48,7 +48,7 @@ class CommitmentPunchService {
     let prefix, padding;
     if (isLegacy) {
       prefix = `COMM-`;
-      padding = 2;
+      padding = 3;
     } else {
       prefix = `COMM/${fy}/`;
       padding = 3;
