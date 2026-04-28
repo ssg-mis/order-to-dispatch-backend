@@ -35,6 +35,12 @@ class MakeInvoiceService {
         paramIndex++;
       }
 
+      if (filters.search) {
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.truck_no ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.search}%`);
+        paramIndex++;
+      }
+
       if (filters.so_no) {
         whereConditions.push(`lrc.so_no = $${paramIndex}`);
         queryParams.push(filters.so_no);
@@ -56,7 +62,7 @@ class MakeInvoiceService {
 
       // Get data with JOIN to order_dispatch for complete order details
       const dataQuery = `
-        SELECT 
+        SELECT
           lrc.*,
           lrc.actual_1 AS lrc_actual_1,
           od.order_type_delivery_purpose,
@@ -89,10 +95,20 @@ class MakeInvoiceService {
           od.transfer,
           od.bill_company_name,
           od.freight_rate,
-          sd.nos_per_main_uom
+          od.party_credit_status,
+          sd.nos_per_main_uom,
+          COALESCE(lrc.fitness, vm.fitness_image) AS fitness,
+          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
+          COALESCE(lrc.polution, vm.pollution_image) AS polution,
+          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
+          COALESCE(lrc.insurance, vm.insurance_image) AS insurance,
+          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
+          COALESCE(lrc.tax_copy, vm.road_tax_image) AS tax_copy,
+          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
+        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
         ${whereClause}
         ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -141,6 +157,12 @@ class MakeInvoiceService {
       if (filters.d_sr_number) {
         whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
         queryParams.push(filters.d_sr_number);
+        paramIndex++;
+      }
+
+      if (filters.search) {
+        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.truck_no ILIKE $${paramIndex})`);
+        queryParams.push(`%${filters.search}%`);
         paramIndex++;
       }
 
@@ -232,8 +254,12 @@ class MakeInvoiceService {
    * @returns {Promise<Object>} Updated record
    */
   async submitInvoice(id, data = {}) {
+    const client = await db.connect();
     try {
+      await client.query('BEGIN');
       Logger.info(`Submitting invoice for ID: ${id}`, { data });
+
+      const cd_amount = parseFloat(data.cd_amount) || 0;
 
       const updateData = {
         actual_5: new Date().toISOString(),
@@ -244,6 +270,7 @@ class MakeInvoiceService {
         qty: data.qty || null,
         bill_amount: data.bill_amount || null,
         make_invoice_user: data.username || null,
+        cd_amount: cd_amount
       };
 
       const fields = Object.keys(updateData);
@@ -255,15 +282,33 @@ class MakeInvoiceService {
         UPDATE lift_receiving_confirmation 
         SET ${setClause}
         WHERE id = $${fields.length + 1}
-        RETURNING *
+        RETURNING so_no
       `;
 
-      const result = await db.query(query, [...values, id]);
+      const result = await client.query(query, [...values, id]);
 
       if (result.rows.length === 0) {
         throw new Error('Record not found');
       }
 
+      const so_no = result.rows[0].so_no;
+
+      // Update order_dispatch table: minus cd_amount from rate columns
+      if (cd_amount > 0 && so_no) {
+        const updateRatesQuery = `
+          UPDATE order_dispatch
+          SET 
+            final_rate = CASE WHEN final_rate IS NOT NULL THEN final_rate - $1 ELSE NULL END,
+            rate_of_material = CASE WHEN rate_of_material IS NOT NULL THEN rate_of_material - $1 ELSE NULL END,
+            rate_per_15kg = CASE WHEN rate_per_15kg IS NOT NULL THEN rate_per_15kg - $1 ELSE NULL END,
+            rate_per_ltr = CASE WHEN rate_per_ltr IS NOT NULL THEN rate_per_ltr - $1 ELSE NULL END
+          WHERE order_no = $2
+        `;
+        await client.query(updateRatesQuery, [cd_amount, so_no]);
+        Logger.info(`Adjusted rates in order_dispatch for order: ${so_no} by minus ${cd_amount}`);
+      }
+
+      await client.query('COMMIT');
       Logger.info(`Invoice submitted successfully for ID: ${id}`);
 
       return {
@@ -272,8 +317,11 @@ class MakeInvoiceService {
         data: result.rows[0]
       };
     } catch (error) {
+      await client.query('ROLLBACK');
       Logger.error('Error submitting invoice', error);
       throw error;
+    } finally {
+      client.release();
     }
   }
 

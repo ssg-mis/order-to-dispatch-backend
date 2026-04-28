@@ -380,7 +380,31 @@ class CommitmentPunchService {
             SELECT SUM(cd.sku_weight_mt)
             FROM commitment_details cd
             WHERE cd.commitment_id = cm.id
-          ), 0) AS remaining_qty
+          ), 0) AS remaining_qty,
+          COALESCE((
+            SELECT SUM(
+              CASE 
+                WHEN od.order_quantity > 0 THEN 
+                  ((od.order_quantity - od.remaining_dispatch_qty) / od.order_quantity) * cd.sku_weight_mt
+                ELSE 0 
+              END
+            )
+            FROM commitment_details cd
+            JOIN order_dispatch od ON od.order_no = cd.order_no
+            WHERE cd.commitment_id = cm.id
+          ), 0) AS delivery_qty,
+          COALESCE((
+            SELECT SUM(
+              CASE 
+                WHEN od.order_quantity > 0 THEN 
+                  (od.remaining_dispatch_qty / od.order_quantity) * cd.sku_weight_mt
+                ELSE 0 
+              END
+            )
+            FROM commitment_details cd
+            JOIN order_dispatch od ON od.order_no = cd.order_no
+            WHERE cd.commitment_id = cm.id
+          ), 0) AS po_pending_qty
         FROM commitment_main cm
         ${whereClause}
         ORDER BY cm.timestamp DESC, cm.commitment_no ASC

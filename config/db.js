@@ -2,9 +2,13 @@
  * PostgreSQL Database Connection Pool
  */
 
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 const config = require('../config');
 const { Logger } = require('../utils');
+
+// Force DATE (OID 1082) to be returned as a string "YYYY-MM-DD" 
+// to prevent timezone shifting (e.g., Apr 29 becoming Apr 28 18:30 UTC)
+types.setTypeParser(1082, (val) => val);
 
 // Create connection pool with keepalive and better error handling
 const pool = new Pool({

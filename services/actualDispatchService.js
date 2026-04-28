@@ -109,6 +109,8 @@ class ActualDispatchService {
       const dataQuery = `
         SELECT 
           lrc.*,
+          EXISTS(SELECT 1 FROM gate_in_records gi WHERE gi.order_key = ${baseDoExp}) as has_gate_in,
+          EXISTS(SELECT 1 FROM dispatch_drafts dd WHERE dd.order_key = ${baseDoExp}) as has_draft,
           od.order_type_delivery_purpose,
           od.start_date,
           od.end_date,
@@ -305,7 +307,7 @@ class ActualDispatchService {
         actual_1: new Date().toISOString(),
         product_name_1: data.product_name_1 || null,
         actual_dispatch_user: data.username || null,
-        actual_qty_dispatch: data.actual_qty_dispatch || null,
+        actual_qty_dispatch: parseFloat(data.actual_qty_dispatch) || 0,
         check_status: data.check_status || null,
         remarks: data.remarks || null,
         fitness: data.fitness || null,
@@ -314,25 +316,42 @@ class ActualDispatchService {
         polution: data.polution || null,
         permit1: data.permit1 || null,
         permit2_out_state: data.permit2_out_state || null,
-        actual_qty: data.actual_qty || null,
+        actual_qty: parseFloat(data.actual_qty) || 0,
         weightment_slip_copy: data.weightment_slip_copy || null,
         rst_no: data.rst_no || null,
-        gross_weight: data.gross_weight || null,
-        tare_weight: data.tare_weight || null,
-        net_weight: data.net_weight || null,
+        gross_weight: parseFloat(data.gross_weight) || 0,
+        tare_weight: parseFloat(data.tare_weight) || 0,
+        net_weight: parseFloat(data.net_weight) || 0,
         transporter_name: data.transporter_name || null,
         reason_of_difference_in_weight_if_any_speacefic: data.reason_of_difference_in_weight_if_any_speacefic || null,
         truck_no: data.truck_no || null,
         vehicle_no_plate_image: data.vehicle_no_plate_image || null,
-        vehicle_number: data.vehicle_number || null, // Added since it's in their provided schema
-        extra_weight: data.extra_weight || 0,
+        vehicle_number: data.vehicle_number || null,
+        extra_weight: parseFloat(data.extra_weight) || 0,
         fitness_end_date: data.fitness_end_date || null,
         insurance_end_date: data.insurance_end_date || null,
         tax_end_date: data.tax_end_date || null,
         pollution_end_date: data.pollution_end_date || null,
         permit1_end_date: data.permit1_end_date || null,
         permit2_end_date: data.permit2_end_date || null,
-        difference: data.difference || 0,
+        difference: parseFloat(data.difference) || 0,
+        registration_no: data.registration_no || null,
+        vehicle_type: data.vehicle_type || null,
+        rto: data.rto || null,
+        road_tax: data.road_tax || null,
+        passing_weight: parseFloat(data.passing_weight) || 0,
+        gvw: parseFloat(data.gvw) || 0,
+        ulw: parseFloat(data.ulw) || 0,
+        vehicle_overload_remarks: data.vehicle_overload_remarks || null,
+        freight_rate_type: data.freight_rate_type || null,
+        freight_amount: parseFloat(data.freight_amount) || 0,
+        driver_name: data.driver_name || null,
+        driver_contact_no: data.driver_contact_no || null,
+        driving_license_no: data.driving_license_no || null,
+        dl_valid_upto: data.dl_valid_upto || null,
+        cash_bank: parseFloat(data.cash_bank) || 0,
+        diesel_advance: parseFloat(data.diesel_advance) || 0,
+        bhada: parseFloat(data.bhada) || 0,
         security_guard_status: null,
         revert_security_remarks: null
       };
@@ -422,7 +441,8 @@ class ActualDispatchService {
         return { success: true, message: 'Actual dispatch submitted successfully', data: result.rows[0] };
       } catch (error) {
         await client.query('ROLLBACK');
-        throw error;
+        Logger.error('[ACTUAL DISPATCH] Transaction error:', error);
+        throw new Error(`Database error: ${error.message} (Field check: ${Object.keys(updateData).join(', ')})`);
       } finally {
         client.release();
       }

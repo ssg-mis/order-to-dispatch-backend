@@ -44,6 +44,7 @@ class OrderDispatch {
     this.customer_contact_person_whatsapp_no = data.customer_contact_person_whatsapp_no || null;
 
     this.customer_address = data.customer_address || null;
+    this.customer_delivery_address = data.customer_delivery_address || null;
 
     this.payment_terms = data.payment_terms || null;
     this.advance_payment_to_be_taken = data.advance_payment_to_be_taken || false;
@@ -137,6 +138,7 @@ class OrderDispatch {
       customer_contact_person_name: this.customer_contact_person_name,
       customer_contact_person_whatsapp_no: this.customer_contact_person_whatsapp_no,
       customer_address: this.customer_address,
+      customer_delivery_address: this.customer_delivery_address,
       payment_terms: this.payment_terms,
       advance_payment_to_be_taken: this.advance_payment_to_be_taken,
       advance_amount: this.advance_amount,

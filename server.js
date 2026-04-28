@@ -114,6 +114,8 @@ app.use('/api/v1/transport-master', require('./routes/transportMasterRoute'));
 app.use('/api/v1/common', require('./routes/commonRoute'));
 app.use('/api/v1/reports', require('./routes/reportsRoute'));
 app.use('/api/v1/commitment-punch', require('./routes/commitmentPunchRoutes'));
+app.use('/api/v1/drafts', require('./routes/draftRoute'));
+app.use('/api/v1/gate-in', require('./routes/gateInRoute'));
 
 // Test database connection
 const db = require('./config/db');
