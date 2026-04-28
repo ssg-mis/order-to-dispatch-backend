@@ -254,7 +254,7 @@ class MakeInvoiceService {
    * @returns {Promise<Object>} Updated record
    */
   async submitInvoice(id, data = {}) {
-    const client = await db.connect();
+    const client = await db.getClient();
     try {
       await client.query('BEGIN');
       Logger.info(`Submitting invoice for ID: ${id}`, { data });
