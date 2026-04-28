@@ -325,6 +325,7 @@ class UserService {
   getPageAccessOptions() {
     return [
       'Dashboard',
+      'Owner Dashboard',
       'Order Punch',
       'Pre Approval',
       'Approval of Order',
