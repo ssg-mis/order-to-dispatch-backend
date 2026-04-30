@@ -349,9 +349,9 @@ class ActualDispatchService {
         driver_contact_no: data.driver_contact_no || null,
         driving_license_no: data.driving_license_no || null,
         dl_valid_upto: data.dl_valid_upto || null,
-        cash_bank: parseFloat(data.cash_bank) || 0,
-        diesel_advance: parseFloat(data.diesel_advance) || 0,
-        bhada: parseFloat(data.bhada) || 0,
+        advance_bhada_bank: parseFloat(data.cash_bank) || 0,
+        advance_bhada_diesel_advance: parseFloat(data.diesel_advance) || 0,
+        advance_bhada_cash: parseFloat(data.bhada) || 0,
         security_guard_status: null,
         revert_security_remarks: null
       };
