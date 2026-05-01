@@ -326,6 +326,7 @@ class UserService {
     return [
       'Dashboard',
       'Owner Dashboard',
+      'Commitment Punch',
       'Order Punch',
       'Pre Approval',
       'Approval of Order',
@@ -339,6 +340,11 @@ class UserService {
       'Gate Out',
       'Confirm Material Receipt',
       'Damage Adjustment',
+      'Gate In',
+      'Variable Parameters',
+      'Set Turn Around Time',
+      'Master',
+      'Reports',
       'Settings'
     ];
   }

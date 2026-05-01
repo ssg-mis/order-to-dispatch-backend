@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS process_stages (
+    id SERIAL PRIMARY KEY,
+    stage_name VARCHAR(100) NOT NULL,
+    stage_time INTERVAL NOT NULL,
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
