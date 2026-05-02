@@ -63,7 +63,13 @@ class SecurityGuardApprovalService {
       const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
 
-      const baseDoExp = `COALESCE(substring(lrc.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), lrc.so_no)`;
+      const groupKeyExp = `
+        CONCAT(
+          COALESCE(lrc.actual_1::date::text, 'no-date'),
+          '|',
+          COALESCE(NULLIF(upper(trim(lrc.truck_no)), ''), 'NO-TRUCK')
+        )
+      `;
 
       let whereConditions = ['lrc.planned_4 IS NOT NULL', 'lrc.actual_4 IS NULL'];
       let queryParams = [];
@@ -93,21 +99,21 @@ class SecurityGuardApprovalService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Step 1: Get paginated Base DOs using CTE for grouping
+      // Step 1: Get paginated groups by actual dispatch date and vehicle number
       const groupQuery = `
-        SELECT ${baseDoExp} as base_do, MIN(lrc.timestamp) as sort_date
+        SELECT ${groupKeyExp} as group_key, MAX(lrc.actual_1) as sort_date
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
-        GROUP BY base_do
+        GROUP BY group_key
         ORDER BY sort_date DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 
       const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
-      const baseDos = groupResult.rows.map(r => r.base_do);
+      const groupKeys = groupResult.rows.map(r => r.group_key);
 
-      if (baseDos.length === 0) {
+      if (groupKeys.length === 0) {
         return {
           success: true,
           data: [],
@@ -117,7 +123,7 @@ class SecurityGuardApprovalService {
 
       // Step 2: Get total count of groups
       const countQuery = `
-        SELECT COUNT(DISTINCT ${baseDoExp}) as total
+        SELECT COUNT(DISTINCT ${groupKeyExp}) as total
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
@@ -125,8 +131,37 @@ class SecurityGuardApprovalService {
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].total);
 
-      // Step 3: Fetch all rows for these Base DOs
+      let dataWhereConditions = ['lrc.planned_4 IS NOT NULL', 'lrc.actual_4 IS NULL'];
+      let dataParams = [groupKeys];
+      let dataParamIndex = 2;
+
+      if (filters.search) {
+        dataWhereConditions.push(`(lrc.so_no ILIKE $${dataParamIndex} OR lrc.party_name ILIKE $${dataParamIndex} OR lrc.truck_no ILIKE $${dataParamIndex})`);
+        dataParams.push(`%${filters.search}%`);
+        dataParamIndex++;
+      }
+
+      if (filters.customer_name) {
+        dataWhereConditions.push(`lrc.party_name = $${dataParamIndex}`);
+        dataParams.push(filters.customer_name);
+        dataParamIndex++;
+      }
+
+      if (filters.depo_names && Array.isArray(filters.depo_names)) {
+        if (filters.depo_names.length === 0) {
+          dataWhereConditions.push('1=0');
+        } else {
+          dataWhereConditions.push(`od.depo_name = ANY($${dataParamIndex})`);
+          dataParams.push(filters.depo_names);
+          dataParamIndex++;
+        }
+      }
+
+      // Step 3: Fetch all rows for these actual-date + vehicle groups
       const dataQuery = `
+        WITH selected_groups AS (
+          SELECT unnest($1::text[]) AS group_key
+        )
         SELECT 
           lrc.*,
           od.order_type_delivery_purpose,
@@ -159,12 +194,12 @@ class SecurityGuardApprovalService {
           od.bill_company_name
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
-        WHERE ${baseDoExp} = ANY($1)
-          AND lrc.planned_4 IS NOT NULL AND lrc.actual_4 IS NULL
+        JOIN selected_groups sg ON ${groupKeyExp} = sg.group_key
+        WHERE ${dataWhereConditions.join(' AND ')}
         ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
       `;
 
-      const dataResult = await db.query(dataQuery, [baseDos]);
+      const dataResult = await db.query(dataQuery, dataParams);
 
       return {
         success: true,
