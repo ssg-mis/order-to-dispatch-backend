@@ -258,11 +258,13 @@ class MakeInvoiceService {
     try {
       await client.query('BEGIN');
       Logger.info(`Submitting invoice for ID: ${id}`, { data });
+      await this.ensurePlanned6TriggerUsesTat(client);
 
       const cd_amount = parseFloat(data.cd_amount) || 0;
 
       const updateData = {
         actual_5: new Date().toISOString(),
+        planned_6: await this.getPlannedTimestamp(client, 'Check Invoice'),
         bill_type: data.bill_type || null,
         invoice_date: data.invoice_date || null,
         invoice_no: data.invoice_no || null,
@@ -323,6 +325,61 @@ class MakeInvoiceService {
     } finally {
       client.release();
     }
+  }
+
+  async getPlannedTimestamp(client, stageName) {
+    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedStageName = normalizeStageName(stageName);
+    const stageAliases = {
+      checkinvoice: ['checkinvoice'],
+    };
+    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
+
+    const result = await client.query(
+      `
+        SELECT (
+          CURRENT_TIMESTAMP + COALESCE(
+            (
+              SELECT stage_time
+              FROM process_stages
+              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT 1
+            ),
+            INTERVAL '0'
+          )
+        ) AS planned_at
+      `,
+      [normalizedStageNames]
+    );
+
+    const plannedAt = result.rows[0]?.planned_at;
+    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
+  }
+
+  async ensurePlanned6TriggerUsesTat(client) {
+    await client.query(`
+      CREATE OR REPLACE FUNCTION set_planned_6_from_actual_5()
+      RETURNS TRIGGER AS $$
+      DECLARE
+          check_invoice_tat INTERVAL;
+      BEGIN
+          SELECT stage_time
+          INTO check_invoice_tat
+          FROM process_stages
+          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = 'checkinvoice'
+          ORDER BY submitted_at DESC, id DESC
+          LIMIT 1;
+
+          IF NEW.actual_5 IS NOT NULL
+             AND (TG_OP = 'INSERT' OR OLD.actual_5 IS DISTINCT FROM NEW.actual_5) THEN
+              NEW.planned_6 := NEW.actual_5::timestamptz + COALESCE(check_invoice_tat, INTERVAL '0');
+          END IF;
+
+          RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
   }
 
   /**
