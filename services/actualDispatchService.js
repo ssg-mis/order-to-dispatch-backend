@@ -380,14 +380,13 @@ class ActualDispatchService {
         const soNo = originalDispatch.so_no;
         const orderCategory = (originalDispatch.order_category || "").toUpperCase();
         const depotName = (originalDispatch.depo_name || "").toUpperCase();
+        await this.ensurePlanned4TriggerUsesTat(client);
+        updateData.planned_4 = await this.getPlannedTimestamp(client, 'Security Guard Approval');
 
         // SPECIAL RULE: Skip Security Guard Approval only if depot is NOT "BANARI"
         if (depotName !== "BANARI") {
           const now = new Date().toISOString();
-          updateData.planned_4 = now;
           updateData.actual_4 = now;
-        } else {
-          updateData.planned_4 = await this.getPlannedTimestamp(client, 'Security Guard Approval');
         }
 
         // Step 2: Update lift_receiving_confirmation
@@ -482,6 +481,31 @@ class ActualDispatchService {
 
     const plannedAt = result.rows[0]?.planned_at;
     return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
+  }
+
+  async ensurePlanned4TriggerUsesTat(client) {
+    await client.query(`
+      CREATE OR REPLACE FUNCTION set_planned_4_from_actual_1()
+      RETURNS TRIGGER AS $$
+      DECLARE
+          security_guard_tat INTERVAL;
+      BEGIN
+          SELECT stage_time
+          INTO security_guard_tat
+          FROM process_stages
+          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') IN ('securityguardapproval', 'securityapproval')
+          ORDER BY submitted_at DESC, id DESC
+          LIMIT 1;
+
+          IF NEW.actual_1 IS NOT NULL
+             AND (TG_OP = 'INSERT' OR OLD.actual_1 IS DISTINCT FROM NEW.actual_1) THEN
+              NEW.planned_4 := NEW.actual_1::timestamptz + COALESCE(security_guard_tat, INTERVAL '0');
+          END IF;
+
+          RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
   }
 
   /**
