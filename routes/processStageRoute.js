@@ -4,5 +4,6 @@ const processStageController = require('../controllers/processStageController');
 
 router.get('/', processStageController.getAllProcessStages);
 router.post('/', processStageController.saveProcessStage);
+router.delete('/:id', processStageController.deleteProcessStage);
 
 module.exports = router;

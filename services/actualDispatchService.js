@@ -386,6 +386,8 @@ class ActualDispatchService {
           const now = new Date().toISOString();
           updateData.planned_4 = now;
           updateData.actual_4 = now;
+        } else {
+          updateData.planned_4 = await this.getPlannedTimestamp(client, 'Security Guard Approval');
         }
 
         // Step 2: Update lift_receiving_confirmation
@@ -450,6 +452,36 @@ class ActualDispatchService {
       Logger.error('Error submitting actual dispatch', error);
       throw error;
     }
+  }
+
+  async getPlannedTimestamp(client, stageName) {
+    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedStageName = normalizeStageName(stageName);
+    const stageAliases = {
+      securityguardapproval: ['securityguardapproval', 'securityapproval'],
+    };
+    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
+
+    const result = await client.query(
+      `
+        SELECT (
+          CURRENT_TIMESTAMP + COALESCE(
+            (
+              SELECT stage_time
+              FROM process_stages
+              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT 1
+            ),
+            INTERVAL '0'
+          )
+        ) AS planned_at
+      `,
+      [normalizedStageNames]
+    );
+
+    const plannedAt = result.rows[0]?.planned_at;
+    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
   }
 
   /**

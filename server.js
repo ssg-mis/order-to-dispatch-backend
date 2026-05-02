@@ -120,10 +120,88 @@ app.use('/api/v1/drafts', require('./routes/draftRoute'));
 app.use('/api/v1/gate-in', require('./routes/gateInRoute'));
 app.use('/api/v1/process-stages', require('./routes/processStageRoute'));
 
-// Test database connection
+// Test database connection and apply trigger fixes
 const db = require('./config/db');
 db.query('SELECT NOW()')
-  .then(() => Logger.info('✅ Database connected successfully'))
+  .then(async () => {
+    Logger.info('✅ Database connected successfully');
+
+    // Auto-fix: update set_planned_by_order_type trigger to use correct TAT stage names
+    // pre-approval → planned_1 uses 'Pre Approval' TAT
+    // regular      → planned_2 uses 'Approval of Order' TAT
+    try {
+      await db.query(`
+        CREATE OR REPLACE FUNCTION set_planned_by_order_type()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            pre_approval_tat INTERVAL;
+            approval_of_order_tat INTERVAL;
+        BEGIN
+            SELECT stage_time INTO pre_approval_tat
+            FROM process_stages
+            WHERE lower(replace(trim(stage_name), ' ', '')) = 'preapproval'
+            ORDER BY submitted_at DESC, id DESC
+            LIMIT 1;
+
+            SELECT stage_time INTO approval_of_order_tat
+            FROM process_stages
+            WHERE lower(replace(trim(stage_name), ' ', '')) = 'approvaloforder'
+            ORDER BY submitted_at DESC, id DESC
+            LIMIT 1;
+
+            IF lower(trim(NEW.order_type)) = 'regular' THEN
+                NEW.planned_2 := (CURRENT_TIMESTAMP + COALESCE(approval_of_order_tat, INTERVAL '0'))::TEXT;
+            ELSIF lower(trim(NEW.order_type)) IN ('pre approval', 'pre-approval') THEN
+                NEW.planned_1 := (CURRENT_TIMESTAMP + COALESCE(pre_approval_tat, INTERVAL '0'))::TEXT;
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      Logger.info('✅ set_planned_by_order_type trigger function updated');
+    } catch (err) {
+      Logger.warn('⚠️ Could not update set_planned_by_order_type function (non-fatal)', err.message);
+    }
+
+    try {
+      await db.query(`
+        CREATE OR REPLACE FUNCTION set_planned2_from_actual1()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            approval_of_order_tat INTERVAL;
+        BEGIN
+            SELECT stage_time
+            INTO approval_of_order_tat
+            FROM process_stages
+            WHERE lower(replace(trim(stage_name), ' ', '')) = 'approvaloforder'
+            ORDER BY submitted_at DESC, id DESC
+            LIMIT 1;
+
+            IF NEW.actual_1 IS NOT NULL
+               AND NEW.approval_qty IS NOT NULL
+               AND NEW.approval_qty > 0 THEN
+
+                NEW.planned_2 := (NEW.actual_1::timestamptz + COALESCE(approval_of_order_tat, INTERVAL '0'))::TEXT;
+
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      Logger.info('✅ set_planned2_from_actual1 trigger function updated');
+    } catch (err) {
+      Logger.warn('⚠️ Could not update set_planned2_from_actual1 function (non-fatal)', err.message);
+    }
+
+    try {
+      await db.query(`DROP TRIGGER IF EXISTS trg_set_planned_3 ON order_dispatch`);
+      Logger.info('✅ trg_set_planned_3 trigger removed; approval submit sets planned_3 with Dispatch Planning TAT');
+    } catch (err) {
+      Logger.warn('⚠️ Could not remove trg_set_planned_3 trigger (non-fatal)', err.message);
+    }
+  })
   .catch((err) => Logger.error('❌ Database connection failed', err));
 
 

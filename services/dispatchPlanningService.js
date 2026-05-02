@@ -259,15 +259,16 @@ class DispatchPlanningService {
       const seqResult = await client.query(seqQuery);
       const dsrCount = seqResult.rows[0].val;
       const dsrNumber = `DSR-${String(dsrCount).padStart(3, '0')}`;
+      const planned1 = await this.getPlannedTimestamp(client, 'Actual Dispatch');
 
       // Insert into lift_receiving_confirmation
       const insertQuery = `
         INSERT INTO lift_receiving_confirmation (
           timestamp, d_sr_number, so_no, party_name, 
           product_name, qty_to_be_dispatched, 
-          type_of_transporting, dispatch_from, processid
+          type_of_transporting, dispatch_from, processid, planned_1
         ) VALUES (
-          NOW(), $1, $2, $3, $4, $5, $6, $7, $8
+          NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9
         ) RETURNING *
       `;
 
@@ -283,7 +284,8 @@ class DispatchPlanningService {
         dispatchQty,
         order.type_of_transporting,
         data.dispatch_from || null,
-        order.processid || null
+        order.processid || null,
+        planned1
       ];
 
       const insertResult = await client.query(insertQuery, insertParams);
@@ -382,6 +384,36 @@ class DispatchPlanningService {
     } finally {
       client.release();
     }
+  }
+
+  async getPlannedTimestamp(client, stageName) {
+    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedStageName = normalizeStageName(stageName);
+    const stageAliases = {
+      actualdispatch: ['actualdispatch'],
+    };
+    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
+
+    const result = await client.query(
+      `
+        SELECT (
+          CURRENT_TIMESTAMP + COALESCE(
+            (
+              SELECT stage_time
+              FROM process_stages
+              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT 1
+            ),
+            INTERVAL '0'
+          )
+        ) AS planned_at
+      `,
+      [normalizedStageNames]
+    );
+
+    const plannedAt = result.rows[0]?.planned_at;
+    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
   }
 
   /**

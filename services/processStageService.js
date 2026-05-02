@@ -100,6 +100,23 @@ class ProcessStageService {
       throw error;
     }
   }
+
+  async delete(id) {
+    try {
+      await this.ensureTable();
+      const result = await db.query(
+        'DELETE FROM process_stages WHERE id = $1 RETURNING id',
+        [id]
+      );
+      if (result.rows.length === 0) {
+        throw new Error('Process stage not found');
+      }
+      return result.rows[0];
+    } catch (error) {
+      Logger.error('Error deleting process stage', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new ProcessStageService();

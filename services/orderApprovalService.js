@@ -256,11 +256,14 @@ class OrderApprovalService {
     try {
       await client.query('BEGIN');
       Logger.info(`submitApproval called for ID: ${id}`, { data });
+      await this.disablePlanned3Trigger(client);
+      const planned3 = await this.getPlannedTimestamp(client, 'Dispatch Planning');
 
       const updateData = {
+        ...data,
         actual_2: new Date().toISOString(),
+        planned_3: planned3,
         order_approval_user: data.username || null,
-        ...data
       };
 
       // Remove username/remark from data to avoid column errors
@@ -285,7 +288,7 @@ class OrderApprovalService {
         throw new Error('Order not found');
       }
 
-      const updatedOrder = updateResult.rows[0];
+      let updatedOrder = updateResult.rows[0];
 
       // REJECTION REVERSAL LOGIC:
       // If order is rejected and customer is "Reliance", remove the deduction from commitment_details
@@ -371,6 +374,16 @@ class OrderApprovalService {
         };
       }
 
+      const isApproved = updatedOrder.overall_status_of_order === true ||
+        String(updatedOrder.overall_status_of_order).toLowerCase().trim() === 'true' ||
+        String(updatedOrder.overall_status_of_order).toLowerCase().trim() === 'approved' ||
+        String(updatedOrder.overall_status_of_order).toLowerCase().trim() === 'approve';
+      const planned3Result = await client.query(
+        `UPDATE order_dispatch SET planned_3 = $1 WHERE id = $2 RETURNING ${approvalFields}`,
+        [isApproved ? planned3 : null, id]
+      );
+      updatedOrder = planned3Result.rows[0] || updatedOrder;
+
       // Normal process: commit Stage 3 update, order goes to Dispatch Planning (Stage 4)
       await client.query('COMMIT');
 
@@ -387,6 +400,40 @@ class OrderApprovalService {
     } finally {
       client.release();
     }
+  }
+
+  async getPlannedTimestamp(client, stageName) {
+    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedStageName = normalizeStageName(stageName);
+    const stageAliases = {
+      dispatchplanning: ['dispatchplanning', 'dispatchplaning'],
+    };
+    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
+
+    const result = await client.query(
+      `
+        SELECT (
+          CURRENT_TIMESTAMP + COALESCE(
+            (
+              SELECT stage_time
+              FROM process_stages
+              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT 1
+            ),
+            INTERVAL '0'
+          )
+        ) AS planned_at
+      `,
+      [normalizedStageNames]
+    );
+
+    const plannedAt = result.rows[0]?.planned_at;
+    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
+  }
+
+  async disablePlanned3Trigger(client) {
+    await client.query(`DROP TRIGGER IF EXISTS trg_set_planned_3 ON order_dispatch`);
   }
 
   /**

@@ -39,7 +39,27 @@ const saveProcessStage = async (req, res) => {
   }
 };
 
+const deleteProcessStage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await processStageService.delete(id);
+    res.json({
+      success: true,
+      message: 'Process stage deleted successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    Logger.error('Error in deleteProcessStage controller', error);
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to delete process stage',
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
 module.exports = {
   getAllProcessStages,
-  saveProcessStage
+  saveProcessStage,
+  deleteProcessStage
 };
