@@ -256,11 +256,16 @@ class ConfirmMaterialReceiptService {
    * @returns {Promise<Object>} Updated record
    */
   async submitReceipt(id, data = {}) {
+    const client = await db.getClient();
     try {
+      await client.query('BEGIN');
       Logger.info(`Submitting material receipt for ID: ${id}`, { data });
+      await this.ensurePlanned9TriggerUsesTat(client);
+      const isDamaged = String(data.damage_status || '').toLowerCase().trim() === 'damaged';
 
       const updateData = {
         actual_8: new Date().toISOString(),
+        planned_9: isDamaged ? await this.getPlannedTimestamp(client, 'Damage Adjustment') : null,
         material_receipt_user: data.username || null,
         material_received_date: data.material_received_date || null,
         received_image_proof: data.received_image_proof || null,
@@ -284,12 +289,13 @@ class ConfirmMaterialReceiptService {
         RETURNING *
       `;
 
-      const result = await db.query(query, [...values, id]);
+      const result = await client.query(query, [...values, id]);
 
       if (result.rows.length === 0) {
         throw new Error('Record not found');
       }
 
+      await client.query('COMMIT');
       Logger.info(`Material receipt submitted successfully for ID: ${id}`);
 
       return {
@@ -298,9 +304,70 @@ class ConfirmMaterialReceiptService {
         data: result.rows[0]
       };
     } catch (error) {
+      await client.query('ROLLBACK');
       Logger.error('Error submitting material receipt', error);
       throw error;
+    } finally {
+      client.release();
     }
+  }
+
+  async getPlannedTimestamp(client, stageName) {
+    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedStageName = normalizeStageName(stageName);
+    const stageAliases = {
+      damageadjustment: ['damageadjustment'],
+    };
+    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
+
+    const result = await client.query(
+      `
+        SELECT (
+          CURRENT_TIMESTAMP + COALESCE(
+            (
+              SELECT stage_time
+              FROM process_stages
+              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT 1
+            ),
+            INTERVAL '0'
+          )
+        ) AS planned_at
+      `,
+      [normalizedStageNames]
+    );
+
+    const plannedAt = result.rows[0]?.planned_at;
+    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
+  }
+
+  async ensurePlanned9TriggerUsesTat(client) {
+    await client.query(`
+      CREATE OR REPLACE FUNCTION set_planned_9_from_actual_8()
+      RETURNS TRIGGER AS $$
+      DECLARE
+          damage_adjustment_tat INTERVAL;
+      BEGIN
+          SELECT stage_time
+          INTO damage_adjustment_tat
+          FROM process_stages
+          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = 'damageadjustment'
+          ORDER BY submitted_at DESC, id DESC
+          LIMIT 1;
+
+          IF NEW.actual_8 IS NOT NULL
+             AND (TG_OP = 'INSERT' OR OLD.actual_8 IS DISTINCT FROM NEW.actual_8)
+             AND lower(trim(COALESCE(NEW.damage_status, ''))) = 'damaged' THEN
+              NEW.planned_9 := NEW.actual_8::timestamptz + COALESCE(damage_adjustment_tat, INTERVAL '0');
+          ELSIF lower(trim(COALESCE(NEW.damage_status, ''))) <> 'damaged' THEN
+              NEW.planned_9 := NULL;
+          END IF;
+
+          RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
   }
 }
 

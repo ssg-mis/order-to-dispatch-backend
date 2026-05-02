@@ -230,11 +230,15 @@ class GateOutService {
    * @returns {Promise<Object>} Updated record
    */
   async submitGateOut(id, data = {}) {
+    const client = await db.getClient();
     try {
+      await client.query('BEGIN');
       Logger.info(`Submitting gate out for ID: ${id}`, { data });
+      await this.ensurePlanned8TriggerUsesTat(client);
 
       const updateData = {
         actual_7: new Date().toISOString(), // Gate Out Timestamp
+        planned_8: await this.getPlannedTimestamp(client, 'Confirm Material Receipt'),
         gate_out_user: data.username || null,
         gate_pass_copy: data.gate_pass || null, // Renamed column
         vehicle_loaded_image: data.vehicle_image || null // Renamed column
@@ -252,12 +256,13 @@ class GateOutService {
         RETURNING *
       `;
 
-      const result = await db.query(query, [...values, id]);
+      const result = await client.query(query, [...values, id]);
 
       if (result.rows.length === 0) {
         throw new Error('Record not found');
       }
 
+      await client.query('COMMIT');
       Logger.info(`Gate out submitted successfully for ID: ${id}`);
 
       return {
@@ -266,9 +271,67 @@ class GateOutService {
         data: result.rows[0]
       };
     } catch (error) {
+      await client.query('ROLLBACK');
       Logger.error('Error submitting gate out', error);
       throw error;
+    } finally {
+      client.release();
     }
+  }
+
+  async getPlannedTimestamp(client, stageName) {
+    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedStageName = normalizeStageName(stageName);
+    const stageAliases = {
+      confirmmaterialreceipt: ['confirmmaterialreceipt', 'materialreceipt'],
+    };
+    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
+
+    const result = await client.query(
+      `
+        SELECT (
+          CURRENT_TIMESTAMP + COALESCE(
+            (
+              SELECT stage_time
+              FROM process_stages
+              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT 1
+            ),
+            INTERVAL '0'
+          )
+        ) AS planned_at
+      `,
+      [normalizedStageNames]
+    );
+
+    const plannedAt = result.rows[0]?.planned_at;
+    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
+  }
+
+  async ensurePlanned8TriggerUsesTat(client) {
+    await client.query(`
+      CREATE OR REPLACE FUNCTION set_planned_8_from_actual_7()
+      RETURNS TRIGGER AS $$
+      DECLARE
+          receipt_tat INTERVAL;
+      BEGIN
+          SELECT stage_time
+          INTO receipt_tat
+          FROM process_stages
+          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') IN ('confirmmaterialreceipt', 'materialreceipt')
+          ORDER BY submitted_at DESC, id DESC
+          LIMIT 1;
+
+          IF NEW.actual_7 IS NOT NULL
+             AND (TG_OP = 'INSERT' OR OLD.actual_7 IS DISTINCT FROM NEW.actual_7) THEN
+              NEW.planned_8 := NEW.actual_7::timestamptz + COALESCE(receipt_tat, INTERVAL '0');
+          END IF;
+
+          RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
   }
 }
 

@@ -313,6 +313,65 @@ db.query('SELECT NOW()')
     } catch (err) {
       Logger.warn('⚠️ Could not update set_planned_7_from_actual_6 function (non-fatal)', err.message);
     }
+
+    try {
+      await db.query(`
+        CREATE OR REPLACE FUNCTION set_planned_8_from_actual_7()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            receipt_tat INTERVAL;
+        BEGIN
+            SELECT stage_time
+            INTO receipt_tat
+            FROM process_stages
+            WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') IN ('confirmmaterialreceipt', 'materialreceipt')
+            ORDER BY submitted_at DESC, id DESC
+            LIMIT 1;
+
+            IF NEW.actual_7 IS NOT NULL
+               AND (TG_OP = 'INSERT' OR OLD.actual_7 IS DISTINCT FROM NEW.actual_7) THEN
+                NEW.planned_8 := NEW.actual_7::timestamptz + COALESCE(receipt_tat, INTERVAL '0');
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      Logger.info('✅ set_planned_8_from_actual_7 trigger function updated');
+    } catch (err) {
+      Logger.warn('⚠️ Could not update set_planned_8_from_actual_7 function (non-fatal)', err.message);
+    }
+
+    try {
+      await db.query(`
+        CREATE OR REPLACE FUNCTION set_planned_9_from_actual_8()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            damage_adjustment_tat INTERVAL;
+        BEGIN
+            SELECT stage_time
+            INTO damage_adjustment_tat
+            FROM process_stages
+            WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = 'damageadjustment'
+            ORDER BY submitted_at DESC, id DESC
+            LIMIT 1;
+
+            IF NEW.actual_8 IS NOT NULL
+               AND (TG_OP = 'INSERT' OR OLD.actual_8 IS DISTINCT FROM NEW.actual_8)
+               AND lower(trim(COALESCE(NEW.damage_status, ''))) = 'damaged' THEN
+                NEW.planned_9 := NEW.actual_8::timestamptz + COALESCE(damage_adjustment_tat, INTERVAL '0');
+            ELSIF lower(trim(COALESCE(NEW.damage_status, ''))) <> 'damaged' THEN
+                NEW.planned_9 := NULL;
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      Logger.info('✅ set_planned_9_from_actual_8 trigger function updated');
+    } catch (err) {
+      Logger.warn('⚠️ Could not update set_planned_9_from_actual_8 function (non-fatal)', err.message);
+    }
   })
   .catch((err) => Logger.error('❌ Database connection failed', err));
 
