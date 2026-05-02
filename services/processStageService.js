@@ -101,6 +101,46 @@ class ProcessStageService {
     }
   }
 
+  async update(id, data) {
+    try {
+      await this.ensureTable();
+
+      const stageName = String(data.stage_name || '').trim();
+      const totalMinutes = Number(data.total_minutes);
+
+      if (!ALLOWED_STAGES.includes(stageName)) {
+        throw new Error('Invalid stage name');
+      }
+
+      if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) {
+        throw new Error('Stage time must be greater than zero');
+      }
+
+      const result = await db.query(
+        `
+          UPDATE process_stages
+          SET stage_name = $1,
+              stage_time = ($2::int * INTERVAL '1 minute'),
+              submitted_at = CURRENT_TIMESTAMP
+          WHERE id = $3
+          RETURNING id, stage_name, stage_time::text AS stage_time,
+            EXTRACT(EPOCH FROM stage_time)::integer AS stage_time_seconds,
+            submitted_at
+        `,
+        [stageName, totalMinutes, id]
+      );
+
+      if (result.rows.length === 0) {
+        throw new Error('Process stage not found');
+      }
+
+      return result.rows[0];
+    } catch (error) {
+      Logger.error('Error updating process stage', error);
+      throw error;
+    }
+  }
+
   async delete(id) {
     try {
       await this.ensureTable();

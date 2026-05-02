@@ -39,6 +39,26 @@ const saveProcessStage = async (req, res) => {
   }
 };
 
+const updateProcessStage = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const stage = await processStageService.update(id, req.body);
+    res.json({
+      success: true,
+      message: 'Process stage TAT updated successfully',
+      data: stage,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    Logger.error('Error in updateProcessStage controller', error);
+    res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to update process stage TAT',
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
 const deleteProcessStage = async (req, res) => {
   try {
     const { id } = req.params;
@@ -61,5 +81,6 @@ const deleteProcessStage = async (req, res) => {
 module.exports = {
   getAllProcessStages,
   saveProcessStage,
+  updateProcessStage,
   deleteProcessStage
 };
