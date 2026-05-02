@@ -229,8 +229,11 @@ class CheckInvoiceService {
    * @returns {Promise<Object>} Updated record
    */
   async submitCheck(id, data = {}) {
+    const client = await db.getClient();
     try {
+      await client.query('BEGIN');
       Logger.info(`Submitting check invoice for ID: ${id}`, { data });
+      await this.ensurePlanned7TriggerUsesTat(client);
 
       // Step 1: Fetch depository information to check for skipping Stage 11 (Gate Out)
       const infoQuery = `
@@ -239,11 +242,13 @@ class CheckInvoiceService {
         JOIN order_dispatch od ON lrc.so_no = od.order_no 
         WHERE lrc.id = $1
       `;
-      const infoResult = await db.query(infoQuery, [id]);
+      const infoResult = await client.query(infoQuery, [id]);
       const depoName = infoResult.rows[0]?.depo_name || '';
+      const planned7 = data.status_1 === "Issue" ? undefined : await this.getPlannedTimestamp(client, 'Gate Out');
 
       const updateData = {
         actual_6: data.status_1 === "Issue" ? null : new Date().toISOString(),
+        planned_7: planned7,
         check_invoice_user: data.username || null,
         actual_5: data.status_1 === "Issue" ? null : undefined, // Revert to Make Invoice stage on Issue
         status_1: data.status_1 || null,
@@ -255,7 +260,6 @@ class CheckInvoiceService {
       if (data.status_1 !== "Issue" && depoName.toUpperCase() !== "BANARI") {
         Logger.info(`Skipping Gate Out (Stage 11) for depot: ${depoName} (Order: ${infoResult.rows[0]?.so_no})`);
         const now = new Date().toISOString();
-        updateData.planned_7 = now;
         updateData.actual_7 = now;
         updateData.gate_out_user = data.username || "SYSTEM_SKIP";
       }
@@ -277,12 +281,13 @@ class CheckInvoiceService {
         RETURNING *
       `;
 
-      const result = await db.query(query, [...values, id]);
+      const result = await client.query(query, [...values, id]);
 
       if (result.rows.length === 0) {
         throw new Error('Record not found');
       }
 
+      await client.query('COMMIT');
       Logger.info(`Check invoice submitted successfully for ID: ${id}`);
 
       return {
@@ -291,9 +296,67 @@ class CheckInvoiceService {
         data: result.rows[0]
       };
     } catch (error) {
+      await client.query('ROLLBACK');
       Logger.error('Error submitting check invoice', error);
       throw error;
+    } finally {
+      client.release();
     }
+  }
+
+  async getPlannedTimestamp(client, stageName) {
+    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedStageName = normalizeStageName(stageName);
+    const stageAliases = {
+      gateout: ['gateout'],
+    };
+    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
+
+    const result = await client.query(
+      `
+        SELECT (
+          CURRENT_TIMESTAMP + COALESCE(
+            (
+              SELECT stage_time
+              FROM process_stages
+              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT 1
+            ),
+            INTERVAL '0'
+          )
+        ) AS planned_at
+      `,
+      [normalizedStageNames]
+    );
+
+    const plannedAt = result.rows[0]?.planned_at;
+    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
+  }
+
+  async ensurePlanned7TriggerUsesTat(client) {
+    await client.query(`
+      CREATE OR REPLACE FUNCTION set_planned_7_from_actual_6()
+      RETURNS TRIGGER AS $$
+      DECLARE
+          gate_out_tat INTERVAL;
+      BEGIN
+          SELECT stage_time
+          INTO gate_out_tat
+          FROM process_stages
+          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = 'gateout'
+          ORDER BY submitted_at DESC, id DESC
+          LIMIT 1;
+
+          IF NEW.actual_6 IS NOT NULL
+             AND (TG_OP = 'INSERT' OR OLD.actual_6 IS DISTINCT FROM NEW.actual_6) THEN
+              NEW.planned_7 := NEW.actual_6::timestamptz + COALESCE(gate_out_tat, INTERVAL '0');
+          END IF;
+
+          RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
   }
 }
 

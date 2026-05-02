@@ -285,6 +285,34 @@ db.query('SELECT NOW()')
     } catch (err) {
       Logger.warn('⚠️ Could not update set_planned_6_from_actual_5 function (non-fatal)', err.message);
     }
+
+    try {
+      await db.query(`
+        CREATE OR REPLACE FUNCTION set_planned_7_from_actual_6()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            gate_out_tat INTERVAL;
+        BEGIN
+            SELECT stage_time
+            INTO gate_out_tat
+            FROM process_stages
+            WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = 'gateout'
+            ORDER BY submitted_at DESC, id DESC
+            LIMIT 1;
+
+            IF NEW.actual_6 IS NOT NULL
+               AND (TG_OP = 'INSERT' OR OLD.actual_6 IS DISTINCT FROM NEW.actual_6) THEN
+                NEW.planned_7 := NEW.actual_6::timestamptz + COALESCE(gate_out_tat, INTERVAL '0');
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      Logger.info('✅ set_planned_7_from_actual_6 trigger function updated');
+    } catch (err) {
+      Logger.warn('⚠️ Could not update set_planned_7_from_actual_6 function (non-fatal)', err.message);
+    }
   })
   .catch((err) => Logger.error('❌ Database connection failed', err));
 
