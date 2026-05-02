@@ -336,67 +336,136 @@ class SecurityGuardApprovalService {
   async submitApproval(id, data = {}) {
     try {
       Logger.info(`Submitting security guard approval for ID: ${id}`, { data });
+      const client = await db.getClient();
 
-      // Calculate time delay if planned_4 exists
-      let timeDelay = null;
-      if (data.planned_4) {
-        const planned = new Date(data.planned_4);
-        const actual = new Date();
-        const diffMs = actual - planned;
-        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-        timeDelay = `${diffHours} hours`;
-      }
+      try {
+        await client.query('BEGIN');
+        await this.ensurePlanned5TriggerUsesTat(client);
 
-      let updateData = {};
+        // Calculate time delay if planned_4 exists
+        let timeDelay = null;
+        if (data.planned_4) {
+          const planned = new Date(data.planned_4);
+          const actual = new Date();
+          const diffMs = actual - planned;
+          const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+          timeDelay = `${diffHours} hours`;
+        }
 
-      if (data.verdict_status === 'REJECT') {
-        updateData = {
-          actual_1: null,
-          actual_4: null,
-          security_guard_status: 'REJECT',
-          security_guard_user: data.username || null,
-          revert_security_remarks: data.remarks || null,
+        let updateData = {};
+
+        if (data.verdict_status === 'REJECT') {
+          updateData = {
+            actual_1: null,
+            actual_4: null,
+            security_guard_status: 'REJECT',
+            security_guard_user: data.username || null,
+            revert_security_remarks: data.remarks || null,
+          };
+        } else {
+          updateData = {
+            actual_4: new Date().toISOString(),
+            planned_5: await this.getPlannedTimestamp(client, 'Make Invoice (Proforma)'),
+            bilty_no: data.bilty_no || null,
+            bilty_image: data.bilty_image || null,
+            vehicle_image_attachemrnt: data.vehicle_image_attachemrnt || null,
+            security_guard_user: data.username || null,
+            security_guard_status: 'APPROVE',
+          };
+        }
+
+        const fields = Object.keys(updateData);
+        const values = Object.values(updateData);
+
+        const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
+
+        const query = `
+          UPDATE lift_receiving_confirmation 
+          SET ${setClause}
+          WHERE id = $${fields.length + 1}
+          RETURNING *
+        `;
+
+        const result = await client.query(query, [...values, id]);
+
+        if (result.rows.length === 0) {
+          throw new Error('Record not found');
+        }
+
+        await client.query('COMMIT');
+
+        Logger.info(`Security guard approval submitted successfully for ID: ${id}`);
+
+        return {
+          success: true,
+          message: 'Security guard approval submitted successfully',
+          data: result.rows[0]
         };
-      } else {
-        updateData = {
-          actual_4: new Date().toISOString(),
-          bilty_no: data.bilty_no || null,
-          bilty_image: data.bilty_image || null,
-          vehicle_image_attachemrnt: data.vehicle_image_attachemrnt || null,
-          security_guard_user: data.username || null,
-          security_guard_status: 'APPROVE',
-        };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
       }
-
-      const fields = Object.keys(updateData);
-      const values = Object.values(updateData);
-
-      const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-
-      const query = `
-        UPDATE lift_receiving_confirmation 
-        SET ${setClause}
-        WHERE id = $${fields.length + 1}
-        RETURNING *
-      `;
-
-      const result = await db.query(query, [...values, id]);
-
-      if (result.rows.length === 0) {
-        throw new Error('Record not found');
-      }
-
-      Logger.info(`Security guard approval submitted successfully for ID: ${id}`);
-
-      return {
-        success: true,
-        message: 'Security guard approval submitted successfully',
-        data: result.rows[0]
-      };
     } catch (error) {
       Logger.error('Error submitting security guard approval', error);
       throw error;
     }
+  }
+
+  async getPlannedTimestamp(client, stageName) {
+    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedStageName = normalizeStageName(stageName);
+    const stageAliases = {
+      makeinvoiceproforma: ['makeinvoiceproforma', 'makeinvoice'],
+    };
+    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
+
+    const result = await client.query(
+      `
+        SELECT (
+          CURRENT_TIMESTAMP + COALESCE(
+            (
+              SELECT stage_time
+              FROM process_stages
+              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
+              ORDER BY submitted_at DESC, id DESC
+              LIMIT 1
+            ),
+            INTERVAL '0'
+          )
+        ) AS planned_at
+      `,
+      [normalizedStageNames]
+    );
+
+    const plannedAt = result.rows[0]?.planned_at;
+    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
+  }
+
+  async ensurePlanned5TriggerUsesTat(client) {
+    await client.query(`
+      CREATE OR REPLACE FUNCTION set_planned_5_from_actual_4()
+      RETURNS TRIGGER AS $$
+      DECLARE
+          make_invoice_tat INTERVAL;
+      BEGIN
+          SELECT stage_time
+          INTO make_invoice_tat
+          FROM process_stages
+          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') IN ('makeinvoiceproforma', 'makeinvoice')
+          ORDER BY submitted_at DESC, id DESC
+          LIMIT 1;
+
+          IF NEW.actual_4 IS NOT NULL
+             AND (TG_OP = 'INSERT' OR OLD.actual_4 IS DISTINCT FROM NEW.actual_4) THEN
+              NEW.planned_5 := NEW.actual_4::timestamptz + COALESCE(make_invoice_tat, INTERVAL '0');
+          END IF;
+
+          RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
   }
 
   /**

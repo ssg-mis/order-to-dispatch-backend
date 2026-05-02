@@ -229,6 +229,34 @@ db.query('SELECT NOW()')
     } catch (err) {
       Logger.warn('⚠️ Could not update set_planned_4_from_actual_1 function (non-fatal)', err.message);
     }
+
+    try {
+      await db.query(`
+        CREATE OR REPLACE FUNCTION set_planned_5_from_actual_4()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            make_invoice_tat INTERVAL;
+        BEGIN
+            SELECT stage_time
+            INTO make_invoice_tat
+            FROM process_stages
+            WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') IN ('makeinvoiceproforma', 'makeinvoice')
+            ORDER BY submitted_at DESC, id DESC
+            LIMIT 1;
+
+            IF NEW.actual_4 IS NOT NULL
+               AND (TG_OP = 'INSERT' OR OLD.actual_4 IS DISTINCT FROM NEW.actual_4) THEN
+                NEW.planned_5 := NEW.actual_4::timestamptz + COALESCE(make_invoice_tat, INTERVAL '0');
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      Logger.info('✅ set_planned_5_from_actual_4 trigger function updated');
+    } catch (err) {
+      Logger.warn('⚠️ Could not update set_planned_5_from_actual_4 function (non-fatal)', err.message);
+    }
   })
   .catch((err) => Logger.error('❌ Database connection failed', err));
 
