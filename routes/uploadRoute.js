@@ -8,7 +8,7 @@ const multer = require('multer');
 const uploadService = require('../services/uploadService');
 const { ResponseUtil } = require('../utils');
 
-const MAX_UPLOAD_SIZE_MB = 10;
+const MAX_UPLOAD_SIZE_MB = 20;
 const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;
 const UPLOAD_SIZE_BUFFER_BYTES = 512 * 1024;
 
