@@ -1,3 +1,14 @@
+const allowedOrigins = [
+  ...String(process.env.CORS_ORIGIN || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:3002",
+  "https://order-to-dispatch-frontend.vercel.app",
+]
+
 // Application configuration
 module.exports = {
   port: process.env.PORT || 5001,
@@ -13,7 +24,17 @@ module.exports = {
   
   // CORS Configuration
   cors: {
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: (origin, callback) => {
+      if (!origin || process.env.CORS_ORIGIN === '*') {
+        return callback(null, true)
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true)
+      }
+
+      return callback(new Error(`CORS blocked for origin: ${origin}`))
+    },
     credentials: true
   },
   
