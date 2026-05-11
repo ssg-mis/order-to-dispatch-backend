@@ -195,11 +195,11 @@ const updateTransferDetails = async (req, res, next) => {
 const precloseDispatchPlanning = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { preclose_qty, username } = req.body;
+    const { preclose_qty, username, action, preclose_remarks } = req.body;
 
-    Logger.info(`[DISPATCH PLANNING] Pre-closing quantity for order ID: ${id}`, { preclose_qty, username });
+    Logger.info(`[DISPATCH PLANNING] Pre-closing quantity for order ID: ${id}`, { preclose_qty, username, action });
 
-    const result = await dispatchPlanningService.precloseDispatchPlanning(id, { preclose_qty, username });
+    const result = await dispatchPlanningService.precloseDispatchPlanning(id, { preclose_qty, username, action, preclose_remarks });
 
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {

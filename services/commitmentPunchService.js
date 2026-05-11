@@ -494,8 +494,8 @@ class CommitmentPunchService {
 
       // ── Step 4: Generate DO order number ──────────────────────────
       // Always generate a fresh sequential number for each process submission
-      // Use the commitment date for the order FY format, consistent with trigger logic
-      const { orderNo } = await this.generateOrderNo(client, cm.commitment_date);
+      // Use the PO date for the order FY format
+      const { orderNo } = await this.generateOrderNo(client, data.po_date || cm.commitment_date);
 
       const orderTitleCase = data.order_type ? (data.order_type.charAt(0).toUpperCase() + data.order_type.slice(1)) : 'Regular';
       const transportTitleCase = data.transport_type ? (data.transport_type.charAt(0).toUpperCase() + data.transport_type.slice(1)) : (cm.transport_type || 'Ex-Depot');
