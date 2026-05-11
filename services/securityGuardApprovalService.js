@@ -191,7 +191,8 @@ class SecurityGuardApprovalService {
           od.order_punch_remarks,
           od.actual_1 AS order_actual_1,
           od.transfer,
-          od.bill_company_name
+          od.bill_company_name,
+          od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         JOIN selected_groups sg ON ${groupKeyExp} = sg.group_key
@@ -336,7 +337,8 @@ class SecurityGuardApprovalService {
           od.order_punch_remarks,
           od.actual_1 AS order_actual_1,
           od.transfer,
-          od.bill_company_name
+          od.bill_company_name,
+          od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         WHERE ${baseDoExp} = ANY($1)

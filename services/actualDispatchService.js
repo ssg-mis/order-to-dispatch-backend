@@ -138,7 +138,8 @@ class ActualDispatchService {
           od.overall_status_of_order,
           od.transfer,
           od.bill_company_name,
-          od.depo_name
+          od.depo_name,
+          od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         WHERE ${dataWhereConditions.join(' AND ')}
@@ -275,7 +276,8 @@ class ActualDispatchService {
           od.actual_1 AS order_actual_1,
           od.transfer,
           od.bill_company_name,
-          od.depo_name
+          od.depo_name,
+          od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         WHERE ${dataWhereConditions.join(' AND ')}

@@ -87,6 +87,7 @@ class GateOutService {
           od.actual_1,
           od.transfer,
           od.bill_company_name,
+          od.upload_copy AS upload_so,
           sd.nos_per_main_uom
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
@@ -193,7 +194,8 @@ class GateOutService {
           od.order_punch_remarks,
           od.actual_1 AS order_actual_1,
           od.transfer,
-          od.bill_company_name
+          od.bill_company_name,
+          od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         ${whereClause}
