@@ -8,6 +8,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { buildSearchCondition } = require('../utils/searchUtils');
 
 class OrderApprovalService {
   /**
@@ -58,9 +59,10 @@ class OrderApprovalService {
 
       // Enhanced Search (filters both order_no and customer_name)
       if (filters.search) {
-        whereConditions.push(`(order_no ILIKE $${paramIndex} OR customer_name ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.search}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no', 'customer_name'], filters.search, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       }
 
       if (filters.customer_name) {
@@ -162,9 +164,10 @@ class OrderApprovalService {
 
       // Enhanced Search
       if (filters.search) {
-        whereConditions.push(`(order_no ILIKE $${paramIndex} OR customer_name ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.search}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no', 'customer_name'], filters.search, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       }
 
       if (filters.customer_name) {

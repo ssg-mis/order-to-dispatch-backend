@@ -14,6 +14,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { buildSearchCondition } = require('../utils/searchUtils');
 
 class CommitmentPunchService {
   /**
@@ -299,9 +300,10 @@ class CommitmentPunchService {
         idx++;
       }
       if (filters.search) {
-        where.push(`(commitment_no ILIKE $${idx} OR party_name ILIKE $${idx})`);
-        params.push(`%${filters.search}%`);
-        idx++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['commitment_no', 'party_name'], filters.search, idx);
+        where.push(sClause);
+        params.push(...sParams);
+        idx = sIdx;
       }
 
       const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
@@ -346,9 +348,10 @@ class CommitmentPunchService {
       let idx = 1;
 
       if (filters.search) {
-        where.push(`(cm.commitment_no ILIKE $${idx} OR cm.party_name ILIKE $${idx})`);
-        params.push(`%${filters.search}%`);
-        idx++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['cm.commitment_no', 'cm.party_name'], filters.search, idx);
+        where.push(sClause);
+        params.push(...sParams);
+        idx = sIdx;
       }
 
       // Add remaining-qty filter directly into WHERE

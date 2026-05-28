@@ -9,6 +9,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { buildSearchCondition } = require('../utils/searchUtils');
 
 class ConfirmMaterialReceiptService {
   /**
@@ -37,9 +38,10 @@ class ConfirmMaterialReceiptService {
 
       if (filters.so_no) {
         // Enhanced search: match so_no OR party_name if only one search string is given
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.invoice_no ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.so_no}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name', 'lrc.invoice_no'], filters.so_no, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       } else if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
@@ -157,9 +159,10 @@ class ConfirmMaterialReceiptService {
 
       if (filters.so_no) {
         // Enhanced search: match so_no OR party_name if only one search string is given
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.invoice_no ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.so_no}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name', 'lrc.invoice_no'], filters.so_no, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       } else if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);

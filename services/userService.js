@@ -21,8 +21,8 @@ class UserService {
       const offset = (page - 1) * limit;
 
       let query = `
-        SELECT 
-          id, username, email, phone_no, status, role, page_access, depo_access,
+        SELECT
+          id, username, email, phone_no, status, role, page_access, depo_access, features,
           created_at, updated_at
         FROM login
         WHERE 1=1
@@ -89,8 +89,8 @@ class UserService {
   async getUserById(id) {
     try {
       const query = `
-        SELECT 
-          id, username, email, phone_no, status, role, page_access, depo_access,
+        SELECT
+          id, username, email, phone_no, status, role, page_access, depo_access, features,
           created_at, updated_at
         FROM login
         WHERE id = $1
@@ -119,20 +119,21 @@ class UserService {
    */
   async createUser(userData) {
     try {
-      const { username, password, email, phone_no, status = 'active', role, page_access = [], depo_access = {} } = userData;
+      const { username, password, email, phone_no, status = 'active', role, page_access = [], depo_access = {}, features = {} } = userData;
 
       // Hash password
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
       const query = `
-        INSERT INTO login (username, password, email, phone_no, status, role, page_access, depo_access)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id, username, email, phone_no, status, role, page_access, depo_access, created_at, updated_at
+        INSERT INTO login (username, password, email, phone_no, status, role, page_access, depo_access, features)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id, username, email, phone_no, status, role, page_access, depo_access, features, created_at, updated_at
       `;
 
       // Serialize: convert object/array to JSON string for jsonb columns
       const pageAccessValue = page_access ? JSON.stringify(page_access) : JSON.stringify({})
       const depoAccessValue = depo_access ? JSON.stringify(depo_access) : JSON.stringify({})
+      const featuresValue = features ? JSON.stringify(features) : JSON.stringify({})
 
       const result = await db.query(query, [
         username,
@@ -142,7 +143,8 @@ class UserService {
         status,
         role,
         pageAccessValue,
-        depoAccessValue
+        depoAccessValue,
+        featuresValue
       ]);
 
       return {
@@ -174,7 +176,7 @@ class UserService {
    */
   async updateUser(id, userData) {
     try {
-      const { username, password, email, phone_no, status, role, page_access, depo_access } = userData;
+      const { username, password, email, phone_no, status, role, page_access, depo_access, features } = userData;
 
       // Build dynamic update query
       const updateFields = [];
@@ -225,6 +227,11 @@ class UserService {
         queryParams.push(JSON.stringify(depo_access));
       }
 
+      if (features !== undefined) {
+        updateFields.push(`features = $${paramIndex++}`);
+        queryParams.push(JSON.stringify(features));
+      }
+
       if (updateFields.length === 0) {
         return this.getUserById(id);
       }
@@ -235,7 +242,7 @@ class UserService {
         UPDATE login 
         SET ${updateFields.join(', ')}
         WHERE id = $${paramIndex}
-        RETURNING id, username, email, phone_no, status, role, page_access, depo_access, created_at, updated_at
+        RETURNING id, username, email, phone_no, status, role, page_access, depo_access, features, created_at, updated_at
       `;
 
       const result = await db.query(query, queryParams);
@@ -291,7 +298,7 @@ class UserService {
   async authenticateUser(username, password) {
     try {
       const query = `
-        SELECT id, username, password, email, phone_no, status, role, page_access, depo_access, created_at, updated_at
+        SELECT id, username, password, email, phone_no, status, role, page_access, depo_access, features, created_at, updated_at
         FROM login
         WHERE username = $1 AND status = 'active'
       `;
@@ -344,6 +351,7 @@ class UserService {
       'Variable Parameters',
       'Set Turn Around Time',
       'Master',
+      'Inventory',
       'Reports',
       'Settings'
     ];

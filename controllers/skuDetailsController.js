@@ -1,6 +1,7 @@
 
 const { query } = require('../config/db');
 const { Logger } = require('../utils');
+const { buildSearchCondition } = require('../utils/searchUtils');
 
 /**
  * Get all SKU Details
@@ -17,11 +18,10 @@ const getAllSkuDetails = async (req, res, next) => {
     }
 
     if (search) {
-      const searchPattern = `%${search}%`;
-      const searchIndex = values.length + 1;
-      values.push(searchPattern);
+      const { clause, params } = buildSearchCondition(['sku_name', 'sku_code'], search, values.length + 1);
+      values.push(...params);
       whereClause += whereClause ? "AND " : "WHERE ";
-      whereClause += `(sku_name ILIKE $${searchIndex} OR sku_code ILIKE $${searchIndex}) `;
+      whereClause += clause + " ";
     }
 
     // Get total count
@@ -29,15 +29,27 @@ const getAllSkuDetails = async (req, res, next) => {
     const countResult = await query(countQuery, values);
     const total = parseInt(countResult.rows[0].count);
 
-    // Get data
-    const dataQuery = `
-      SELECT * FROM sku_details 
-      ${whereClause}
-      ORDER BY id DESC
-      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
-    `;
-    
-    values.push(limit, offset);
+    let dataQuery;
+    if (all === 'true') {
+      dataQuery = `
+        SELECT sd.*, t.name AS tag_name
+        FROM sku_details sd
+        LEFT JOIN tag t ON t.sku_id = sd.id
+        ${whereClause}
+        ORDER BY sd.id DESC
+      `;
+    } else {
+      dataQuery = `
+        SELECT sd.*, t.name AS tag_name
+        FROM sku_details sd
+        LEFT JOIN tag t ON t.sku_id = sd.id
+        ${whereClause}
+        ORDER BY sd.id DESC
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      `;
+      values.push(limit, offset);
+    }
+
     const result = await query(dataQuery, values);
 
     res.json({
@@ -62,7 +74,13 @@ const getAllSkuDetails = async (req, res, next) => {
 const getSkuDetailById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const result = await query('SELECT * FROM sku_details WHERE id = $1', [id]);
+    const result = await query(
+      `SELECT sd.*, t.name AS tag_name
+       FROM sku_details sd
+       LEFT JOIN tag t ON t.sku_id = sd.id
+       WHERE sd.id = $1`,
+      [id]
+    );
 
     if (result.rowCount === 0) {
       return res.status(404).json({
@@ -89,6 +107,7 @@ const createSkuDetail = async (req, res, next) => {
       status,
       sku_code,
       sku_name,
+      tag_name,
       main_uom,
       alternate_uom,
       nos_per_main_uom,
@@ -160,11 +179,21 @@ const createSkuDetail = async (req, res, next) => {
     ];
 
     const result = await query(sql, values);
+    const skuId = result.rows[0].id;
+
+    if (tag_name) {
+      await query(
+        `INSERT INTO tag (sku_id, name)
+         VALUES ($1, $2)
+         ON CONFLICT (sku_id) DO UPDATE SET name = $2`,
+        [skuId, tag_name]
+      );
+    }
 
     res.status(201).json({
       success: true,
       message: 'SKU Detail created successfully',
-      data: result.rows[0]
+      data: { ...result.rows[0], tag_name: tag_name || null }
     });
   } catch (error) {
     next(error);
@@ -181,6 +210,7 @@ const updateSkuDetail = async (req, res, next) => {
       status,
       sku_code,
       sku_name,
+      tag_name,
       main_uom,
       alternate_uom,
       nos_per_main_uom,
@@ -258,10 +288,19 @@ const updateSkuDetail = async (req, res, next) => {
 
     const result = await query(sql, values);
 
+    if (tag_name !== undefined && tag_name !== null) {
+      await query(
+        `INSERT INTO tag (sku_id, name)
+         VALUES ($1, $2)
+         ON CONFLICT (sku_id) DO UPDATE SET name = $2`,
+        [id, tag_name]
+      );
+    }
+
     res.json({
       success: true,
       message: 'SKU Detail updated successfully',
-      data: result.rows[0]
+      data: { ...result.rows[0], tag_name: tag_name ?? result.rows[0].tag_name ?? null }
     });
   } catch (error) {
     next(error);

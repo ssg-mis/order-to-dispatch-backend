@@ -1,0 +1,2 @@
+ALTER TABLE driver_master
+ADD COLUMN IF NOT EXISTS dl_upload TEXT;

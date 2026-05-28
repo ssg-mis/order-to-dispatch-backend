@@ -1,0 +1,1 @@
+ALTER TABLE login ADD COLUMN IF NOT EXISTS features JSONB DEFAULT '{}'::jsonb;

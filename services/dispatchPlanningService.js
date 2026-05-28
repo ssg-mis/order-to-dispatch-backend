@@ -9,6 +9,7 @@
 const db = require('../config/db');
 const { Logger } = require('../utils');
 const { deriveRatesForRegularOrder, deriveConsolidatedRatesForGroup, detectOilType } = require('../utils/rateDerivation');
+const { buildSearchCondition } = require('../utils/searchUtils');
 
 class DispatchPlanningService {
   /**
@@ -31,9 +32,10 @@ class DispatchPlanningService {
       // Add optional filters
       if (filters.order_no) {
         // Optimized search: match order_no OR customer_name with partial match
-        whereConditions.push(`(order_no ILIKE $${paramIndex} OR customer_name ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.order_no}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no', 'customer_name'], filters.order_no, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       } else if (filters.customer_name) {
         whereConditions.push(`customer_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.customer_name}%`);
@@ -129,9 +131,10 @@ class DispatchPlanningService {
       // Add optional filters
       if (filters.order_no) {
         // Optimized search: match order_no OR customer_name with partial match
-        whereConditions.push(`(order_no ILIKE $${paramIndex} OR customer_name ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.order_no}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no', 'customer_name'], filters.order_no, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       } else if (filters.customer_name) {
         whereConditions.push(`customer_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.customer_name}%`);

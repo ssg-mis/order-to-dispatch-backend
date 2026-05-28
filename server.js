@@ -119,6 +119,8 @@ app.use('/api/v1/commitment-punch', require('./routes/commitmentPunchRoutes'));
 app.use('/api/v1/drafts', require('./routes/draftRoute'));
 app.use('/api/v1/gate-in', require('./routes/gateInRoute'));
 app.use('/api/v1/process-stages', require('./routes/processStageRoute'));
+app.use('/api/v1/tags', require('./routes/tagRoute'));
+app.use('/api/v1/inventory', require('./routes/inventoryRoute'));
 
 // Test database connection and apply trigger fixes
 const db = require('./config/db');
@@ -396,6 +398,7 @@ app.use(errorHandler);
 const PORT = appConfig.port;
 
 app.listen(PORT, () => {
+  console.log(`\n✅ Backend running on PORT ${PORT}  →  http://localhost:${PORT}\n`);
   Logger.info(`🚀 Server started successfully`);
   Logger.info(`📍 Running on: http://localhost:${PORT}`);
   Logger.info(`🌍 Environment: ${appConfig.nodeEnv}`);

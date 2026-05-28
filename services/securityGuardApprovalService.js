@@ -192,9 +192,21 @@ class SecurityGuardApprovalService {
           od.actual_1 AS order_actual_1,
           od.transfer,
           od.bill_company_name,
-          od.upload_copy AS upload_so
+          od.upload_copy AS upload_so,
+          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
+          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
+          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
+          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
+          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
+          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
+          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
+          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
+          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
+          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
+          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
         JOIN selected_groups sg ON ${groupKeyExp} = sg.group_key
         WHERE ${dataWhereConditions.join(' AND ')}
         ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
@@ -338,9 +350,21 @@ class SecurityGuardApprovalService {
           od.actual_1 AS order_actual_1,
           od.transfer,
           od.bill_company_name,
-          od.upload_copy AS upload_so
+          od.upload_copy AS upload_so,
+          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
+          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
+          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
+          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
+          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
+          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
+          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
+          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
+          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
+          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
+          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
         WHERE ${baseDoExp} = ANY($1)
           AND lrc.planned_4 IS NOT NULL AND lrc.actual_4 IS NOT NULL
         ORDER BY lrc.actual_4 DESC, lrc.d_sr_number ASC

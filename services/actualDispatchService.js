@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { buildSearchCondition } = require('../utils/searchUtils');
 const { Logger } = require('../utils');
 const { deriveRatesForRegularOrder, deriveConsolidatedRatesForGroup, detectOilType } = require('../utils/rateDerivation');
 
@@ -33,9 +34,10 @@ class ActualDispatchService {
       let paramIndex = 1;
 
       if (filters.search) {
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.search}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name'], filters.search, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       }
 
       if (filters.customer_name) {
@@ -173,9 +175,10 @@ class ActualDispatchService {
       let paramIndex = 1;
 
       if (filters.search) {
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.search}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name'], filters.search, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       }
 
       if (filters.customer_name) {

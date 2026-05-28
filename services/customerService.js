@@ -22,11 +22,11 @@ class CustomerService {
       }
       
       if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
+        const { buildSearchCondition } = require('../utils/searchUtils');
+        const { clause, params } = buildSearchCondition(['customer_name', 'customer_id', 'gstin', 'contact_person', 'contact', 'email'], search, values.length + 1);
+        values.push(...params);
         whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(customer_name ILIKE $${searchIndex} OR customer_id ILIKE $${searchIndex} OR gstin ILIKE $${searchIndex} OR contact_person ILIKE $${searchIndex} OR contact ILIKE $${searchIndex} OR email ILIKE $${searchIndex})`;
+        whereClause += clause;
       }
 
       // Get total count

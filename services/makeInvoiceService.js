@@ -9,6 +9,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { buildSearchCondition } = require('../utils/searchUtils');
 
 class MakeInvoiceService {
   /**
@@ -36,9 +37,10 @@ class MakeInvoiceService {
       }
 
       if (filters.search) {
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.truck_no ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.search}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name', 'lrc.truck_no'], filters.search, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       }
 
       if (filters.so_no) {
@@ -82,6 +84,7 @@ class MakeInvoiceService {
           od.customer_contact_person_name,
           od.customer_contact_person_whatsapp_no,
           od.customer_address,
+          od.customer_delivery_address,
           od.payment_terms,
           od.advance_payment_to_be_taken,
           od.advance_amount,
@@ -97,14 +100,17 @@ class MakeInvoiceService {
           od.freight_rate,
           od.party_credit_status,
           sd.nos_per_main_uom,
-          COALESCE(lrc.fitness, vm.fitness_image) AS fitness,
+          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
           COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
-          COALESCE(lrc.polution, vm.pollution_image) AS polution,
+          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
           COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
-          COALESCE(lrc.insurance, vm.insurance_image) AS insurance,
+          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
           COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
-          COALESCE(lrc.tax_copy, vm.road_tax_image) AS tax_copy,
-          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date
+          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
+          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
+          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
+          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
+          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
@@ -161,9 +167,10 @@ class MakeInvoiceService {
       }
 
       if (filters.search) {
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.truck_no ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.search}%`);
-        paramIndex++;
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name', 'lrc.truck_no'], filters.search, paramIndex);
+        whereConditions.push(sClause);
+        queryParams.push(...sParams);
+        paramIndex = sIdx;
       }
 
       if (filters.so_no) {
@@ -206,6 +213,7 @@ class MakeInvoiceService {
           od.customer_contact_person_name,
           od.customer_contact_person_whatsapp_no,
           od.customer_address,
+          od.customer_delivery_address,
           od.payment_terms,
           od.advance_payment_to_be_taken,
           od.advance_amount,
@@ -217,9 +225,21 @@ class MakeInvoiceService {
           od.order_punch_remarks,
           od.actual_1 AS order_actual_1,
           od.transfer,
-          od.bill_company_name
+          od.bill_company_name,
+          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
+          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
+          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
+          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
+          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
+          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
+          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
+          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
+          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
+          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
+          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
         ${whereClause}
         ORDER BY lrc.actual_5 DESC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

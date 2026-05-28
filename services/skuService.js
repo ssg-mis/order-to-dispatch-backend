@@ -18,15 +18,15 @@ class SkuService {
       let whereClause = "";
       
       if (!all) {
-        whereClause = " WHERE status = 'Active' OR sku_code = 'Active' OR status IS NULL";
+        whereClause = " WHERE (status = 'Active' OR sku_code = 'Active' OR status IS NULL)";
       }
       
       if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
+        const { buildSearchCondition } = require('../utils/searchUtils');
+        const { clause, params, newIndex } = buildSearchCondition(['sku_name', 'sku_code'], search, values.length + 1);
+        values.push(...params);
         whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(sku_name ILIKE $${searchIndex} OR sku_code ILIKE $${searchIndex})`;
+        whereClause += clause;
       }
 
       // Get count

@@ -37,9 +37,9 @@ class DriverMasterService {
       // Get paginated data
       let query = `
         SELECT 
-          driver_id as id, driver_master_id, status, driving_licence_no, driving_licence_type, 
-          valid_upto, rto, driver_name, mobile_no, email_id, 
-          address_line1, state, pincode, aadhaar_no, pan_no, aadhaar_upload, created_at
+          driver_id as id, driver_master_id, status, driving_licence_no, driving_licence_type,
+          valid_upto, rto, driver_name, mobile_no, email_id,
+          address_line1, state, pincode, aadhaar_no, pan_no, aadhaar_upload, dl_upload, created_at
         FROM driver_master
         ${whereClause}
         ORDER BY created_at DESC
@@ -71,9 +71,9 @@ class DriverMasterService {
     try {
       const query = `
         SELECT 
-          driver_id as id, driver_master_id, status, driving_licence_no, driving_licence_type, 
-          valid_upto, rto, driver_name, mobile_no, email_id, 
-          address_line1, state, pincode, aadhaar_no, pan_no, aadhaar_upload, created_at
+          driver_id as id, driver_master_id, status, driving_licence_no, driving_licence_type,
+          valid_upto, rto, driver_name, mobile_no, email_id,
+          address_line1, state, pincode, aadhaar_no, pan_no, aadhaar_upload, dl_upload, created_at
         FROM driver_master
         WHERE driver_id = $1
       `;
@@ -111,23 +111,24 @@ class DriverMasterService {
         pincode,
         aadhaar_no,
         pan_no,
-        aadhaar_upload
+        aadhaar_upload,
+        dl_upload
       } = data;
 
       const query = `
         INSERT INTO driver_master (
-          driver_master_id, status, driving_licence_no, driving_licence_type, valid_upto, 
-          rto, driver_name, mobile_no, email_id, address_line1, 
-          state, pincode, aadhaar_no, pan_no, aadhaar_upload
+          driver_master_id, status, driving_licence_no, driving_licence_type, valid_upto,
+          rto, driver_name, mobile_no, email_id, address_line1,
+          state, pincode, aadhaar_no, pan_no, aadhaar_upload, dl_upload
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING driver_id as id, *
       `;
 
       const values = [
         driver_master_id, status, driving_licence_no, driving_licence_type, valid_upto || null,
         rto, driver_name, mobile_no, email_id || null, address_line1 || null,
-        state || null, pincode || null, aadhaar_no || null, pan_no || null, aadhaar_upload || null
+        state || null, pincode || null, aadhaar_no || null, pan_no || null, aadhaar_upload || null, dl_upload || null
       ];
 
       const result = await pool.query(query, values);
@@ -159,12 +160,13 @@ class DriverMasterService {
         pincode,
         aadhaar_no,
         pan_no,
-        aadhaar_upload
+        aadhaar_upload,
+        dl_upload
       } = data;
 
       const query = `
         UPDATE driver_master
-        SET 
+        SET
           driver_master_id = $1,
           status = $2,
           driving_licence_no = $3,
@@ -179,15 +181,16 @@ class DriverMasterService {
           pincode = $12,
           aadhaar_no = $13,
           pan_no = $14,
-          aadhaar_upload = $15
-        WHERE driver_id = $16
+          aadhaar_upload = $15,
+          dl_upload = $16
+        WHERE driver_id = $17
         RETURNING driver_id as id, *
       `;
 
       const values = [
         driver_master_id, status, driving_licence_no, driving_licence_type, valid_upto || null,
         rto, driver_name, mobile_no, email_id || null, address_line1 || null,
-        state || null, pincode || null, aadhaar_no || null, pan_no || null, aadhaar_upload || null, id
+        state || null, pincode || null, aadhaar_no || null, pan_no || null, aadhaar_upload || null, dl_upload || null, id
       ];
 
       const result = await pool.query(query, values);
