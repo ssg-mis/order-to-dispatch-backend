@@ -15,6 +15,8 @@ router.post('/login', userController.loginUser);
 
 // CRUD operations
 router.get('/', userController.getAllUsers);
+router.get('/:id/csv-formats', userController.getCsvFormats);
+router.put('/:id/csv-formats', userController.saveCsvFormats);
 router.get('/:id', userController.getUserById);
 router.post('/', userController.createUser);
 router.put('/:id', userController.updateUser);

@@ -17,7 +17,7 @@ class UserService {
    */
   async getAllUsers(params = {}) {
     try {
-      const { page = 1, limit = 100, role, status } = params;
+      const { page = 1, limit = 100, role, status, search } = params;
       const offset = (page - 1) * limit;
 
       let query = `
@@ -29,6 +29,20 @@ class UserService {
       `;
       const queryParams = [];
       let paramIndex = 1;
+
+      if (search) {
+        const term = `%${search}%`;
+        query += ` AND (
+          username ILIKE $${paramIndex} OR
+          COALESCE(email, '') ILIKE $${paramIndex} OR
+          COALESCE(phone_no, '') ILIKE $${paramIndex} OR
+          role ILIKE $${paramIndex} OR
+          status ILIKE $${paramIndex} OR
+          CAST(id AS TEXT) LIKE $${paramIndex}
+        )`;
+        queryParams.push(term);
+        paramIndex++;
+      }
 
       if (role) {
         query += ` AND role = $${paramIndex++}`;
@@ -50,6 +64,20 @@ class UserService {
       let countQuery = 'SELECT COUNT(*) FROM login WHERE 1=1';
       const countParams = [];
       let countIndex = 1;
+
+      if (search) {
+        const term = `%${search}%`;
+        countQuery += ` AND (
+          username ILIKE $${countIndex} OR
+          COALESCE(email, '') ILIKE $${countIndex} OR
+          COALESCE(phone_no, '') ILIKE $${countIndex} OR
+          role ILIKE $${countIndex} OR
+          status ILIKE $${countIndex} OR
+          CAST(id AS TEXT) LIKE $${countIndex}
+        )`;
+        countParams.push(term);
+        countIndex++;
+      }
 
       if (role) {
         countQuery += ` AND role = $${countIndex++}`;
@@ -321,6 +349,49 @@ class UserService {
       return userWithoutPassword;
     } catch (error) {
       Logger.error('Error authenticating user', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get CSV export formats for a user
+   * @param {number} userId
+   * @returns {Promise<Object|null>} formats map { formatName: string[] }
+   */
+  async getCsvFormats(userId) {
+    try {
+      const result = await db.query(
+        `SELECT features->'csv_formats' AS csv_formats FROM login WHERE id = $1`,
+        [userId]
+      );
+      if (result.rows.length === 0) return null;
+      return result.rows[0].csv_formats || {};
+    } catch (error) {
+      Logger.error('Error fetching csv formats', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Save CSV export formats for a user (merges into features JSONB)
+   * @param {number} userId
+   * @param {Object} formats - { formatName: string[] }
+   * @returns {Promise<Object|null>}
+   */
+  async saveCsvFormats(userId, formats) {
+    try {
+      const result = await db.query(
+        `UPDATE login
+         SET features = features || jsonb_build_object('csv_formats', $1::jsonb),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2
+         RETURNING features->'csv_formats' AS csv_formats`,
+        [JSON.stringify(formats), userId]
+      );
+      if (result.rows.length === 0) return null;
+      return result.rows[0].csv_formats || {};
+    } catch (error) {
+      Logger.error('Error saving csv formats', error);
       throw error;
     }
   }

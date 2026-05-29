@@ -11,13 +11,14 @@ const { Logger } = require('../utils');
  */
 const getAllUsers = async (req, res) => {
   try {
-    const { page, limit, role, status } = req.query;
-    
+    const { page, limit, role, status, search } = req.query;
+
     const result = await userService.getAllUsers({
       page: parseInt(page) || 1,
       limit: parseInt(limit) || 100,
       role,
-      status
+      status,
+      search
     });
     
     res.json({
@@ -226,6 +227,74 @@ const loginUser = async (req, res) => {
 };
 
 /**
+ * Get CSV export formats for a user
+ */
+const getCsvFormats = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const formats = await userService.getCsvFormats(parseInt(id));
+    if (formats === null) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.json({
+      success: true,
+      message: 'CSV formats retrieved successfully',
+      data: formats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    Logger.error('Error in getCsvFormats controller', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to retrieve CSV formats',
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+/**
+ * Save CSV export formats for a user
+ */
+const saveCsvFormats = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { formats } = req.body;
+    if (!formats || typeof formats !== 'object' || Array.isArray(formats)) {
+      return res.status(400).json({
+        success: false,
+        message: 'formats object is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+    const saved = await userService.saveCsvFormats(parseInt(id), formats);
+    if (saved === null) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.json({
+      success: true,
+      message: 'CSV formats saved successfully',
+      data: saved,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    Logger.error('Error in saveCsvFormats controller', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to save CSV formats',
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+/**
  * Get page access options
  */
 const getPageAccessOptions = async (req, res) => {
@@ -255,5 +324,7 @@ module.exports = {
   updateUser,
   deleteUser,
   loginUser,
-  getPageAccessOptions
+  getPageAccessOptions,
+  getCsvFormats,
+  saveCsvFormats
 };

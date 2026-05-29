@@ -92,7 +92,12 @@ const processCommitment = async (req, res, next) => {
       };
 
       if (req.pageAccessDetails) {
+        Logger.info(`[WHATSAPP] Commitment process notification — targetPage: "${targetPage}", totalUsers: ${req.pageAccessDetails.length}, orderNo: ${result.data.order_no}`);
+        Logger.info(`[WHATSAPP] docDetails:`, JSON.stringify(docDetails));
         await whatsappShareService(docDetails, req.pageAccessDetails, targetPage);
+        Logger.info(`[WHATSAPP] whatsappShareService call completed for order ${result.data.order_no}`);
+      } else {
+        Logger.warn(`[WHATSAPP] Skipping notification — req.pageAccessDetails is not set (pageAccess middleware may not have run)`);
       }
     } catch (notifyError) {
       Logger.warn('Failed to send WhatsApp notification for commitment process', notifyError);
