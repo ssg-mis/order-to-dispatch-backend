@@ -34,20 +34,20 @@ class VehicleMasterService {
       const countResult = await pool.query(countQuery, values);
       const total = parseInt(countResult.rows[0].count);
 
-      // Get paginated data
+      // Get paginated data (skip LIMIT/OFFSET when fetching all for dropdowns)
       let query = `
-        SELECT 
-          vehicle_id as id, vehicle_master_id, status, registration_no, vehicle_type, 
-          transporter, rto, road_tax, road_tax_image, pollution, 
-          pollution_image, insurance, insurance_image, fitness, 
+        SELECT
+          vehicle_id as id, vehicle_master_id, status, registration_no, vehicle_type,
+          transporter, rto, road_tax, road_tax_image, pollution,
+          pollution_image, insurance, insurance_image, fitness,
           fitness_image, state_permit, state_permit_image, gvw, ulw, passing, created_at
         FROM vehicle_master
         ${whereClause}
         ORDER BY created_at DESC
-        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+        ${all ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
       `;
-      
-      values.push(limit, offset);
+
+      if (!all) values.push(limit, offset);
       const result = await pool.query(query, values);
       
       Logger.info(`Fetched ${result.rows.length} vehicles (total: ${total}, search: "${search}")`);
