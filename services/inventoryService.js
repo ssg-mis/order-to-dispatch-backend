@@ -59,6 +59,11 @@ class InventoryService {
           AND od.depo_name IS NOT NULL
         GROUP BY od.depo_name, lrc.product_name
       ),
+      production_totals AS (
+        SELECT sku_name, SUM(qty) AS total_production
+        FROM production
+        GROUP BY sku_name
+      ),
       all_keys AS (
         SELECT depot_name, product_name FROM stock_in_data
         UNION
@@ -74,13 +79,15 @@ class InventoryService {
         COALESCE(so.stock_out_qty, 0)::integer AS stock_out,
         COALESCE(sa.sales_qty, 0)::integer AS sales,
         COALESCE(oq.opening_qty, 0) AS opening_qty,
-        oq.updated_at AS opening_qty_updated_at
+        oq.updated_at AS opening_qty_updated_at,
+        COALESCE(pt.total_production, 0)::integer AS production_qty
       FROM all_keys ak
       LEFT JOIN stock_in_data si ON si.depot_name = ak.depot_name AND si.product_name = ak.product_name
       LEFT JOIN stock_out_data so ON so.depot_name = ak.depot_name AND so.product_name = ak.product_name
       LEFT JOIN sales_data sa ON sa.depot_name = ak.depot_name AND sa.product_name = ak.product_name
       LEFT JOIN sku_details sd ON LOWER(TRIM(sd.sku_name)) = LOWER(TRIM(ak.product_name))
       LEFT JOIN inventory_opening_qty oq ON oq.depo_name = ak.depot_name AND oq.product_name = ak.product_name
+      LEFT JOIN production_totals pt ON LOWER(TRIM(pt.sku_name)) = LOWER(TRIM(ak.product_name))
       ORDER BY ak.depot_name ASC, ak.product_name ASC
     `);
     return result.rows;

@@ -121,6 +121,7 @@ app.use('/api/v1/gate-in', require('./routes/gateInRoute'));
 app.use('/api/v1/process-stages', require('./routes/processStageRoute'));
 app.use('/api/v1/tags', require('./routes/tagRoute'));
 app.use('/api/v1/inventory', require('./routes/inventoryRoute'));
+app.use('/api/v1/production', require('./routes/productionRoute'));
 
 // Test database connection and apply trigger fixes
 const db = require('./config/db');

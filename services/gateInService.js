@@ -22,19 +22,27 @@ class GateInService {
 
       const countQuery = `
         SELECT COUNT(*) as total
-        FROM dispatch_drafts dd
-        LEFT JOIN gate_in_records gi ON dd.order_key = gi.order_key
-        WHERE gi.order_key IS NULL
+        FROM (
+          SELECT DISTINCT dd.order_key
+          FROM dispatch_drafts dd
+          LEFT JOIN gate_in_records gi ON dd.order_key = gi.order_key
+          WHERE gi.order_key IS NULL
+        ) sub
       `;
       const countResult = await db.query(countQuery);
       const total = parseInt(countResult.rows[0].total);
 
+      // Deduplicates by order_key (most recent draft wins) because multiple users
+      // can save a draft for the same order, creating duplicate pending entries.
       const dataQuery = `
-        SELECT dd.id, dd.username, dd.order_key, dd.draft_data, dd.saved_at
-        FROM dispatch_drafts dd
-        LEFT JOIN gate_in_records gi ON dd.order_key = gi.order_key
-        WHERE gi.order_key IS NULL
-        ORDER BY dd.saved_at DESC
+        SELECT * FROM (
+          SELECT DISTINCT ON (dd.order_key) dd.id, dd.username, dd.order_key, dd.draft_data, dd.saved_at
+          FROM dispatch_drafts dd
+          LEFT JOIN gate_in_records gi ON dd.order_key = gi.order_key
+          WHERE gi.order_key IS NULL
+          ORDER BY dd.order_key, dd.saved_at DESC
+        ) deduped
+        ORDER BY saved_at DESC
         LIMIT $1 OFFSET $2
       `;
       const dataResult = await db.query(dataQuery, [limit, offset]);
