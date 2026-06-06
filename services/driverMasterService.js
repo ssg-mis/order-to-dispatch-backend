@@ -15,12 +15,8 @@ class DriverMasterService {
       const { all, page = 1, limit = 20, search = '' } = params;
       const offset = (page - 1) * limit;
       const values = [];
-      let whereClause = "";
-      
-      if (!all) {
-        whereClause = " WHERE status = 'Active'";
-      }
-      
+      let whereClause = " WHERE status = 'Active'";
+
       if (search) {
         const searchPattern = `%${search}%`;
         const searchIndex = values.length + 1;
@@ -34,19 +30,19 @@ class DriverMasterService {
       const countResult = await pool.query(countQuery, values);
       const total = parseInt(countResult.rows[0].count);
 
-      // Get paginated data
+      // Get paginated data (skip LIMIT/OFFSET when fetching all for dropdowns)
       let query = `
-        SELECT 
+        SELECT
           driver_id as id, driver_master_id, status, driving_licence_no, driving_licence_type,
           valid_upto, rto, driver_name, mobile_no, email_id,
           address_line1, state, pincode, aadhaar_no, pan_no, aadhaar_upload, dl_upload, created_at
         FROM driver_master
         ${whereClause}
         ORDER BY created_at DESC
-        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+        ${all ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
       `;
-      
-      values.push(limit, offset);
+
+      if (!all) values.push(limit, offset);
       const result = await pool.query(query, values);
       
       Logger.info(`Fetched ${result.rows.length} drivers (total: ${total}, search: "${search}")`);
