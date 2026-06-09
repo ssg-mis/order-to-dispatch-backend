@@ -92,21 +92,30 @@ async function getBrokerByName(req, res) {
  */
 async function createBroker(req, res) {
   try {
-    const broker = await brokerService.createBroker(req.body);
-    
-    res.status(201).json({
-      success: true,
-      message: 'Broker created successfully',
-      data: broker
-    });
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const broker = await brokerService.createBroker({ ...req.body, approval_status: isAdmin ? 'approved' : 'pending', created_by: req.user?.id || null });
+    res.status(201).json({ success: true, message: isAdmin ? 'Broker created successfully' : 'Broker submitted for approval', data: broker });
   } catch (error) {
     Logger.error('Error in createBroker controller:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create broker',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to create broker', error: error.message });
   }
+}
+
+async function getPendingBrokers(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    res.status(200).json({ success: true, data: await brokerService.getPendingBrokers() });
+  } catch (error) { res.status(500).json({ success: false, message: 'Failed to fetch pending brokers', error: error.message }); }
+}
+
+async function reviewBroker(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    const { action, reason } = req.body;
+    if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+    const broker = await brokerService.reviewBroker(req.params.id, action, req.user.id, reason);
+    res.status(200).json({ success: true, message: `Broker ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: broker });
+  } catch (error) { res.status(500).json({ success: false, message: 'Failed to review broker', error: error.message }); }
 }
 
 /**
@@ -160,5 +169,7 @@ module.exports = {
   getBrokerByName,
   createBroker,
   updateBroker,
-  deleteBroker: deleteCustomer
+  deleteBroker: deleteCustomer,
+  getPendingBrokers,
+  reviewBroker
 };

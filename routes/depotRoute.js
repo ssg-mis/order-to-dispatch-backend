@@ -6,6 +6,9 @@
 const express = require('express');
 const router = express.Router();
 const depotController = require('../controllers/depotController');
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
+
+router.use(masterTabAccess('depots'));
 
 /**
  * @route   GET /api/v1/depots
@@ -13,6 +16,8 @@ const depotController = require('../controllers/depotController');
  * @access  Public
  */
 router.get('/', depotController.getAllDepots);
+router.get('/pending', depotController.getPendingDepots);
+router.patch('/:id/approval', depotController.reviewDepot);
 
 /**
  * @route   GET /api/v1/depots/:id

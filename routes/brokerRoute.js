@@ -6,6 +6,9 @@
 const express = require('express');
 const router = express.Router();
 const brokerController = require('../controllers/brokerController');
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
+
+router.use(masterTabAccess('brokers'));
 
 /**
  * @route   GET /api/v1/brokers
@@ -13,6 +16,8 @@ const brokerController = require('../controllers/brokerController');
  * @access  Public
  */
 router.get('/', brokerController.getAllBrokers);
+router.get('/pending', brokerController.getPendingBrokers);
+router.patch('/:id/approval', brokerController.reviewBroker);
 
 /**
  * @route   GET /api/v1/brokers/:id

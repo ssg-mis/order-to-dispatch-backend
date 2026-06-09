@@ -75,8 +75,8 @@ const getUserById = async (req, res) => {
  */
 const createUser = async (req, res) => {
   try {
-    const { username, password, email, phone_no, status, role, page_access, depo_access } = req.body;
-    
+    const { username, password, email, phone_no, status, role, page_access, depo_access, features } = req.body;
+
     // Validate required fields
     if (!username || !password || !role) {
       return res.status(400).json({
@@ -85,7 +85,7 @@ const createUser = async (req, res) => {
         timestamp: new Date().toISOString()
       });
     }
-    
+
     const newUser = await userService.createUser({
       username,
       password,
@@ -94,7 +94,8 @@ const createUser = async (req, res) => {
       status,
       role,
       page_access,
-      depo_access
+      depo_access,
+      features
     });
     
     res.status(201).json({
@@ -210,6 +211,16 @@ const loginUser = async (req, res) => {
       });
     }
     
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    // Set HTTP-only cookie
+    res.cookie('token', user.token, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    });
+
     res.json({
       success: true,
       message: 'Login successful',
@@ -317,6 +328,32 @@ const getPageAccessOptions = async (req, res) => {
   }
 };
 
+/**
+ * Log out user (clear cookie)
+ */
+const logoutUser = async (req, res) => {
+  try {
+    const isProduction = process.env.NODE_ENV === 'production';
+    res.clearCookie('token', {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax'
+    });
+    res.json({
+      success: true,
+      message: 'Logged out successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    Logger.error('Error in logoutUser controller', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Logout failed',
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getUserById,
@@ -324,6 +361,7 @@ module.exports = {
   updateUser,
   deleteUser,
   loginUser,
+  logoutUser,
   getPageAccessOptions,
   getCsvFormats,
   saveCsvFormats

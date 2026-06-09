@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const transportMasterController = require('../controllers/transportMasterController');
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
+
+router.use(masterTabAccess('transport_master'));
 
 /**
  * @route   GET /api/v1/transport-master
@@ -8,6 +11,8 @@ const transportMasterController = require('../controllers/transportMasterControl
  * @access  Private
  */
 router.get('/', transportMasterController.getAllTransporters);
+router.get('/pending', transportMasterController.getPendingTransporters);
+router.patch('/:id/approval', transportMasterController.reviewTransporter);
 
 /**
  * @route   GET /api/v1/transport-master/:id

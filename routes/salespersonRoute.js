@@ -6,6 +6,9 @@
 const express = require('express');
 const router = express.Router();
 const salespersonController = require('../controllers/salespersonController');
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
+
+router.use(masterTabAccess('salespersons'));
 
 /**
  * @route   GET /api/v1/salespersons
@@ -13,6 +16,8 @@ const salespersonController = require('../controllers/salespersonController');
  * @access  Public
  */
 router.get('/', salespersonController.getAllSalespersons);
+router.get('/pending', salespersonController.getPendingSalespersons);
+router.patch('/:id/approval', salespersonController.reviewSalesperson);
 
 /**
  * @route   GET /api/v1/salespersons/:id

@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const driverMasterController = require('../controllers/driverMasterController');
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
+
+router.use(masterTabAccess('driver_master'));
 
 /**
  * @route   GET /api/v1/driver-master
@@ -8,6 +11,8 @@ const driverMasterController = require('../controllers/driverMasterController');
  * @access  Private
  */
 router.get('/', driverMasterController.getAllDrivers);
+router.get('/pending', driverMasterController.getPendingDrivers);
+router.patch('/:id/approval', driverMasterController.reviewDriver);
 
 /**
  * @route   GET /api/v1/driver-master/:id

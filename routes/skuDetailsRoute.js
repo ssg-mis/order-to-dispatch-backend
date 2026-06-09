@@ -6,10 +6,17 @@ const {
   getSkuDetailById,
   createSkuDetail,
   updateSkuDetail,
-  deleteSkuDetail
+  deleteSkuDetail,
+  getPendingSkuDetails,
+  reviewSkuDetail
 } = require('../controllers/skuDetailsController');
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
+
+router.use(masterTabAccess('sku_details'));
 
 router.get('/', getAllSkuDetails);
+router.get('/pending', getPendingSkuDetails);
+router.patch('/:id/approval', reviewSkuDetail);
 router.get('/:id', getSkuDetailById);
 router.post('/', createSkuDetail);
 router.put('/:id', updateSkuDetail);

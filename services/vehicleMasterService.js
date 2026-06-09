@@ -15,19 +15,14 @@ class VehicleMasterService {
       const { all, page = 1, limit = 20, search = '' } = params;
       const offset = (page - 1) * limit;
       const values = [];
-      let whereClause = "";
-      
-      if (!all) {
-        whereClause = " WHERE status = 'Active'";
-      }
-      
+
+      const conditions = ["approval_status = 'approved'"];
+      if (!all) conditions.push("status = 'Active'");
       if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
-        whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(registration_no ILIKE $${searchIndex} OR vehicle_master_id ILIKE $${searchIndex} OR vehicle_type ILIKE $${searchIndex} OR transporter ILIKE $${searchIndex})`;
+        values.push(`%${search}%`);
+        conditions.push(`(registration_no ILIKE $${values.length} OR vehicle_master_id ILIKE $${values.length} OR vehicle_type ILIKE $${values.length} OR transporter ILIKE $${values.length})`);
       }
+      const whereClause = " WHERE " + conditions.join(" AND ");
 
       // Get total count
       const countQuery = `SELECT COUNT(*) FROM vehicle_master ${whereClause}`;
@@ -96,6 +91,31 @@ class VehicleMasterService {
   /**
    * Create a new vehicle
    */
+  async getPendingVehicles() {
+    try {
+      const result = await pool.query(`
+        SELECT vm.vehicle_id as id, vm.vehicle_master_id, vm.registration_no, vm.vehicle_type,
+               vm.transporter, vm.status, vm.rejection_reason, vm.created_at, l.username AS created_by_name
+        FROM vehicle_master vm LEFT JOIN login l ON l.id = vm.created_by
+        WHERE vm.approval_status = 'pending' ORDER BY vm.created_at ASC
+      `);
+      return result.rows;
+    } catch (error) { Logger.error('Error fetching pending vehicles:', error); throw error; }
+  }
+
+  async reviewVehicle(id, action, reviewedBy, reason) {
+    try {
+      const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const result = await pool.query(
+        `UPDATE vehicle_master SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
+         WHERE vehicle_id=$4 AND approval_status='pending' RETURNING vehicle_id as id, *`,
+        [approvalStatus, reviewedBy, reason || null, id]
+      );
+      if (!result.rows.length) throw new Error(`Pending vehicle ${id} not found`);
+      return result.rows[0];
+    } catch (error) { Logger.error(`Error reviewing vehicle ${id}:`, error); throw error; }
+  }
+
   async createVehicle(data) {
     try {
       const {
@@ -117,17 +137,19 @@ class VehicleMasterService {
         state_permit_image,
         gvw,
         ulw,
-        passing
+        passing,
+        approval_status = 'approved',
+        created_by = null
       } = data;
 
       const query = `
         INSERT INTO vehicle_master (
-          vehicle_master_id, status, registration_no, vehicle_type, transporter, 
-          rto, road_tax, road_tax_image, pollution, pollution_image, 
-          insurance, insurance_image, fitness, fitness_image, state_permit, 
-          state_permit_image, gvw, ulw, passing
+          vehicle_master_id, status, registration_no, vehicle_type, transporter,
+          rto, road_tax, road_tax_image, pollution, pollution_image,
+          insurance, insurance_image, fitness, fitness_image, state_permit,
+          state_permit_image, gvw, ulw, passing, approval_status, created_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
         RETURNING vehicle_id as id, *
       `;
 
@@ -135,7 +157,7 @@ class VehicleMasterService {
         vehicle_master_id, status, registration_no, vehicle_type, transporter,
         rto, road_tax || null, road_tax_image || null, pollution || null, pollution_image || null,
         insurance || null, insurance_image || null, fitness || null, fitness_image || null, state_permit || null,
-        state_permit_image || null, gvw || 0, ulw || 0, passing || 0
+        state_permit_image || null, gvw || 0, ulw || 0, passing || 0, approval_status, created_by
       ];
 
       const result = await pool.query(query, values);

@@ -7,19 +7,19 @@ const express = require('express');
 const router = express.Router();
 const skuController = require('../controllers/skuController');
 const { skuSellingPriceController, updateSkuSellingPriceController } = require("../controllers/skuSellingPrice");
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
 
 /**
- * @route GET /api/v1/skus
+ * @route GET /api/v1/skus/sku-selling-price
  * @desc Get all sku selling price details
  */
-
-router.get("/sku-selling-price", skuSellingPriceController);
+router.get("/sku-selling-price", masterTabAccess('sku_selling_price'), skuSellingPriceController);
 
 /**
  * @route PUT /api/v1/skus/sku-selling-price/:id
  * @desc Update a sku selling price directly
  */
-router.put("/sku-selling-price/:id", updateSkuSellingPriceController);
+router.put("/sku-selling-price/:id", masterTabAccess('sku_selling_price'), updateSkuSellingPriceController);
 
 /**
  * @route   GET /api/v1/skus

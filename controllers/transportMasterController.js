@@ -49,13 +49,9 @@ const getTransporterById = async (req, res, next) => {
  */
 const createTransporter = async (req, res, next) => {
   try {
-    const transporter = await transportMasterService.createTransporter(req.body);
-    
-    res.status(201).json({
-      success: true,
-      message: 'Transporter created successfully',
-      data: transporter
-    });
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const transporter = await transportMasterService.createTransporter({ ...req.body, approval_status: isAdmin ? 'approved' : 'pending', created_by: req.user?.id || null });
+    res.status(201).json({ success: true, message: isAdmin ? 'Transporter created successfully' : 'Transporter submitted for approval', data: transporter });
   } catch (error) {
     Logger.error('Controller Error - createTransporter:', error);
     next(error);
@@ -100,10 +96,29 @@ const deleteTransporter = async (req, res, next) => {
   }
 };
 
+const getPendingTransporters = async (req, res, next) => {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    res.status(200).json({ success: true, data: await transportMasterService.getPendingTransporters() });
+  } catch (error) { next(error); }
+};
+
+const reviewTransporter = async (req, res, next) => {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    const { action, reason } = req.body;
+    if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+    const transporter = await transportMasterService.reviewTransporter(req.params.id, action, req.user.id, reason);
+    res.status(200).json({ success: true, message: `Transporter ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: transporter });
+  } catch (error) { next(error); }
+};
+
 module.exports = {
   getAllTransporters,
   getTransporterById,
   createTransporter,
   updateTransporter,
-  deleteTransporter
+  deleteTransporter,
+  getPendingTransporters,
+  reviewTransporter
 };

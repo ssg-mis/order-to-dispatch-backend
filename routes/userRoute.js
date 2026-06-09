@@ -12,6 +12,7 @@ router.get('/page-access-options', userController.getPageAccessOptions);
 
 // User authentication
 router.post('/login', userController.loginUser);
+router.post('/logout', userController.logoutUser);
 
 // CRUD operations
 router.get('/', userController.getAllUsers);

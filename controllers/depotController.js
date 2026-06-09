@@ -92,20 +92,36 @@ async function getDepotByName(req, res) {
  */
 async function createDepot(req, res) {
   try {
-    const depot = await depotService.createDepot(req.body);
-    
-    res.status(201).json({
-      success: true,
-      message: 'Depot created successfully',
-      data: depot
-    });
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const data = { ...req.body, approval_status: isAdmin ? 'approved' : 'pending', created_by: req.user?.id || null };
+    const depot = await depotService.createDepot(data);
+    res.status(201).json({ success: true, message: isAdmin ? 'Depot created successfully' : 'Depot submitted for approval', data: depot });
   } catch (error) {
     Logger.error('Error in createDepot controller:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create depot',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to create depot', error: error.message });
+  }
+}
+
+async function getPendingDepots(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    const depots = await depotService.getPendingDepots();
+    res.status(200).json({ success: true, data: depots });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to fetch pending depots', error: error.message });
+  }
+}
+
+async function reviewDepot(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    const { id } = req.params;
+    const { action, reason } = req.body;
+    if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+    const depot = await depotService.reviewDepot(id, action, req.user.id, reason);
+    res.status(200).json({ success: true, message: `Depot ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: depot });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to review depot', error: error.message });
   }
 }
 
@@ -160,5 +176,7 @@ module.exports = {
   getDepotByName,
   createDepot,
   updateDepot,
-  deleteDepot
+  deleteDepot,
+  getPendingDepots,
+  reviewDepot
 };

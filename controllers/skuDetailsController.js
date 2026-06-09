@@ -13,9 +13,9 @@ const getAllSkuDetails = async (req, res, next) => {
     const values = [];
     let whereClause = "";
 
-    if (all !== 'true') {
-      whereClause = "WHERE status = 'Active' ";
-    }
+    const conditions = ["approval_status = 'approved'"];
+    if (all !== 'true') conditions.push("status = 'Active'");
+    whereClause = conditions.length ? "WHERE " + conditions.join(" AND ") + " " : "";
 
     if (search) {
       const { clause, params } = buildSearchCondition(['sku_name', 'sku_code'], search, values.length + 1);
@@ -139,43 +139,22 @@ const createSkuDetail = async (req, res, next) => {
       });
     }
 
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const approvalStatus = isAdmin ? 'approved' : 'pending';
+
     const sql = `
       INSERT INTO sku_details (
-        status,
-        sku_code,
-        sku_name,
-        main_uom,
-        alternate_uom,
-        nos_per_main_uom,
-        units,
-        oil_filling_per_unit,
-        filling_units,
-        converted_kg,
-        packing_weight_per_main_unit,
-        weight_difference,
-        sku_weight,
-        packing_weight,
-        gross_weight
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        status, sku_code, sku_name, main_uom, alternate_uom, nos_per_main_uom,
+        units, oil_filling_per_unit, filling_units, converted_kg, packing_weight_per_main_unit,
+        weight_difference, sku_weight, packing_weight, gross_weight, approval_status, created_by
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       RETURNING *
     `;
 
     const values = [
-      status || 'Active',
-      sku_code,
-      sku_name,
-      main_uom,
-      alternate_uom,
-      nos_per_main_uom,
-      units,
-      oil_filling_per_unit,
-      filling_units,
-      converted_kg,
-      packing_weight_per_main_unit,
-      weight_difference,
-      sku_weight,
-      packing_weight,
-      gross_weight
+      status || 'Active', sku_code, sku_name, main_uom, alternate_uom, nos_per_main_uom,
+      units, oil_filling_per_unit, filling_units, converted_kg, packing_weight_per_main_unit,
+      weight_difference, sku_weight, packing_weight, gross_weight, approvalStatus, req.user?.id || null
     ];
 
     const result = await query(sql, values);
@@ -192,7 +171,7 @@ const createSkuDetail = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: 'SKU Detail created successfully',
+      message: isAdmin ? 'SKU Detail created successfully' : 'SKU Detail submitted for approval',
       data: { ...result.rows[0], tag_name: tag_name || null }
     });
   } catch (error) {
@@ -308,13 +287,16 @@ const updateSkuDetail = async (req, res, next) => {
 };
 
 /**
- * Delete SKU Detail (Soft Delete)
+ * Delete SKU Detail (Hard Delete)
  */
 const deleteSkuDetail = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const result = await query('UPDATE sku_details SET status = $1 WHERE id = $2 RETURNING id', ['Inactive', id]);
+    // Delete corresponding tag first to avoid orphan rows
+    await query('DELETE FROM tag WHERE sku_id = $1', [id]);
+
+    const result = await query('DELETE FROM sku_details WHERE id = $1 RETURNING id', [id]);
 
     if (result.rowCount === 0) {
       return res.status(404).json({
@@ -332,10 +314,47 @@ const deleteSkuDetail = async (req, res, next) => {
   }
 };
 
+const getPendingSkuDetails = async (req, res, next) => {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const result = await query(`
+      SELECT sd.*, l.username AS created_by_name
+      FROM sku_details sd LEFT JOIN login l ON l.id = sd.created_by
+      WHERE sd.approval_status = 'pending' ORDER BY sd.created_at ASC
+    `);
+    res.json({ success: true, data: result.rows });
+  } catch (error) { next(error); }
+};
+
+const reviewSkuDetail = async (req, res, next) => {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const { id } = req.params;
+    const { action, reason } = req.body;
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+    }
+    const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+    const result = await query(
+      `UPDATE sku_details SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
+       WHERE id=$4 AND approval_status='pending' RETURNING *`,
+      [approvalStatus, req.user.id, reason || null, id]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Pending SKU not found' });
+    res.json({ success: true, message: `SKU Detail ${action}d successfully`, data: result.rows[0] });
+  } catch (error) { next(error); }
+};
+
 module.exports = {
   getAllSkuDetails,
   getSkuDetailById,
   createSkuDetail,
   updateSkuDetail,
-  deleteSkuDetail
+  deleteSkuDetail,
+  getPendingSkuDetails,
+  reviewSkuDetail
 };

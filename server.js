@@ -18,6 +18,7 @@ const { Logger } = require('./utils');
 // Import middleware
 const requestLogger = require('./middleware/requestLogger');
 const errorHandler = require('./middleware/errorHandler');
+const authMiddleware = require('./middleware/authMiddleware');
 
 // Initialize Express app
 const app = express();
@@ -33,6 +34,14 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Request logging
 app.use(requestLogger);
+
+// ============ AUTH ============
+// Apply JWT auth to every route except the login endpoint
+const PUBLIC_PATHS = ['/api/v1/users/login'];
+app.use((req, res, next) => {
+  if (PUBLIC_PATHS.includes(req.path)) return next();
+  return authMiddleware(req, res, next);
+});
 
 // ============ ROUTES ============
 

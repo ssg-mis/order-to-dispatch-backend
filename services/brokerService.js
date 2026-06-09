@@ -15,19 +15,14 @@ class BrokerService {
       const { all, page = 1, limit = 20, search = '' } = params;
       const offset = (page - 1) * limit;
       const values = [];
-      let whereClause = "";
-      
-      if (!all) {
-        whereClause = " WHERE status = 'Active'";
-      }
-      
+
+      const conditions = ["approval_status = 'approved'"];
+      if (!all) conditions.push("status = 'Active'");
       if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
-        whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(salesman_name ILIKE $${searchIndex} OR broker_id ILIKE $${searchIndex} OR depot_name ILIKE $${searchIndex} OR email_id ILIKE $${searchIndex})`;
+        values.push(`%${search}%`);
+        conditions.push(`(salesman_name ILIKE $${values.length} OR broker_id ILIKE $${values.length} OR depot_name ILIKE $${values.length} OR email_id ILIKE $${values.length})`);
       }
+      const whereClause = " WHERE " + conditions.join(" AND ");
 
       // Get count
       const countQuery = `SELECT COUNT(*) FROM broker_details ${whereClause}`;
@@ -129,27 +124,44 @@ class BrokerService {
   /**
    * Create a new broker
    */
+  async getPendingBrokers() {
+    try {
+      const result = await pool.query(`
+        SELECT bd.broker_id, bd.salesman_name, bd.status, bd.email_id, bd.mobile_no,
+               bd.depot_name, bd.rejection_reason, bd.created_at, l.username AS created_by_name
+        FROM broker_details bd LEFT JOIN login l ON l.id = bd.created_by
+        WHERE bd.approval_status = 'pending' ORDER BY bd.created_at ASC
+      `);
+      return result.rows;
+    } catch (error) { Logger.error('Error fetching pending brokers:', error); throw error; }
+  }
+
+  async reviewBroker(id, action, reviewedBy, reason) {
+    try {
+      const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const result = await pool.query(
+        `UPDATE broker_details SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
+         WHERE broker_id=$4 AND approval_status='pending' RETURNING *`,
+        [approvalStatus, reviewedBy, reason || null, id]
+      );
+      if (!result.rows.length) throw new Error(`Pending broker ${id} not found`);
+      return result.rows[0];
+    } catch (error) { Logger.error(`Error reviewing broker ${id}:`, error); throw error; }
+  }
+
   async createBroker(data) {
     try {
       const {
-        broker_id,
-        salesman_name,
-        status = 'Active',
-        email_id,
-        mobile_no,
-        depot_name,
-        depot_id
+        broker_id, salesman_name, status = 'Active', email_id, mobile_no, depot_name, depot_id,
+        approval_status = 'approved', created_by = null
       } = data;
 
       const query = `
-        INSERT INTO broker_details (
-          broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
+        INSERT INTO broker_details (broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id, approval_status, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *
       `;
 
-      const values = [broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id];
+      const values = [broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id, approval_status, created_by];
 
       const result = await pool.query(query, values);
       Logger.info(`Created new broker with ID: ${result.rows[0].broker_id}`);

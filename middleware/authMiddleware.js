@@ -1,10 +1,25 @@
-// Sample authentication middleware
+const jwt = require('jsonwebtoken');
+const appConfig = require('../config/app');
 
 const authMiddleware = (req, res, next) => {
   try {
-    // Get token from header
-    const token = req.headers.authorization?.split(' ')[1];
-    
+    let token = null;
+
+    // 1. Try to read token from cookies header manually
+    if (req.headers.cookie) {
+      const cookies = req.headers.cookie.split(';').reduce((acc, cookie) => {
+        const [key, value] = cookie.split('=').map(c => c.trim());
+        if (key && value) acc[key] = decodeURIComponent(value);
+        return acc;
+      }, {});
+      token = cookies.token;
+    }
+
+    // 2. Fallback to Authorization header
+    if (!token && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
     if (!token) {
       return res.status(401).json({
         success: false,
@@ -12,17 +27,14 @@ const authMiddleware = (req, res, next) => {
       });
     }
 
-    // Verify token here (add JWT verification when needed)
-    // const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // req.user = decoded;
-    
+    const decoded = jwt.verify(token, appConfig.jwt.secret);
+    req.user = decoded; // { id, username, role }
     next();
   } catch (error) {
-    res.status(401).json({
-      success: false,
-      message: 'Token is not valid',
-      error: error.message
-    });
+    const message = error.name === 'TokenExpiredError'
+      ? 'Token expired, please login again'
+      : 'Invalid token';
+    return res.status(401).json({ success: false, message });
   }
 };
 

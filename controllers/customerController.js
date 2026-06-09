@@ -92,11 +92,17 @@ async function getCustomerByName(req, res) {
  */
 async function createCustomer(req, res) {
   try {
-    const customer = await customerService.createCustomer(req.body);
-    
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const data = {
+      ...req.body,
+      approval_status: isAdmin ? 'approved' : 'pending',
+      created_by: req.user?.id || null
+    };
+    const customer = await customerService.createCustomer(data);
+
     res.status(201).json({
       success: true,
-      message: 'Customer created successfully',
+      message: isAdmin ? 'Customer created successfully' : 'Customer submitted for approval',
       data: customer
     });
   } catch (error) {
@@ -106,6 +112,47 @@ async function createCustomer(req, res) {
       message: 'Failed to create customer',
       error: error.message
     });
+  }
+}
+
+/**
+ * Get pending customers (admin only)
+ */
+async function getPendingCustomers(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const customers = await customerService.getPendingCustomers();
+    res.status(200).json({ success: true, data: customers });
+  } catch (error) {
+    Logger.error('Error in getPendingCustomers controller:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch pending customers', error: error.message });
+  }
+}
+
+/**
+ * Approve or reject a pending customer (admin only)
+ */
+async function reviewCustomer(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const { id } = req.params;
+    const { action, reason } = req.body;
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+    }
+    const customer = await customerService.reviewCustomer(id, action, req.user.id, reason);
+    res.status(200).json({
+      success: true,
+      message: `Customer ${action === 'approve' ? 'approved' : 'rejected'} successfully`,
+      data: customer
+    });
+  } catch (error) {
+    Logger.error('Error in reviewCustomer controller:', error);
+    res.status(500).json({ success: false, message: 'Failed to review customer', error: error.message });
   }
 }
 
@@ -160,5 +207,7 @@ module.exports = {
   getCustomerByName,
   createCustomer,
   updateCustomer,
-  deleteCustomer
+  deleteCustomer,
+  getPendingCustomers,
+  reviewCustomer
 };

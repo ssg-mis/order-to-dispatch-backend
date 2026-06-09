@@ -49,13 +49,9 @@ const getDriverById = async (req, res, next) => {
  */
 const createDriver = async (req, res, next) => {
   try {
-    const driver = await driverMasterService.createDriver(req.body);
-    
-    res.status(201).json({
-      success: true,
-      message: 'Driver created successfully',
-      data: driver
-    });
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const driver = await driverMasterService.createDriver({ ...req.body, approval_status: isAdmin ? 'approved' : 'pending', created_by: req.user?.id || null });
+    res.status(201).json({ success: true, message: isAdmin ? 'Driver created successfully' : 'Driver submitted for approval', data: driver });
   } catch (error) {
     Logger.error('Controller Error - createDriver:', error);
     next(error);
@@ -100,10 +96,29 @@ const deleteDriver = async (req, res, next) => {
   }
 };
 
+const getPendingDrivers = async (req, res, next) => {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    res.status(200).json({ success: true, data: await driverMasterService.getPendingDrivers() });
+  } catch (error) { next(error); }
+};
+
+const reviewDriver = async (req, res, next) => {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    const { action, reason } = req.body;
+    if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+    const driver = await driverMasterService.reviewDriver(req.params.id, action, req.user.id, reason);
+    res.status(200).json({ success: true, message: `Driver ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: driver });
+  } catch (error) { next(error); }
+};
+
 module.exports = {
   getAllDrivers,
   getDriverById,
   createDriver,
   updateDriver,
-  deleteDriver
+  deleteDriver,
+  getPendingDrivers,
+  reviewDriver
 };

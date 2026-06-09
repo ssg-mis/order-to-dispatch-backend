@@ -15,19 +15,14 @@ class SalespersonService {
       const { all, page = 1, limit = 20, search = '' } = params;
       const offset = (page - 1) * limit;
       const values = [];
-      let whereClause = "";
-      
-      if (!all || all === 'false') {
-        whereClause = " WHERE status = 'Active'";
-      }
-      
+
+      const conditions = ["approval_status = 'approved'"];
+      if (!all || all === 'false') conditions.push("status = 'Active'");
       if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
-        whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(salesman_name ILIKE $${searchIndex} OR broker_id ILIKE $${searchIndex} OR depot_name ILIKE $${searchIndex} OR email_id ILIKE $${searchIndex})`;
+        values.push(`%${search}%`);
+        conditions.push(`(salesman_name ILIKE $${values.length} OR broker_id ILIKE $${values.length} OR depot_name ILIKE $${values.length} OR email_id ILIKE $${values.length})`);
       }
+      const whereClause = " WHERE " + conditions.join(" AND ");
 
       // Get count
       const countQuery = `SELECT COUNT(*) FROM salesperson_details ${whereClause}`;
@@ -96,27 +91,44 @@ class SalespersonService {
   /**
    * Create a new salesperson
    */
+  async getPendingSalespersons() {
+    try {
+      const result = await pool.query(`
+        SELECT sd.broker_id, sd.salesman_name, sd.status, sd.email_id, sd.mobile_no,
+               sd.depot_name, sd.rejection_reason, sd.created_at, l.username AS created_by_name
+        FROM salesperson_details sd LEFT JOIN login l ON l.id = sd.created_by
+        WHERE sd.approval_status = 'pending' ORDER BY sd.created_at ASC
+      `);
+      return result.rows;
+    } catch (error) { Logger.error('Error fetching pending salespersons:', error); throw error; }
+  }
+
+  async reviewSalesperson(id, action, reviewedBy, reason) {
+    try {
+      const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const result = await pool.query(
+        `UPDATE salesperson_details SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
+         WHERE broker_id=$4 AND approval_status='pending' RETURNING *`,
+        [approvalStatus, reviewedBy, reason || null, id]
+      );
+      if (!result.rows.length) throw new Error(`Pending salesperson ${id} not found`);
+      return result.rows[0];
+    } catch (error) { Logger.error(`Error reviewing salesperson ${id}:`, error); throw error; }
+  }
+
   async createSalesperson(data) {
     try {
       const {
-        broker_id,
-        salesman_name,
-        status = 'Active',
-        email_id,
-        mobile_no,
-        depot_name,
-        depot_id
+        broker_id, salesman_name, status = 'Active', email_id, mobile_no, depot_name, depot_id,
+        approval_status = 'approved', created_by = null
       } = data;
 
       const query = `
-        INSERT INTO salesperson_details (
-          broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
+        INSERT INTO salesperson_details (broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id, approval_status, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *
       `;
 
-      const values = [broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id];
+      const values = [broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id, approval_status, created_by];
 
       const result = await pool.query(query, values);
       Logger.info(`Created new salesperson with ID: ${result.rows[0].broker_id}`);

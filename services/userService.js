@@ -6,6 +6,8 @@
 const db = require('../config/db');
 const { Logger } = require('../utils');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const appConfig = require('../config/app');
 
 const SALT_ROUNDS = 10;
 
@@ -344,9 +346,14 @@ class UserService {
         return null;
       }
 
-      // Return user without password
+      // Return user without password + signed JWT
       const { password: _, ...userWithoutPassword } = user;
-      return userWithoutPassword;
+      const token = jwt.sign(
+        { id: user.id, username: user.username, role: user.role },
+        appConfig.jwt.secret,
+        { expiresIn: appConfig.jwt.expiresIn }
+      );
+      return { ...userWithoutPassword, token };
     } catch (error) {
       Logger.error('Error authenticating user', error);
       throw error;

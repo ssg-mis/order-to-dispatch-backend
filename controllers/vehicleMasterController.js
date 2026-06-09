@@ -59,20 +59,30 @@ async function getVehicleById(req, res) {
  */
 async function createVehicle(req, res) {
   try {
-    const vehicle = await vehicleMasterService.createVehicle(req.body);
-    res.status(201).json({
-      success: true,
-      message: 'Vehicle created successfully',
-      data: vehicle
-    });
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const vehicle = await vehicleMasterService.createVehicle({ ...req.body, approval_status: isAdmin ? 'approved' : 'pending', created_by: req.user?.id || null });
+    res.status(201).json({ success: true, message: isAdmin ? 'Vehicle created successfully' : 'Vehicle submitted for approval', data: vehicle });
   } catch (error) {
     Logger.error('Error in createVehicle controller:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create vehicle',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to create vehicle', error: error.message });
   }
+}
+
+async function getPendingVehicles(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    res.status(200).json({ success: true, data: await vehicleMasterService.getPendingVehicles() });
+  } catch (error) { res.status(500).json({ success: false, message: 'Failed to fetch pending vehicles', error: error.message }); }
+}
+
+async function reviewVehicle(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+    const { action, reason } = req.body;
+    if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+    const vehicle = await vehicleMasterService.reviewVehicle(req.params.id, action, req.user.id, reason);
+    res.status(200).json({ success: true, message: `Vehicle ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: vehicle });
+  } catch (error) { res.status(500).json({ success: false, message: 'Failed to review vehicle', error: error.message }); }
 }
 
 /**
@@ -123,5 +133,7 @@ module.exports = {
   getVehicleById,
   createVehicle,
   updateVehicle,
-  deleteVehicle
+  deleteVehicle,
+  getPendingVehicles,
+  reviewVehicle
 };

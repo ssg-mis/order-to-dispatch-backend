@@ -6,6 +6,9 @@
 const express = require('express');
 const router = express.Router();
 const customerController = require('../controllers/customerController');
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
+
+router.use(masterTabAccess('customers'));
 
 /**
  * @route   GET /api/v1/customers
@@ -13,6 +16,20 @@ const customerController = require('../controllers/customerController');
  * @access  Public
  */
 router.get('/', customerController.getAllCustomers);
+
+/**
+ * @route   GET /api/v1/customers/pending
+ * @desc    Get all pending approval customers (admin only)
+ * @access  Admin
+ */
+router.get('/pending', customerController.getPendingCustomers);
+
+/**
+ * @route   PATCH /api/v1/customers/:id/approval
+ * @desc    Approve or reject a pending customer (admin only)
+ * @access  Admin
+ */
+router.patch('/:id/approval', customerController.reviewCustomer);
 
 /**
  * @route   GET /api/v1/customers/:id

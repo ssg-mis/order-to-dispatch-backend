@@ -15,15 +15,12 @@ class DriverMasterService {
       const { all, page = 1, limit = 20, search = '' } = params;
       const offset = (page - 1) * limit;
       const values = [];
-      let whereClause = " WHERE status = 'Active'";
-
+      const conditions = ["approval_status = 'approved'", "status = 'Active'"];
       if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
-        whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(driver_name ILIKE $${searchIndex} OR driver_master_id ILIKE $${searchIndex} OR mobile_no ILIKE $${searchIndex} OR driving_licence_no ILIKE $${searchIndex})`;
+        values.push(`%${search}%`);
+        conditions.push(`(driver_name ILIKE $${values.length} OR driver_master_id ILIKE $${values.length} OR mobile_no ILIKE $${values.length} OR driving_licence_no ILIKE $${values.length})`);
       }
+      const whereClause = " WHERE " + conditions.join(" AND ");
 
       // Get total count
       const countQuery = `SELECT COUNT(*) FROM driver_master ${whereClause}`;
@@ -90,6 +87,31 @@ class DriverMasterService {
   /**
    * Create a new driver
    */
+  async getPendingDrivers() {
+    try {
+      const result = await pool.query(`
+        SELECT dm.driver_id as id, dm.driver_master_id, dm.driver_name, dm.mobile_no,
+               dm.driving_licence_no, dm.status, dm.rejection_reason, dm.created_at, l.username AS created_by_name
+        FROM driver_master dm LEFT JOIN login l ON l.id = dm.created_by
+        WHERE dm.approval_status = 'pending' ORDER BY dm.created_at ASC
+      `);
+      return result.rows;
+    } catch (error) { Logger.error('Error fetching pending drivers:', error); throw error; }
+  }
+
+  async reviewDriver(id, action, reviewedBy, reason) {
+    try {
+      const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const result = await pool.query(
+        `UPDATE driver_master SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
+         WHERE driver_id=$4 AND approval_status='pending' RETURNING driver_id as id, *`,
+        [approvalStatus, reviewedBy, reason || null, id]
+      );
+      if (!result.rows.length) throw new Error(`Pending driver ${id} not found`);
+      return result.rows[0];
+    } catch (error) { Logger.error(`Error reviewing driver ${id}:`, error); throw error; }
+  }
+
   async createDriver(data) {
     try {
       const {
@@ -108,23 +130,26 @@ class DriverMasterService {
         aadhaar_no,
         pan_no,
         aadhaar_upload,
-        dl_upload
+        dl_upload,
+        approval_status = 'approved',
+        created_by = null
       } = data;
 
       const query = `
         INSERT INTO driver_master (
           driver_master_id, status, driving_licence_no, driving_licence_type, valid_upto,
           rto, driver_name, mobile_no, email_id, address_line1,
-          state, pincode, aadhaar_no, pan_no, aadhaar_upload, dl_upload
+          state, pincode, aadhaar_no, pan_no, aadhaar_upload, dl_upload, approval_status, created_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
         RETURNING driver_id as id, *
       `;
 
       const values = [
         driver_master_id, status, driving_licence_no, driving_licence_type, valid_upto || null,
         rto, driver_name, mobile_no, email_id || null, address_line1 || null,
-        state || null, pincode || null, aadhaar_no || null, pan_no || null, aadhaar_upload || null, dl_upload || null
+        state || null, pincode || null, aadhaar_no || null, pan_no || null, aadhaar_upload || null, dl_upload || null,
+        approval_status, created_by
       ];
 
       const result = await pool.query(query, values);

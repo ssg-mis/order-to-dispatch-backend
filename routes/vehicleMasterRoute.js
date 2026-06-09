@@ -5,9 +5,14 @@
 const express = require('express');
 const router = express.Router();
 const vehicleMasterController = require('../controllers/vehicleMasterController');
+const { masterTabAccess } = require('../middleware/masterTabAccessMiddleware');
+
+router.use(masterTabAccess('vehicle_master'));
 
 // GET /api/v1/vehicle-master - Get all vehicles
 router.get('/', vehicleMasterController.getAllVehicles);
+router.get('/pending', vehicleMasterController.getPendingVehicles);
+router.patch('/:id/approval', vehicleMasterController.reviewVehicle);
 
 // GET /api/v1/vehicle-master/:id - Get vehicle by ID
 router.get('/:id', vehicleMasterController.getVehicleById);

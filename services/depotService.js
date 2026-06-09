@@ -15,19 +15,14 @@ class DepotService {
       const { all, page = 1, limit = 20, search = '' } = params;
       const offset = (page - 1) * limit;
       const values = [];
-      let whereClause = "";
-      
-      if (all !== 'true') {
-        whereClause = " WHERE status = 'Active'";
-      }
-      
+
+      const conditions = ["approval_status = 'approved'"];
+      if (all !== 'true') conditions.push("status = 'Active'");
       if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
-        whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(depot_name ILIKE $${searchIndex} OR depot_id ILIKE $${searchIndex} OR salesman_broker_name ILIKE $${searchIndex} OR depot_address ILIKE $${searchIndex})`;
+        values.push(`%${search}%`);
+        conditions.push(`(depot_name ILIKE $${values.length} OR depot_id ILIKE $${values.length} OR salesman_broker_name ILIKE $${values.length} OR depot_address ILIKE $${values.length})`);
       }
+      const whereClause = " WHERE " + conditions.join(" AND ");
 
       // Get count
       const countQuery = `SELECT COUNT(*) FROM depot_details ${whereClause}`;
@@ -35,14 +30,14 @@ class DepotService {
       const total = parseInt(countResult.rows[0].count);
 
       // Get paginated data
-      let query = `
+      const query = `
         SELECT depot_id, depot_name, status, depot_address, state, salesman_broker_name
         FROM depot_details
         ${whereClause}
         ORDER BY depot_name ASC
         LIMIT $${values.length + 1} OFFSET $${values.length + 2}
       `;
-      
+
       values.push(limit, offset);
       const result = await pool.query(query, values);
       
@@ -127,6 +122,42 @@ class DepotService {
   /**
    * Create a new depot
    */
+  async getPendingDepots() {
+    try {
+      const result = await pool.query(`
+        SELECT dd.depot_id, dd.depot_name, dd.status, dd.depot_address, dd.state,
+               dd.salesman_broker_name, dd.rejection_reason, dd.created_at,
+               l.username AS created_by_name
+        FROM depot_details dd
+        LEFT JOIN login l ON l.id = dd.created_by
+        WHERE dd.approval_status = 'pending'
+        ORDER BY dd.created_at ASC
+      `);
+      Logger.info(`Fetched ${result.rows.length} pending depots`);
+      return result.rows;
+    } catch (error) {
+      Logger.error('Error fetching pending depots:', error);
+      throw error;
+    }
+  }
+
+  async reviewDepot(id, action, reviewedBy, reason) {
+    try {
+      const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const result = await pool.query(
+        `UPDATE depot_details SET approval_status = $1, reviewed_by = $2, rejection_reason = $3
+         WHERE depot_id = $4 AND approval_status = 'pending' RETURNING *`,
+        [approvalStatus, reviewedBy, reason || null, id]
+      );
+      if (!result.rows.length) throw new Error(`Pending depot with ID ${id} not found`);
+      Logger.info(`Depot ${id} ${approvalStatus} by user ${reviewedBy}`);
+      return result.rows[0];
+    } catch (error) {
+      Logger.error(`Error reviewing depot ${id}:`, error);
+      throw error;
+    }
+  }
+
   async createDepot(data) {
     try {
       const {
@@ -135,18 +166,21 @@ class DepotService {
         status = 'Active',
         depot_address,
         state,
-        salesman_broker_name
+        salesman_broker_name,
+        approval_status = 'approved',
+        created_by = null
       } = data;
 
       const query = `
         INSERT INTO depot_details (
-          depot_id, depot_name, status, depot_address, state, salesman_broker_name
+          depot_id, depot_name, status, depot_address, state, salesman_broker_name,
+          approval_status, created_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
       `;
 
-      const values = [depot_id, depot_name, status, depot_address, state, salesman_broker_name];
+      const values = [depot_id, depot_name, status, depot_address, state, salesman_broker_name, approval_status, created_by];
 
       const result = await pool.query(query, values);
       Logger.info(`Created new depot with ID: ${result.rows[0].depot_id}`);

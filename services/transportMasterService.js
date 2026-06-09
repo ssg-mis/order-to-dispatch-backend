@@ -15,19 +15,14 @@ class TransportMasterService {
       const { all, page = 1, limit = 20, search = '' } = params;
       const offset = (page - 1) * limit;
       const values = [];
-      let whereClause = "";
-      
-      if (!all) {
-        whereClause = " WHERE status = 'Active'";
-      }
-      
+
+      const conditions = ["approval_status = 'approved'"];
+      if (!all) conditions.push("status = 'Active'");
       if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
-        whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += `(transporter_name ILIKE $${searchIndex} OR transport_master_id ILIKE $${searchIndex} OR contact_person ILIKE $${searchIndex} OR contact_number ILIKE $${searchIndex})`;
+        values.push(`%${search}%`);
+        conditions.push(`(transporter_name ILIKE $${values.length} OR transport_master_id ILIKE $${values.length} OR contact_person ILIKE $${values.length} OR contact_number ILIKE $${values.length})`);
       }
+      const whereClause = " WHERE " + conditions.join(" AND ");
 
       // Get total count
       const countQuery = `SELECT COUNT(*) FROM transport_master ${whereClause}`;
@@ -41,7 +36,7 @@ class TransportMasterService {
           contact_number, email_id, address_line1, state, pincode, pan, gstin, created_at
         FROM transport_master
         ${whereClause}
-        ORDER BY created_at DESC
+        ORDER BY transporter_name ASC
         LIMIT $${values.length + 1} OFFSET $${values.length + 2}
       `;
       
@@ -92,6 +87,31 @@ class TransportMasterService {
   /**
    * Create a new transporter
    */
+  async getPendingTransporters() {
+    try {
+      const result = await pool.query(`
+        SELECT tm.transporter_id as id, tm.transport_master_id, tm.transporter_name, tm.contact_person,
+               tm.contact_number, tm.gstin, tm.status, tm.rejection_reason, tm.created_at, l.username AS created_by_name
+        FROM transport_master tm LEFT JOIN login l ON l.id = tm.created_by
+        WHERE tm.approval_status = 'pending' ORDER BY tm.created_at ASC
+      `);
+      return result.rows;
+    } catch (error) { Logger.error('Error fetching pending transporters:', error); throw error; }
+  }
+
+  async reviewTransporter(id, action, reviewedBy, reason) {
+    try {
+      const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const result = await pool.query(
+        `UPDATE transport_master SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
+         WHERE transporter_id=$4 AND approval_status='pending' RETURNING transporter_id as id, *`,
+        [approvalStatus, reviewedBy, reason || null, id]
+      );
+      if (!result.rows.length) throw new Error(`Pending transporter ${id} not found`);
+      return result.rows[0];
+    } catch (error) { Logger.error(`Error reviewing transporter ${id}:`, error); throw error; }
+  }
+
   async createTransporter(data) {
     try {
       const {
@@ -105,21 +125,24 @@ class TransportMasterService {
         state,
         pincode,
         pan,
-        gstin
+        gstin,
+        approval_status = 'approved',
+        created_by = null
       } = data;
 
       const query = `
         INSERT INTO transport_master (
-          transport_master_id, status, transporter_name, contact_person, contact_number, 
-          email_id, address_line1, state, pincode, pan, gstin
+          transport_master_id, status, transporter_name, contact_person, contact_number,
+          email_id, address_line1, state, pincode, pan, gstin, approval_status, created_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         RETURNING transporter_id as id, *
       `;
 
       const values = [
         transport_master_id, status, transporter_name, contact_person || null, contact_number || null,
-        email_id || null, address_line1 || null, state || null, pincode || null, pan || null, gstin || null
+        email_id || null, address_line1 || null, state || null, pincode || null, pan || null, gstin || null,
+        approval_status, created_by
       ];
 
       const result = await pool.query(query, values);
