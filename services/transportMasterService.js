@@ -99,13 +99,21 @@ class TransportMasterService {
     } catch (error) { Logger.error('Error fetching pending transporters:', error); throw error; }
   }
 
-  async reviewTransporter(id, action, reviewedBy, reason) {
+  async reviewTransporter(id, action, reviewedBy, reason, overrides = {}) {
     try {
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const ALLOWED = ['transporter_name','contact_person','contact_number','gstin','status'];
+      const safe = action === 'approve'
+        ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
+        : {};
+      const params = [approvalStatus, reviewedBy, reason || null];
+      let setCols = 'approval_status=$1, reviewed_by=$2, rejection_reason=$3';
+      let n = 4;
+      for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+      params.push(id);
       const result = await pool.query(
-        `UPDATE transport_master SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
-         WHERE transporter_id=$4 AND approval_status='pending' RETURNING transporter_id as id, *`,
-        [approvalStatus, reviewedBy, reason || null, id]
+        `UPDATE transport_master SET ${setCols} WHERE transporter_id=$${n} AND approval_status='pending' RETURNING transporter_id as id, *`,
+        params
       );
       if (!result.rows.length) throw new Error(`Pending transporter ${id} not found`);
       return result.rows[0];
@@ -216,19 +224,18 @@ class TransportMasterService {
   async deleteTransporter(id) {
     try {
       const query = `
-        UPDATE transport_master
-        SET status = 'Inactive'
+        DELETE FROM transport_master
         WHERE transporter_id = $1
         RETURNING *
       `;
 
       const result = await pool.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error(`Transporter with ID ${id} not found`);
       }
 
-      Logger.info(`Soft deleted transporter ID: ${id}`);
+      Logger.info(`Deleted transporter ID: ${id}`);
       return result.rows[0];
     } catch (error) {
       Logger.error(`Error deleting transporter ${id}:`, error);

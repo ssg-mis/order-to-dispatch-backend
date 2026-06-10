@@ -106,9 +106,9 @@ const getPendingDrivers = async (req, res, next) => {
 const reviewDriver = async (req, res, next) => {
   try {
     if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
-    const { action, reason } = req.body;
+    const { action, reason, ...overrides } = req.body;
     if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
-    const driver = await driverMasterService.reviewDriver(req.params.id, action, req.user.id, reason);
+    const driver = await driverMasterService.reviewDriver(req.params.id, action, req.user.id, reason, overrides);
     res.status(200).json({ success: true, message: `Driver ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: driver });
   } catch (error) { next(error); }
 };

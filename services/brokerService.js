@@ -136,13 +136,21 @@ class BrokerService {
     } catch (error) { Logger.error('Error fetching pending brokers:', error); throw error; }
   }
 
-  async reviewBroker(id, action, reviewedBy, reason) {
+  async reviewBroker(id, action, reviewedBy, reason, overrides = {}) {
     try {
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const ALLOWED = ['salesman_name','mobile_no','email_id','depot_name','status'];
+      const safe = action === 'approve'
+        ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
+        : {};
+      const params = [approvalStatus, reviewedBy, reason || null];
+      let setCols = 'approval_status=$1, reviewed_by=$2, rejection_reason=$3';
+      let n = 4;
+      for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+      params.push(id);
       const result = await pool.query(
-        `UPDATE broker_details SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
-         WHERE broker_id=$4 AND approval_status='pending' RETURNING *`,
-        [approvalStatus, reviewedBy, reason || null, id]
+        `UPDATE broker_details SET ${setCols} WHERE broker_id=$${n} AND approval_status='pending' RETURNING *`,
+        params
       );
       if (!result.rows.length) throw new Error(`Pending broker ${id} not found`);
       return result.rows[0];
@@ -221,19 +229,18 @@ class BrokerService {
   async deleteBroker(id) {
     try {
       const query = `
-        UPDATE broker_details
-        SET status = 'Inactive'
+        DELETE FROM broker_details
         WHERE broker_id = $1
         RETURNING *
       `;
 
       const result = await pool.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error(`Broker with ID ${id} not found`);
       }
 
-      Logger.info(`Soft deleted broker ID: ${id}`);
+      Logger.info(`Deleted broker ID: ${id}`);
       return result.rows[0];
     } catch (error) {
       Logger.error(`Error deleting broker ${id}:`, error);

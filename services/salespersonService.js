@@ -103,13 +103,21 @@ class SalespersonService {
     } catch (error) { Logger.error('Error fetching pending salespersons:', error); throw error; }
   }
 
-  async reviewSalesperson(id, action, reviewedBy, reason) {
+  async reviewSalesperson(id, action, reviewedBy, reason, overrides = {}) {
     try {
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const ALLOWED = ['salesman_name','mobile_no','email_id','depot_name','status'];
+      const safe = action === 'approve'
+        ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
+        : {};
+      const params = [approvalStatus, reviewedBy, reason || null];
+      let setCols = 'approval_status=$1, reviewed_by=$2, rejection_reason=$3';
+      let n = 4;
+      for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+      params.push(id);
       const result = await pool.query(
-        `UPDATE salesperson_details SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
-         WHERE broker_id=$4 AND approval_status='pending' RETURNING *`,
-        [approvalStatus, reviewedBy, reason || null, id]
+        `UPDATE salesperson_details SET ${setCols} WHERE broker_id=$${n} AND approval_status='pending' RETURNING *`,
+        params
       );
       if (!result.rows.length) throw new Error(`Pending salesperson ${id} not found`);
       return result.rows[0];
@@ -188,19 +196,18 @@ class SalespersonService {
   async deleteSalesperson(id) {
     try {
       const query = `
-        UPDATE salesperson_details
-        SET status = 'Inactive'
+        DELETE FROM salesperson_details
         WHERE broker_id = $1
         RETURNING *
       `;
 
       const result = await pool.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error(`Salesperson with ID ${id} not found`);
       }
 
-      Logger.info(`Soft deleted salesperson ID: ${id}`);
+      Logger.info(`Deleted salesperson ID: ${id}`);
       return result.rows[0];
     } catch (error) {
       Logger.error(`Error deleting salesperson ${id}:`, error);

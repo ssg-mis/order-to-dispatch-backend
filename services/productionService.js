@@ -24,6 +24,18 @@ class ProductionService {
     return result.rows;
   }
 
+  async getByRange(from, to) {
+    await this.ensureTable();
+    const result = await db.query(
+      `SELECT sku_name, to_char(date, 'YYYY-MM-DD') AS date, qty
+       FROM production
+       WHERE date BETWEEN $1 AND $2 AND qty > 0
+       ORDER BY sku_name, date`,
+      [from, to]
+    );
+    return result.rows;
+  }
+
   async bulkUpsert(date, items) {
     await this.ensureTable();
     if (!items || items.length === 0) return [];

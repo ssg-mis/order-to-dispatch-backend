@@ -111,9 +111,9 @@ async function getPendingBrokers(req, res) {
 async function reviewBroker(req, res) {
   try {
     if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
-    const { action, reason } = req.body;
+    const { action, reason, ...overrides } = req.body;
     if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
-    const broker = await brokerService.reviewBroker(req.params.id, action, req.user.id, reason);
+    const broker = await brokerService.reviewBroker(req.params.id, action, req.user.id, reason, overrides);
     res.status(200).json({ success: true, message: `Broker ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: broker });
   } catch (error) { res.status(500).json({ success: false, message: 'Failed to review broker', error: error.message }); }
 }

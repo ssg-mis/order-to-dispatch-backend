@@ -103,13 +103,21 @@ class VehicleMasterService {
     } catch (error) { Logger.error('Error fetching pending vehicles:', error); throw error; }
   }
 
-  async reviewVehicle(id, action, reviewedBy, reason) {
+  async reviewVehicle(id, action, reviewedBy, reason, overrides = {}) {
     try {
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const ALLOWED = ['registration_no','vehicle_type','transporter','rto','status'];
+      const safe = action === 'approve'
+        ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
+        : {};
+      const params = [approvalStatus, reviewedBy, reason || null];
+      let setCols = 'approval_status=$1, reviewed_by=$2, rejection_reason=$3';
+      let n = 4;
+      for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+      params.push(id);
       const result = await pool.query(
-        `UPDATE vehicle_master SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
-         WHERE vehicle_id=$4 AND approval_status='pending' RETURNING vehicle_id as id, *`,
-        [approvalStatus, reviewedBy, reason || null, id]
+        `UPDATE vehicle_master SET ${setCols} WHERE vehicle_id=$${n} AND approval_status='pending' RETURNING vehicle_id as id, *`,
+        params
       );
       if (!result.rows.length) throw new Error(`Pending vehicle ${id} not found`);
       return result.rows[0];
@@ -249,19 +257,18 @@ class VehicleMasterService {
   async deleteVehicle(id) {
     try {
       const query = `
-        UPDATE vehicle_master
-        SET status = 'Inactive'
+        DELETE FROM vehicle_master
         WHERE vehicle_id = $1
         RETURNING *
       `;
 
       const result = await pool.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error(`Vehicle with ID ${id} not found`);
       }
 
-      Logger.info(`Soft deleted vehicle ID: ${id}`);
+      Logger.info(`Deleted vehicle ID: ${id}`);
       return result.rows[0];
     } catch (error) {
       Logger.error(`Error deleting vehicle ${id}:`, error);

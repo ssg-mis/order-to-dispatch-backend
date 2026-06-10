@@ -85,20 +85,22 @@ class CustomerService {
     }
   }
 
-  async reviewCustomer(id, action, reviewedBy, reason) {
+  async reviewCustomer(id, action, reviewedBy, reason, overrides = {}) {
     try {
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
-      const query = `
-        UPDATE customer_details
-        SET
-          approval_status = $1,
-          reviewed_by = $2,
-          rejection_reason = $3,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4 AND approval_status = 'pending'
-        RETURNING *
-      `;
-      const result = await pool.query(query, [approvalStatus, reviewedBy, reason || null, id]);
+      const ALLOWED = ['customer_name','contact_person','contact','email','address_line_1','address_line_2','state','pincode','pan','gstin','gst_registered','status'];
+      const safe = action === 'approve'
+        ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
+        : {};
+      const params = [approvalStatus, reviewedBy, reason || null];
+      let setCols = 'approval_status=$1, reviewed_by=$2, rejection_reason=$3, updated_at=CURRENT_TIMESTAMP';
+      let n = 4;
+      for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+      params.push(id);
+      const result = await pool.query(
+        `UPDATE customer_details SET ${setCols} WHERE id=$${n} AND approval_status='pending' RETURNING *`,
+        params
+      );
       if (!result.rows.length) throw new Error(`Pending customer with ID ${id} not found`);
       Logger.info(`Customer ID ${id} ${approvalStatus} by user ${reviewedBy}`);
       return result.rows[0];
@@ -303,19 +305,18 @@ class CustomerService {
   async deleteCustomer(id) {
     try {
       const query = `
-        UPDATE customer_details
-        SET status = 'Inactive', updated_at = CURRENT_TIMESTAMP
+        DELETE FROM customer_details
         WHERE id = $1
         RETURNING *
       `;
 
       const result = await pool.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error(`Customer with ID ${id} not found`);
       }
 
-      Logger.info(`Soft deleted customer ID: ${id}`);
+      Logger.info(`Deleted customer ID: ${id}`);
       return result.rows[0];
     } catch (error) {
       Logger.error(`Error deleting customer ${id}:`, error);

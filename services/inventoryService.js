@@ -75,6 +75,7 @@ class InventoryService {
         ak.depot_name,
         ak.product_name,
         COALESCE(sd.sku_code, '') AS sku_id,
+        COALESCE(sd.status, 'Active') AS sku_status,
         COALESCE(si.stock_in_qty, 0)::integer AS stock_in,
         COALESCE(so.stock_out_qty, 0)::integer AS stock_out,
         COALESCE(sa.sales_qty, 0)::integer AS sales,

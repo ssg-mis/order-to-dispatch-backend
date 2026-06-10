@@ -78,9 +78,9 @@ async function getPendingVehicles(req, res) {
 async function reviewVehicle(req, res) {
   try {
     if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
-    const { action, reason } = req.body;
+    const { action, reason, ...overrides } = req.body;
     if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
-    const vehicle = await vehicleMasterService.reviewVehicle(req.params.id, action, req.user.id, reason);
+    const vehicle = await vehicleMasterService.reviewVehicle(req.params.id, action, req.user.id, reason, overrides);
     res.status(200).json({ success: true, message: `Vehicle ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: vehicle });
   } catch (error) { res.status(500).json({ success: false, message: 'Failed to review vehicle', error: error.message }); }
 }

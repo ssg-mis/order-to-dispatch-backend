@@ -99,13 +99,21 @@ class DriverMasterService {
     } catch (error) { Logger.error('Error fetching pending drivers:', error); throw error; }
   }
 
-  async reviewDriver(id, action, reviewedBy, reason) {
+  async reviewDriver(id, action, reviewedBy, reason, overrides = {}) {
     try {
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const ALLOWED = ['driver_name','mobile_no','driving_licence_no','driving_licence_type','valid_upto','rto','status'];
+      const safe = action === 'approve'
+        ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
+        : {};
+      const params = [approvalStatus, reviewedBy, reason || null];
+      let setCols = 'approval_status=$1, reviewed_by=$2, rejection_reason=$3';
+      let n = 4;
+      for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+      params.push(id);
       const result = await pool.query(
-        `UPDATE driver_master SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
-         WHERE driver_id=$4 AND approval_status='pending' RETURNING driver_id as id, *`,
-        [approvalStatus, reviewedBy, reason || null, id]
+        `UPDATE driver_master SET ${setCols} WHERE driver_id=$${n} AND approval_status='pending' RETURNING driver_id as id, *`,
+        params
       );
       if (!result.rows.length) throw new Error(`Pending driver ${id} not found`);
       return result.rows[0];
@@ -234,19 +242,18 @@ class DriverMasterService {
   async deleteDriver(id) {
     try {
       const query = `
-        UPDATE driver_master
-        SET status = 'Inactive'
+        DELETE FROM driver_master
         WHERE driver_id = $1
         RETURNING *
       `;
 
       const result = await pool.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error(`Driver with ID ${id} not found`);
       }
 
-      Logger.info(`Soft deleted driver ID: ${id}`);
+      Logger.info(`Deleted driver ID: ${id}`);
       return result.rows[0];
     } catch (error) {
       Logger.error(`Error deleting driver ${id}:`, error);

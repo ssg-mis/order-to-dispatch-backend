@@ -3,7 +3,11 @@ const { Logger } = require('../utils');
 
 async function getByDate(req, res) {
   try {
-    const { date } = req.query;
+    const { date, from, to } = req.query;
+    if (from && to) {
+      const data = await productionService.getByRange(from, to);
+      return res.json({ success: true, data });
+    }
     if (!date) return res.status(400).json({ success: false, message: 'date is required' });
     const data = await productionService.getByDate(date);
     res.json({ success: true, data });

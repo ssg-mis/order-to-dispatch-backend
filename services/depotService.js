@@ -141,13 +141,21 @@ class DepotService {
     }
   }
 
-  async reviewDepot(id, action, reviewedBy, reason) {
+  async reviewDepot(id, action, reviewedBy, reason, overrides = {}) {
     try {
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      const ALLOWED = ['depot_name','depot_address','state','salesman_broker_name','status'];
+      const safe = action === 'approve'
+        ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
+        : {};
+      const params = [approvalStatus, reviewedBy, reason || null];
+      let setCols = 'approval_status=$1, reviewed_by=$2, rejection_reason=$3';
+      let n = 4;
+      for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+      params.push(id);
       const result = await pool.query(
-        `UPDATE depot_details SET approval_status = $1, reviewed_by = $2, rejection_reason = $3
-         WHERE depot_id = $4 AND approval_status = 'pending' RETURNING *`,
-        [approvalStatus, reviewedBy, reason || null, id]
+        `UPDATE depot_details SET ${setCols} WHERE depot_id=$${n} AND approval_status='pending' RETURNING *`,
+        params
       );
       if (!result.rows.length) throw new Error(`Pending depot with ID ${id} not found`);
       Logger.info(`Depot ${id} ${approvalStatus} by user ${reviewedBy}`);
@@ -238,19 +246,18 @@ class DepotService {
   async deleteDepot(id) {
     try {
       const query = `
-        UPDATE depot_details
-        SET status = 'Inactive'
+        DELETE FROM depot_details
         WHERE depot_id = $1
         RETURNING *
       `;
 
       const result = await pool.query(query, [id]);
-      
+
       if (result.rows.length === 0) {
         throw new Error(`Depot with ID ${id} not found`);
       }
 
-      Logger.info(`Soft deleted depot ID: ${id}`);
+      Logger.info(`Deleted depot ID: ${id}`);
       return result.rows[0];
     } catch (error) {
       Logger.error(`Error deleting depot ${id}:`, error);

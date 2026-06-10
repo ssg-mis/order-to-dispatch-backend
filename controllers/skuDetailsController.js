@@ -334,15 +334,23 @@ const reviewSkuDetail = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Admin access required' });
     }
     const { id } = req.params;
-    const { action, reason } = req.body;
+    const { action, reason, ...overrides } = req.body;
     if (!['approve', 'reject'].includes(action)) {
       return res.status(400).json({ success: false, message: 'action must be approve or reject' });
     }
     const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+    const ALLOWED = ['sku_name','sku_code','main_uom','status','hsn_code','gst_rate'];
+    const safe = action === 'approve'
+      ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
+      : {};
+    const params = [approvalStatus, req.user.id, reason || null];
+    let setCols = 'approval_status=$1, reviewed_by=$2, rejection_reason=$3';
+    let n = 4;
+    for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+    params.push(id);
     const result = await query(
-      `UPDATE sku_details SET approval_status=$1, reviewed_by=$2, rejection_reason=$3
-       WHERE id=$4 AND approval_status='pending' RETURNING *`,
-      [approvalStatus, req.user.id, reason || null, id]
+      `UPDATE sku_details SET ${setCols} WHERE id=$${n} AND approval_status='pending' RETURNING *`,
+      params
     );
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Pending SKU not found' });
     res.json({ success: true, message: `SKU Detail ${action}d successfully`, data: result.rows[0] });

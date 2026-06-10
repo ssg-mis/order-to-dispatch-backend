@@ -116,9 +116,9 @@ async function reviewDepot(req, res) {
   try {
     if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
     const { id } = req.params;
-    const { action, reason } = req.body;
+    const { action, reason, ...overrides } = req.body;
     if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
-    const depot = await depotService.reviewDepot(id, action, req.user.id, reason);
+    const depot = await depotService.reviewDepot(id, action, req.user.id, reason, overrides);
     res.status(200).json({ success: true, message: `Depot ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: depot });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to review depot', error: error.message });
