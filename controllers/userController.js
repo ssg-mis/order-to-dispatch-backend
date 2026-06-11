@@ -329,6 +329,35 @@ const getPageAccessOptions = async (req, res) => {
 };
 
 /**
+ * Get current authenticated user (from cookie/token)
+ */
+const getMe = async (req, res) => {
+  try {
+    const user = await userService.getUserById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.json({
+      success: true,
+      message: 'User retrieved successfully',
+      data: user,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    Logger.error('Error in getMe controller', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to retrieve user',
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+/**
  * Log out user (clear cookie)
  */
 const logoutUser = async (req, res) => {
@@ -357,6 +386,7 @@ const logoutUser = async (req, res) => {
 module.exports = {
   getAllUsers,
   getUserById,
+  getMe,
   createUser,
   updateUser,
   deleteUser,
