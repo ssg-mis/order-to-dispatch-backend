@@ -162,11 +162,15 @@ async function reviewCustomer(req, res) {
 async function updateCustomer(req, res) {
   try {
     const { id } = req.params;
-    const customer = await customerService.updateCustomer(id, req.body);
-    
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const customer = await customerService.updateCustomer(id, req.body, {
+      isAdmin,
+      userId: req.user?.id || null
+    });
+
     res.status(200).json({
       success: true,
-      message: 'Customer updated successfully',
+      message: isAdmin ? 'Customer updated successfully' : 'Edit submitted for approval',
       data: customer
     });
   } catch (error) {

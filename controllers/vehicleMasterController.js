@@ -91,10 +91,14 @@ async function reviewVehicle(req, res) {
 async function updateVehicle(req, res) {
   try {
     const { id } = req.params;
-    const vehicle = await vehicleMasterService.updateVehicle(id, req.body);
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const vehicle = await vehicleMasterService.updateVehicle(id, req.body, {
+      isAdmin,
+      userId: req.user?.id || null
+    });
     res.status(200).json({
       success: true,
-      message: 'Vehicle updated successfully',
+      message: isAdmin ? 'Vehicle updated successfully' : 'Edit submitted for approval',
       data: vehicle
     });
   } catch (error) {

@@ -42,7 +42,12 @@ const masterTabAccess = (tabKey) => async (req, res, next) => {
     // No master_tabs config → allow all (backward compat)
     if (!masterTabs || typeof masterTabs !== 'object') return next();
 
-    if (masterTabs[tabKey] === true) return next();
+    // Access to the tab is granted when it is present in any supported format:
+    //  - true            (legacy boolean)
+    //  - 'modify'        (can add/edit — writes may still route through approval)
+    //  - 'view_only'     (read access; write-gating is enforced in controllers/UI)
+    const tabVal = masterTabs[tabKey];
+    if (tabVal === true || tabVal === 'modify' || tabVal === 'view_only') return next();
 
     return res.status(403).json({
       success: false,

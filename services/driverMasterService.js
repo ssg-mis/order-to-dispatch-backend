@@ -32,7 +32,8 @@ class DriverMasterService {
         SELECT
           driver_id as id, driver_master_id, status, driving_licence_no, driving_licence_type,
           valid_upto, rto, driver_name, mobile_no, email_id,
-          address_line1, state, pincode, aadhaar_no, pan_no, aadhaar_upload, dl_upload, created_at
+          address_line1, state, pincode, aadhaar_no, pan_no, aadhaar_upload, dl_upload, created_at,
+          (pending_changes IS NOT NULL) AS has_pending_edit
         FROM driver_master
         ${whereClause}
         ORDER BY created_at DESC
@@ -89,20 +90,83 @@ class DriverMasterService {
    */
   async getPendingDrivers() {
     try {
+      // Two kinds of pending records share this list:
+      //  - 'create': a brand-new driver awaiting approval (approval_status = 'pending')
+      //  - 'edit'  : an approved driver with a staged change in pending_changes
       const result = await pool.query(`
         SELECT dm.driver_id as id, dm.driver_master_id, dm.driver_name, dm.mobile_no,
-               dm.driving_licence_no, dm.status, dm.rejection_reason, dm.created_at, l.username AS created_by_name
-        FROM driver_master dm LEFT JOIN login l ON l.id = dm.created_by
-        WHERE dm.approval_status = 'pending' ORDER BY dm.created_at ASC
+               dm.driving_licence_no, dm.status, dm.rejection_reason, dm.created_at,
+               dm.pending_changes, dm.pending_edit_at,
+               CASE WHEN dm.approval_status = 'pending' THEN 'create' ELSE 'edit' END AS request_type,
+               l.username  AS created_by_name,
+               le.username AS pending_edit_by_name
+        FROM driver_master dm
+        LEFT JOIN login l  ON l.id  = dm.created_by
+        LEFT JOIN login le ON le.id = dm.pending_edit_by
+        WHERE dm.approval_status = 'pending' OR dm.pending_changes IS NOT NULL
+        ORDER BY COALESCE(dm.pending_edit_at, dm.created_at) ASC
       `);
       return result.rows;
     } catch (error) { Logger.error('Error fetching pending drivers:', error); throw error; }
   }
 
+  // Editable columns a non-admin may change / an admin may override on approval.
+  // (driver_master_id is the system identifier and is intentionally excluded.)
+  static get EDITABLE_COLUMNS() {
+    return ['driver_name','mobile_no','driving_licence_no','driving_licence_type','valid_upto','rto','status'];
+  }
+
   async reviewDriver(id, action, reviewedBy, reason, overrides = {}) {
     try {
+      const ALLOWED = DriverMasterService.EDITABLE_COLUMNS;
+
+      // Determine whether this is a staged EDIT or a brand-new CREATE awaiting approval.
+      const existing = await pool.query(
+        'SELECT approval_status, pending_changes FROM driver_master WHERE driver_id = $1',
+        [id]
+      );
+      if (!existing.rows.length) throw new Error(`Driver ${id} not found`);
+      let pendingChanges = existing.rows[0].pending_changes;
+      if (typeof pendingChanges === 'string') {
+        try { pendingChanges = JSON.parse(pendingChanges); } catch { pendingChanges = null; }
+      }
+      const isEdit = pendingChanges != null && existing.rows[0].approval_status === 'approved';
+
+      // ----- Staged EDIT of an already-approved record -----
+      if (isEdit) {
+        if (action === 'approve') {
+          // Proposed values, with any admin tweaks from the review modal layered on top.
+          const safeOverrides = Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)));
+          const merged = { ...pendingChanges, ...safeOverrides };
+          const safe = Object.fromEntries(Object.entries(merged).filter(([k]) => ALLOWED.includes(k)));
+
+          const params = [reviewedBy];
+          let setCols = 'reviewed_by=$1, pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL, rejection_reason=NULL';
+          let n = 2;
+          for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+          params.push(id);
+          const result = await pool.query(
+            `UPDATE driver_master SET ${setCols} WHERE driver_id=$${n} RETURNING driver_id as id, *`,
+            params
+          );
+          Logger.info(`Driver ID ${id} edit approved by user ${reviewedBy}`);
+          return result.rows[0];
+        }
+
+        // Reject the edit: discard staged values, live record stays approved & unchanged.
+        const result = await pool.query(
+          `UPDATE driver_master
+           SET pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL,
+               rejection_reason=$1, reviewed_by=$2
+           WHERE driver_id=$3 RETURNING driver_id as id, *`,
+          [reason || null, reviewedBy, id]
+        );
+        Logger.info(`Driver ID ${id} edit rejected by user ${reviewedBy}`);
+        return result.rows[0];
+      }
+
+      // ----- Brand-new CREATE awaiting approval (original behavior) -----
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
-      const ALLOWED = ['driver_name','mobile_no','driving_licence_no','driving_licence_type','valid_upto','rto','status'];
       const safe = action === 'approve'
         ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
         : {};
@@ -172,7 +236,32 @@ class DriverMasterService {
   /**
    * Update an existing driver
    */
-  async updateDriver(id, data) {
+  async updateDriver(id, data, opts = {}) {
+    const { isAdmin = true, userId = null } = opts;
+
+    // Non-admins: stage the change in pending_changes instead of touching the live row.
+    if (!isAdmin) {
+      try {
+        const ALLOWED = DriverMasterService.EDITABLE_COLUMNS;
+        const staged = Object.fromEntries(Object.entries(data).filter(([k]) => ALLOWED.includes(k)));
+        const result = await pool.query(
+          `UPDATE driver_master
+           SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW(), updated_at = CURRENT_TIMESTAMP
+           WHERE driver_id = $3 AND approval_status = 'approved'
+           RETURNING driver_id as id, *`,
+          [JSON.stringify(staged), userId, id]
+        );
+        if (!result.rows.length) {
+          throw new Error(`Approved driver with ID ${id} not found (cannot stage edit)`);
+        }
+        Logger.info(`Driver ID ${id} edit staged for approval by user ${userId}`);
+        return { ...result.rows[0], staged: true };
+      } catch (error) {
+        Logger.error(`Error staging driver edit ${id}:`, error);
+        throw error;
+      }
+    }
+
     try {
       const {
         driver_master_id,

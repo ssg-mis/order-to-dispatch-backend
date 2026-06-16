@@ -64,11 +64,15 @@ const createTransporter = async (req, res, next) => {
 const updateTransporter = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const transporter = await transportMasterService.updateTransporter(id, req.body);
-    
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const transporter = await transportMasterService.updateTransporter(id, req.body, {
+      isAdmin,
+      userId: req.user?.id || null
+    });
+
     res.status(200).json({
       success: true,
-      message: 'Transporter updated successfully',
+      message: isAdmin ? 'Transporter updated successfully' : 'Edit submitted for approval',
       data: transporter
     });
   } catch (error) {

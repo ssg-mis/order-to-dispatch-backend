@@ -64,11 +64,15 @@ const createDriver = async (req, res, next) => {
 const updateDriver = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const driver = await driverMasterService.updateDriver(id, req.body);
-    
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const driver = await driverMasterService.updateDriver(id, req.body, {
+      isAdmin,
+      userId: req.user?.id || null
+    });
+
     res.status(200).json({
       success: true,
-      message: 'Driver updated successfully',
+      message: isAdmin ? 'Driver updated successfully' : 'Edit submitted for approval',
       data: driver
     });
   } catch (error) {

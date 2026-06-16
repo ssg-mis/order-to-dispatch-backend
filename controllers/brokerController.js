@@ -124,11 +124,15 @@ async function reviewBroker(req, res) {
 async function updateBroker(req, res) {
   try {
     const { id } = req.params;
-    const broker = await brokerService.updateBroker(id, req.body);
-    
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const broker = await brokerService.updateBroker(id, req.body, {
+      isAdmin,
+      userId: req.user?.id || null
+    });
+
     res.status(200).json({
       success: true,
-      message: 'Broker updated successfully',
+      message: isAdmin ? 'Broker updated successfully' : 'Edit submitted for approval',
       data: broker
     });
   } catch (error) {

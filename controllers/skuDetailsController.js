@@ -3,6 +3,9 @@ const { query } = require('../config/db');
 const { Logger } = require('../utils');
 const { buildSearchCondition } = require('../utils/searchUtils');
 
+// Editable columns a non-admin may change / an admin may override on approval.
+const EDITABLE_COLUMNS = ['sku_name','sku_code','main_uom','status','hsn_code','gst_rate'];
+
 /**
  * Get all SKU Details
  */
@@ -32,7 +35,7 @@ const getAllSkuDetails = async (req, res, next) => {
     let dataQuery;
     if (all === 'true') {
       dataQuery = `
-        SELECT sd.*, t.name AS tag_name
+        SELECT sd.*, (sd.pending_changes IS NOT NULL) AS has_pending_edit, t.name AS tag_name
         FROM sku_details sd
         LEFT JOIN tag t ON t.sku_id = sd.id
         ${whereClause}
@@ -40,7 +43,7 @@ const getAllSkuDetails = async (req, res, next) => {
       `;
     } else {
       dataQuery = `
-        SELECT sd.*, t.name AS tag_name
+        SELECT sd.*, (sd.pending_changes IS NOT NULL) AS has_pending_edit, t.name AS tag_name
         FROM sku_details sd
         LEFT JOIN tag t ON t.sku_id = sd.id
         ${whereClause}
@@ -224,6 +227,33 @@ const updateSkuDetail = async (req, res, next) => {
       }
     }
 
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+
+    // Non-admins: stage the change in pending_changes instead of touching the live row.
+    if (!isAdmin) {
+      const staged = Object.fromEntries(
+        Object.entries(req.body).filter(([k]) => EDITABLE_COLUMNS.includes(k))
+      );
+      const stagedResult = await query(
+        `UPDATE sku_details
+         SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW(), updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3 AND approval_status = 'approved'
+         RETURNING *`,
+        [JSON.stringify(staged), req.user?.id || null, id]
+      );
+      if (!stagedResult.rowCount) {
+        return res.status(404).json({
+          success: false,
+          message: 'Approved SKU Detail not found (cannot stage edit)'
+        });
+      }
+      return res.json({
+        success: true,
+        message: 'Edit submitted for approval',
+        data: { ...stagedResult.rows[0], staged: true }
+      });
+    }
+
     const sql = `
       UPDATE sku_details SET
         status = COALESCE($1, status),
@@ -278,7 +308,7 @@ const updateSkuDetail = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: 'SKU Detail updated successfully',
+      message: 'SKU updated successfully',
       data: { ...result.rows[0], tag_name: tag_name ?? result.rows[0].tag_name ?? null }
     });
   } catch (error) {
@@ -320,9 +350,15 @@ const getPendingSkuDetails = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Admin access required' });
     }
     const result = await query(`
-      SELECT sd.*, l.username AS created_by_name
-      FROM sku_details sd LEFT JOIN login l ON l.id = sd.created_by
-      WHERE sd.approval_status = 'pending' ORDER BY sd.created_at ASC
+      SELECT sd.*, sd.pending_changes, sd.pending_edit_at,
+        CASE WHEN sd.approval_status = 'pending' THEN 'create' ELSE 'edit' END AS request_type,
+        l.username  AS created_by_name,
+        le.username AS pending_edit_by_name
+      FROM sku_details sd
+      LEFT JOIN login l  ON l.id  = sd.created_by
+      LEFT JOIN login le ON le.id = sd.pending_edit_by
+      WHERE sd.approval_status = 'pending' OR sd.pending_changes IS NOT NULL
+      ORDER BY COALESCE(sd.pending_edit_at, sd.created_at) ASC
     `);
     res.json({ success: true, data: result.rows });
   } catch (error) { next(error); }
@@ -338,8 +374,52 @@ const reviewSkuDetail = async (req, res, next) => {
     if (!['approve', 'reject'].includes(action)) {
       return res.status(400).json({ success: false, message: 'action must be approve or reject' });
     }
+    const ALLOWED = EDITABLE_COLUMNS;
+
+    // Determine whether this is a staged EDIT or a brand-new CREATE awaiting approval.
+    const existing = await query(
+      'SELECT approval_status, pending_changes FROM sku_details WHERE id = $1',
+      [id]
+    );
+    if (!existing.rowCount) return res.status(404).json({ success: false, message: 'SKU Detail not found' });
+    let pendingChanges = existing.rows[0].pending_changes;
+    if (typeof pendingChanges === 'string') {
+      try { pendingChanges = JSON.parse(pendingChanges); } catch { pendingChanges = null; }
+    }
+    const isEdit = pendingChanges != null && existing.rows[0].approval_status === 'approved';
+
+    // ----- Staged EDIT of an already-approved record -----
+    if (isEdit) {
+      if (action === 'approve') {
+        const safeOverrides = Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)));
+        const merged = { ...pendingChanges, ...safeOverrides };
+        const safe = Object.fromEntries(Object.entries(merged).filter(([k]) => ALLOWED.includes(k)));
+
+        const params = [req.user.id];
+        let setCols = 'reviewed_by=$1, pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL, rejection_reason=NULL, updated_at=CURRENT_TIMESTAMP';
+        let n = 2;
+        for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+        params.push(id);
+        const result = await query(
+          `UPDATE sku_details SET ${setCols} WHERE id=$${n} RETURNING *`,
+          params
+        );
+        return res.json({ success: true, message: 'SKU Detail approved successfully', data: result.rows[0] });
+      }
+
+      // Reject the edit: discard staged values, live record stays approved & unchanged.
+      const result = await query(
+        `UPDATE sku_details
+         SET pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL,
+             rejection_reason=$1, reviewed_by=$2, updated_at=CURRENT_TIMESTAMP
+         WHERE id=$3 RETURNING *`,
+        [reason || null, req.user.id, id]
+      );
+      return res.json({ success: true, message: 'SKU Detail rejected successfully', data: result.rows[0] });
+    }
+
+    // ----- Brand-new CREATE awaiting approval (original behavior) -----
     const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
-    const ALLOWED = ['sku_name','sku_code','main_uom','status','hsn_code','gst_rate'];
     const safe = action === 'approve'
       ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
       : {};

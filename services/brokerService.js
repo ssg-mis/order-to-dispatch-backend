@@ -31,7 +31,8 @@ class BrokerService {
 
       // Get paginated data
       let query = `
-        SELECT broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id
+        SELECT broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id,
+               (pending_changes IS NOT NULL) AS has_pending_edit
         FROM broker_details
         ${whereClause}
         ORDER BY salesman_name ASC
@@ -126,20 +127,83 @@ class BrokerService {
    */
   async getPendingBrokers() {
     try {
+      // Two kinds of pending records share this list:
+      //  - 'create': a brand-new broker awaiting approval (approval_status = 'pending')
+      //  - 'edit'  : an approved broker with a staged change in pending_changes
       const result = await pool.query(`
         SELECT bd.broker_id, bd.salesman_name, bd.status, bd.email_id, bd.mobile_no,
-               bd.depot_name, bd.rejection_reason, bd.created_at, l.username AS created_by_name
-        FROM broker_details bd LEFT JOIN login l ON l.id = bd.created_by
-        WHERE bd.approval_status = 'pending' ORDER BY bd.created_at ASC
+               bd.depot_name, bd.rejection_reason, bd.created_at,
+               bd.pending_changes, bd.pending_edit_at,
+               CASE WHEN bd.approval_status = 'pending' THEN 'create' ELSE 'edit' END AS request_type,
+               l.username  AS created_by_name,
+               le.username AS pending_edit_by_name
+        FROM broker_details bd
+        LEFT JOIN login l  ON l.id  = bd.created_by
+        LEFT JOIN login le ON le.id = bd.pending_edit_by
+        WHERE bd.approval_status = 'pending' OR bd.pending_changes IS NOT NULL
+        ORDER BY COALESCE(bd.pending_edit_at, bd.created_at) ASC
       `);
       return result.rows;
     } catch (error) { Logger.error('Error fetching pending brokers:', error); throw error; }
   }
 
+  // Editable columns a non-admin may change / an admin may override on approval.
+  // (broker_id is the system identifier and is intentionally excluded.)
+  static get EDITABLE_COLUMNS() {
+    return ['salesman_name','mobile_no','email_id','depot_name','status'];
+  }
+
   async reviewBroker(id, action, reviewedBy, reason, overrides = {}) {
     try {
+      const ALLOWED = BrokerService.EDITABLE_COLUMNS;
+
+      // Determine whether this is a staged EDIT or a brand-new CREATE awaiting approval.
+      const existing = await pool.query(
+        'SELECT approval_status, pending_changes FROM broker_details WHERE broker_id = $1',
+        [id]
+      );
+      if (!existing.rows.length) throw new Error(`Broker ${id} not found`);
+      let pendingChanges = existing.rows[0].pending_changes;
+      if (typeof pendingChanges === 'string') {
+        try { pendingChanges = JSON.parse(pendingChanges); } catch { pendingChanges = null; }
+      }
+      const isEdit = pendingChanges != null && existing.rows[0].approval_status === 'approved';
+
+      // ----- Staged EDIT of an already-approved record -----
+      if (isEdit) {
+        if (action === 'approve') {
+          // Proposed values, with any admin tweaks from the review modal layered on top.
+          const safeOverrides = Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)));
+          const merged = { ...pendingChanges, ...safeOverrides };
+          const safe = Object.fromEntries(Object.entries(merged).filter(([k]) => ALLOWED.includes(k)));
+
+          const params = [reviewedBy];
+          let setCols = 'reviewed_by=$1, pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL, rejection_reason=NULL';
+          let n = 2;
+          for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
+          params.push(id);
+          const result = await pool.query(
+            `UPDATE broker_details SET ${setCols} WHERE broker_id=$${n} RETURNING *`,
+            params
+          );
+          Logger.info(`Broker ${id} edit approved by user ${reviewedBy}`);
+          return result.rows[0];
+        }
+
+        // Reject the edit: discard staged values, live record stays approved & unchanged.
+        const result = await pool.query(
+          `UPDATE broker_details
+           SET pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL,
+               rejection_reason=$1, reviewed_by=$2
+           WHERE broker_id=$3 RETURNING *`,
+          [reason || null, reviewedBy, id]
+        );
+        Logger.info(`Broker ${id} edit rejected by user ${reviewedBy}`);
+        return result.rows[0];
+      }
+
+      // ----- Brand-new CREATE awaiting approval (original behavior) -----
       const approvalStatus = action === 'approve' ? 'approved' : 'rejected';
-      const ALLOWED = ['salesman_name','mobile_no','email_id','depot_name','status'];
       const safe = action === 'approve'
         ? Object.fromEntries(Object.entries(overrides).filter(([k]) => ALLOWED.includes(k)))
         : {};
@@ -181,9 +245,41 @@ class BrokerService {
   }
 
   /**
-   * Update an existing broker
+   * Update an existing broker.
+   *
+   * @param {number|string} id
+   * @param {object} data  - the edited field values
+   * @param {object} [opts]
+   * @param {boolean} [opts.isAdmin=true] - admin/super_admin write directly; others are staged for approval
+   * @param {number}  [opts.userId=null]  - who is making the edit (recorded on staged edits)
+   * @returns {Promise<object>} the row, with `staged: true` when the change awaits approval
    */
-  async updateBroker(id, data) {
+  async updateBroker(id, data, opts = {}) {
+    const { isAdmin = true, userId = null } = opts;
+
+    // Non-admins: stage the change in pending_changes instead of touching the live row.
+    if (!isAdmin) {
+      try {
+        const ALLOWED = BrokerService.EDITABLE_COLUMNS;
+        const staged = Object.fromEntries(Object.entries(data).filter(([k]) => ALLOWED.includes(k)));
+        const result = await pool.query(
+          `UPDATE broker_details
+           SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW()
+           WHERE broker_id = $3 AND approval_status = 'approved'
+           RETURNING *`,
+          [JSON.stringify(staged), userId, id]
+        );
+        if (!result.rows.length) {
+          throw new Error(`Approved broker with ID ${id} not found (cannot stage edit)`);
+        }
+        Logger.info(`Broker ID ${id} edit staged for approval by user ${userId}`);
+        return { ...result.rows[0], staged: true };
+      } catch (error) {
+        Logger.error(`Error staging broker edit ${id}:`, error);
+        throw error;
+      }
+    }
+
     try {
       const {
         salesman_name,

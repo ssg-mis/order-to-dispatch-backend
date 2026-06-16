@@ -94,11 +94,15 @@ async function reviewSalesperson(req, res) {
 async function updateSalesperson(req, res) {
   try {
     const { id } = req.params;
-    const salesperson = await salespersonService.updateSalesperson(id, req.body);
-    
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const salesperson = await salespersonService.updateSalesperson(id, req.body, {
+      isAdmin,
+      userId: req.user?.id || null
+    });
+
     res.status(200).json({
       success: true,
-      message: 'Salesperson updated successfully',
+      message: isAdmin ? 'Salesperson updated successfully' : 'Edit submitted for approval',
       data: salesperson
     });
   } catch (error) {

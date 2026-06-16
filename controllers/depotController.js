@@ -131,11 +131,15 @@ async function reviewDepot(req, res) {
 async function updateDepot(req, res) {
   try {
     const { id } = req.params;
-    const depot = await depotService.updateDepot(id, req.body);
-    
+    const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+    const depot = await depotService.updateDepot(id, req.body, {
+      isAdmin,
+      userId: req.user?.id || null
+    });
+
     res.status(200).json({
       success: true,
-      message: 'Depot updated successfully',
+      message: isAdmin ? 'Depot updated successfully' : 'Edit submitted for approval',
       data: depot
     });
   } catch (error) {
