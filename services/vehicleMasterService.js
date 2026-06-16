@@ -35,7 +35,8 @@ class VehicleMasterService {
           vehicle_id as id, vehicle_master_id, status, registration_no, vehicle_type,
           transporter, rto, road_tax, road_tax_image, pollution,
           pollution_image, insurance, insurance_image, fitness,
-          fitness_image, state_permit, state_permit_image, gvw, ulw, passing, created_at,
+          fitness_image, state_permit, state_permit_image, state_permit_type, fuel_type, gvw, ulw, passing, created_at,
+          life_time_tax, life_time_tax_image,
           (pending_changes IS NOT NULL) AS has_pending_edit
         FROM vehicle_master
         ${whereClause}
@@ -71,7 +72,8 @@ class VehicleMasterService {
           vehicle_id as id, vehicle_master_id, status, registration_no, vehicle_type, 
           transporter, rto, road_tax, road_tax_image, pollution, 
           pollution_image, insurance, insurance_image, fitness, 
-          fitness_image, state_permit, state_permit_image, gvw, ulw, passing, created_at
+          fitness_image, state_permit, state_permit_image, state_permit_type, fuel_type, gvw, ulw, passing, created_at,
+          life_time_tax, life_time_tax_image
         FROM vehicle_master
         WHERE vehicle_id = $1
       `;
@@ -145,7 +147,7 @@ class VehicleMasterService {
           const safe = Object.fromEntries(Object.entries(merged).filter(([k]) => ALLOWED.includes(k)));
 
           const params = [reviewedBy];
-          let setCols = 'reviewed_by=$1, pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL, rejection_reason=NULL, updated_at=CURRENT_TIMESTAMP';
+          let setCols = 'reviewed_by=$1, pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL, rejection_reason=NULL';
           let n = 2;
           for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
           params.push(id);
@@ -161,7 +163,7 @@ class VehicleMasterService {
         const result = await pool.query(
           `UPDATE vehicle_master
            SET pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL,
-               rejection_reason=$1, reviewed_by=$2, updated_at=CURRENT_TIMESTAMP
+               rejection_reason=$1, reviewed_by=$2
            WHERE vehicle_id=$3 RETURNING vehicle_id as id, *`,
           [reason || null, reviewedBy, id]
         );
@@ -207,9 +209,13 @@ class VehicleMasterService {
         fitness_image,
         state_permit,
         state_permit_image,
+        state_permit_type,
+        fuel_type,
         gvw,
         ulw,
         passing,
+        life_time_tax,
+        life_time_tax_image,
         approval_status = 'approved',
         created_by = null
       } = data;
@@ -219,9 +225,9 @@ class VehicleMasterService {
           vehicle_master_id, status, registration_no, vehicle_type, transporter,
           rto, road_tax, road_tax_image, pollution, pollution_image,
           insurance, insurance_image, fitness, fitness_image, state_permit,
-          state_permit_image, gvw, ulw, passing, approval_status, created_by
+          state_permit_image, state_permit_type, fuel_type, gvw, ulw, passing, life_time_tax, life_time_tax_image, approval_status, created_by
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
         RETURNING vehicle_id as id, *
       `;
 
@@ -229,7 +235,7 @@ class VehicleMasterService {
         vehicle_master_id, status, registration_no, vehicle_type, transporter,
         rto, road_tax || null, road_tax_image || null, pollution || null, pollution_image || null,
         insurance || null, insurance_image || null, fitness || null, fitness_image || null, state_permit || null,
-        state_permit_image || null, gvw || 0, ulw || 0, passing || 0, approval_status, created_by
+        state_permit_image || null, state_permit_type || null, fuel_type || null, gvw || 0, ulw || 0, passing || 0, life_time_tax || null, life_time_tax_image || null, approval_status, created_by
       ];
 
       const result = await pool.query(query, values);
@@ -254,7 +260,7 @@ class VehicleMasterService {
         const staged = Object.fromEntries(Object.entries(data).filter(([k]) => ALLOWED.includes(k)));
         const result = await pool.query(
           `UPDATE vehicle_master
-           SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW(), updated_at = CURRENT_TIMESTAMP
+           SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW()
            WHERE vehicle_id = $3 AND approval_status = 'approved'
            RETURNING vehicle_id as id, *`,
           [JSON.stringify(staged), userId, id]
@@ -288,9 +294,13 @@ class VehicleMasterService {
         fitness_image,
         state_permit,
         state_permit_image,
+        state_permit_type,
+        fuel_type,
         gvw,
         ulw,
-        passing
+        passing,
+        life_time_tax,
+        life_time_tax_image
       } = data;
 
       const query = `
@@ -312,10 +322,14 @@ class VehicleMasterService {
           fitness_image = $14,
           state_permit = $15,
           state_permit_image = $16,
-          gvw = $17,
-          ulw = $18,
-          passing = $19
-        WHERE vehicle_id = $20
+          state_permit_type = $17,
+          fuel_type = $18,
+          gvw = $19,
+          ulw = $20,
+          passing = $21,
+          life_time_tax = $22,
+          life_time_tax_image = $23
+        WHERE vehicle_id = $24
         RETURNING vehicle_id as id, *
       `;
 
@@ -323,7 +337,7 @@ class VehicleMasterService {
         vehicle_master_id, status, registration_no, vehicle_type, transporter,
         rto, road_tax || null, road_tax_image || null, pollution || null, pollution_image || null,
         insurance || null, insurance_image || null, fitness || null, fitness_image || null, state_permit || null,
-        state_permit_image || null, gvw || 0, ulw || 0, passing || 0, id
+        state_permit_image || null, state_permit_type || null, fuel_type || null, gvw || 0, ulw || 0, passing || 0, life_time_tax || null, life_time_tax_image || null, id
       ];
 
       const result = await pool.query(query, values);

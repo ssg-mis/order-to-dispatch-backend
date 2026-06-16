@@ -246,7 +246,7 @@ class DriverMasterService {
         const staged = Object.fromEntries(Object.entries(data).filter(([k]) => ALLOWED.includes(k)));
         const result = await pool.query(
           `UPDATE driver_master
-           SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW(), updated_at = CURRENT_TIMESTAMP
+           SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW()
            WHERE driver_id = $3 AND approval_status = 'approved'
            RETURNING driver_id as id, *`,
           [JSON.stringify(staged), userId, id]

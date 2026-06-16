@@ -42,6 +42,7 @@ router.get('/dispatch-report', async (req, res) => {
       customer_name: req.query.customer_name || '',
       dispatch_no:   req.query.dispatch_no   || '',
       order_no:      req.query.order_no      || '',
+      limit:         req.query.limit         || '',
     };
     const data = await reportsService.getDispatchReport(filters);
     res.json({ success: true, data });

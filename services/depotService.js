@@ -180,7 +180,7 @@ class DepotService {
           const safe = Object.fromEntries(Object.entries(merged).filter(([k]) => ALLOWED.includes(k)));
 
           const params = [reviewedBy];
-          let setCols = 'reviewed_by=$1, pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL, rejection_reason=NULL, updated_at=CURRENT_TIMESTAMP';
+          let setCols = 'reviewed_by=$1, pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL, rejection_reason=NULL';
           let n = 2;
           for (const [col, val] of Object.entries(safe)) { setCols += `, ${col}=$${n++}`; params.push(val); }
           params.push(id);
@@ -196,7 +196,7 @@ class DepotService {
         const result = await pool.query(
           `UPDATE depot_details
            SET pending_changes=NULL, pending_edit_by=NULL, pending_edit_at=NULL,
-               rejection_reason=$1, reviewed_by=$2, updated_at=CURRENT_TIMESTAMP
+               rejection_reason=$1, reviewed_by=$2
            WHERE depot_id=$3 RETURNING *`,
           [reason || null, reviewedBy, id]
         );
@@ -273,7 +273,7 @@ class DepotService {
         const staged = Object.fromEntries(Object.entries(data).filter(([k]) => ALLOWED.includes(k)));
         const result = await pool.query(
           `UPDATE depot_details
-           SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW(), updated_at = CURRENT_TIMESTAMP
+           SET pending_changes = $1, pending_edit_by = $2, pending_edit_at = NOW()
            WHERE depot_id = $3 AND approval_status = 'approved'
            RETURNING *`,
           [JSON.stringify(staged), userId, id]

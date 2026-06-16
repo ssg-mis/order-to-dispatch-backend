@@ -271,6 +271,11 @@ class ReportsService {
 
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+      // Optional row cap (used by the on-screen export preview). Sanitized to a
+      // positive integer; ignored for the full export so the download stays complete.
+      const limitNum = parseInt(filters.limit, 10);
+      const limitClause = Number.isInteger(limitNum) && limitNum > 0 ? `LIMIT ${limitNum}` : '';
+
       const result = await client.query(`
         SELECT DISTINCT ON (lrc.id)
           lrc.*,
@@ -335,6 +340,7 @@ class ReportsService {
         LEFT JOIN driver_master dm ON LOWER(TRIM(lrc.driving_license_no)) = LOWER(TRIM(dm.driving_licence_no))
         ${whereClause}
         ORDER BY lrc.id, lrc.timestamp DESC
+        ${limitClause}
       `, params);
 
       // ── Pass 1: per-row calculations ─────────────────────────────────────────

@@ -29,3 +29,6 @@ build/
 
 scripts
 migrations
+
+# Local-only dev scratch / one-off scripts — not for deployment
+scratch/
