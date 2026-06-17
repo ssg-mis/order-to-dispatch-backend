@@ -101,7 +101,11 @@ class VehicleMasterService {
       //  - 'edit'  : an approved vehicle with a staged change in pending_changes
       const result = await pool.query(`
         SELECT vm.vehicle_id as id, vm.vehicle_master_id, vm.registration_no, vm.vehicle_type,
-               vm.transporter, vm.status, vm.rejection_reason, vm.created_at,
+               vm.transporter, vm.status, vm.rto, vm.road_tax, vm.road_tax_image, vm.pollution,
+               vm.pollution_image, vm.insurance, vm.insurance_image, vm.fitness, vm.fitness_image,
+               vm.state_permit, vm.state_permit_image, vm.state_permit_type, vm.fuel_type,
+               vm.gvw, vm.ulw, vm.passing, vm.life_time_tax, vm.life_time_tax_image,
+               vm.rejection_reason, vm.created_at,
                vm.pending_changes, vm.pending_edit_at,
                CASE WHEN vm.approval_status = 'pending' THEN 'create' ELSE 'edit' END AS request_type,
                l.username  AS created_by_name,
@@ -119,7 +123,13 @@ class VehicleMasterService {
   // Editable columns a non-admin may change / an admin may override on approval.
   // (vehicle_master_id is the system identifier and is intentionally excluded.)
   static get EDITABLE_COLUMNS() {
-    return ['registration_no','vehicle_type','transporter','rto','status'];
+    return [
+      'registration_no','vehicle_type','transporter','rto','status','fuel_type',
+      'gvw','ulw','passing','state_permit_type',
+      'road_tax','road_tax_image','pollution','pollution_image',
+      'insurance','insurance_image','fitness','fitness_image',
+      'state_permit','state_permit_image','life_time_tax','life_time_tax_image',
+    ];
   }
 
   async reviewVehicle(id, action, reviewedBy, reason, overrides = {}) {
