@@ -9,7 +9,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
-const { buildSearchCondition } = require('../utils/searchUtils');
+const { applyDispatchFilters } = require('../utils/searchUtils');
 
 class ConfirmMaterialReceiptService {
   /**
@@ -36,13 +36,10 @@ class ConfirmMaterialReceiptService {
         paramIndex++;
       }
 
-      if (filters.so_no) {
-        // Enhanced search: match so_no OR party_name if only one search string is given
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name', 'lrc.invoice_no'], filters.so_no, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      } else if (filters.party_name) {
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
+
+      if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;
@@ -157,13 +154,10 @@ class ConfirmMaterialReceiptService {
         paramIndex++;
       }
 
-      if (filters.so_no) {
-        // Enhanced search: match so_no OR party_name if only one search string is given
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name', 'lrc.invoice_no'], filters.so_no, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      } else if (filters.party_name) {
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
+
+      if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
         queryParams.push(`%${filters.party_name}%`);
         paramIndex++;

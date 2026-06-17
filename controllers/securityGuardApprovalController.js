@@ -15,6 +15,9 @@ const getPendingApprovals = async (req, res, next) => {
   try {
     const filters = {
       search: req.query.search,
+      manual_sauda_no: req.query.manual_sauda_no,
+      do_date_from: req.query.do_date_from,
+      do_date_to: req.query.do_date_to,
       customer_name: req.query.customer_name,
       depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : [req.query.depo_names]) : undefined,
     };
@@ -51,6 +54,9 @@ const getApprovalHistory = async (req, res, next) => {
   try {
     const filters = {
       search: req.query.search,
+      manual_sauda_no: req.query.manual_sauda_no,
+      do_date_from: req.query.do_date_from,
+      do_date_to: req.query.do_date_to,
       customer_name: req.query.customer_name,
       depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : [req.query.depo_names]) : undefined,
       start_date: req.query.start_date,

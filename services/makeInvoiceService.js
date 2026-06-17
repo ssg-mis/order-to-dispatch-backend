@@ -9,7 +9,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
-const { buildSearchCondition } = require('../utils/searchUtils');
+const { applyDispatchFilters } = require('../utils/searchUtils');
 
 class MakeInvoiceService {
   /**
@@ -36,18 +36,8 @@ class MakeInvoiceService {
         paramIndex++;
       }
 
-      if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name', 'lrc.truck_no'], filters.search, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      }
-
-      if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
-        paramIndex++;
-      }
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
@@ -57,8 +47,8 @@ class MakeInvoiceService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
+      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -166,18 +156,8 @@ class MakeInvoiceService {
         paramIndex++;
       }
 
-      if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name', 'lrc.truck_no'], filters.search, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      }
-
-      if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
-        paramIndex++;
-      }
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
@@ -187,8 +167,8 @@ class MakeInvoiceService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
+      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 

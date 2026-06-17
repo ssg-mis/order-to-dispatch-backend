@@ -9,6 +9,10 @@ async function getPendingReceipts(req, res) {
     const filters = {
       d_sr_number: req.query.d_sr_number,
       so_no: req.query.so_no,
+      search: req.query.search,
+      manual_sauda_no: req.query.manual_sauda_no,
+      do_date_from: req.query.do_date_from,
+      do_date_to: req.query.do_date_to,
       party_name: req.query.party_name
     };
 
@@ -31,6 +35,10 @@ async function getReceiptHistory(req, res) {
     const filters = {
       d_sr_number: req.query.d_sr_number,
       so_no: req.query.so_no,
+      search: req.query.search,
+      manual_sauda_no: req.query.manual_sauda_no,
+      do_date_from: req.query.do_date_from,
+      do_date_to: req.query.do_date_to,
       party_name: req.query.party_name
     };
 

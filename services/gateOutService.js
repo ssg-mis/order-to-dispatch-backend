@@ -9,6 +9,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { applyDispatchFilters } = require('../utils/searchUtils');
 
 class GateOutService {
   /**
@@ -35,11 +36,8 @@ class GateOutService {
         paramIndex++;
       }
 
-      if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
-        paramIndex++;
-      }
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
@@ -49,8 +47,8 @@ class GateOutService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
+      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -156,11 +154,8 @@ class GateOutService {
         paramIndex++;
       }
 
-      if (filters.so_no) {
-        whereConditions.push(`lrc.so_no = $${paramIndex}`);
-        queryParams.push(filters.so_no);
-        paramIndex++;
-      }
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.party_name) {
         whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
@@ -170,8 +165,8 @@ class GateOutService {
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-      // Count total
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc ${whereClause}`;
+      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 

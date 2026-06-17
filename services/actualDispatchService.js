@@ -8,7 +8,7 @@
  */
 
 const db = require('../config/db');
-const { buildSearchCondition } = require('../utils/searchUtils');
+const { applyDispatchFilters } = require('../utils/searchUtils');
 const { Logger } = require('../utils');
 const { deriveRatesForRegularOrder, deriveConsolidatedRatesForGroup, detectOilType } = require('../utils/rateDerivation');
 
@@ -33,12 +33,8 @@ class ActualDispatchService {
       let queryParams = [];
       let paramIndex = 1;
 
-      if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name'], filters.search, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      }
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.customer_name) {
         whereConditions.push(`lrc.party_name = $${paramIndex}`);
@@ -95,10 +91,8 @@ class ActualDispatchService {
       let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
       let dataParamIndex = 2;
       
-      if (filters.search) {
-        dataWhereConditions.push(`(lrc.so_no ILIKE $${dataParamIndex} OR lrc.party_name ILIKE $${dataParamIndex})`);
-        dataParamIndex++;
-      }
+      // Mirror dispatch filters with identical param positions (params already in queryParams)
+      dataParamIndex = applyDispatchFilters(filters, dataWhereConditions, [], dataParamIndex);
       if (filters.customer_name) {
         dataWhereConditions.push(`lrc.party_name = $${dataParamIndex}`);
         dataParamIndex++;
@@ -175,12 +169,8 @@ class ActualDispatchService {
       let queryParams = [];
       let paramIndex = 1;
 
-      if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['lrc.so_no', 'lrc.party_name'], filters.search, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      }
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.customer_name) {
         whereConditions.push(`lrc.party_name = $${paramIndex}`);
@@ -236,10 +226,8 @@ class ActualDispatchService {
       let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
       let dataParamIndex = 2;
 
-      if (filters.search) {
-        dataWhereConditions.push(`(lrc.so_no ILIKE $${dataParamIndex} OR lrc.party_name ILIKE $${dataParamIndex})`);
-        dataParamIndex++;
-      }
+      // Mirror dispatch filters with identical param positions (params already in queryParams)
+      dataParamIndex = applyDispatchFilters(filters, dataWhereConditions, [], dataParamIndex);
       if (filters.customer_name) {
         dataWhereConditions.push(`lrc.party_name = $${dataParamIndex}`);
         dataParamIndex++;

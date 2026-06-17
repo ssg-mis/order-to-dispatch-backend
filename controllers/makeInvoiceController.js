@@ -10,7 +10,10 @@ async function getPendingInvoices(req, res) {
       d_sr_number: req.query.d_sr_number,
       so_no: req.query.so_no,
       party_name: req.query.party_name,
-      search: req.query.search
+      search: req.query.search,
+      manual_sauda_no: req.query.manual_sauda_no,
+      do_date_from: req.query.do_date_from,
+      do_date_to: req.query.do_date_to
     };
 
     const pagination = {
@@ -33,7 +36,10 @@ async function getInvoiceHistory(req, res) {
       d_sr_number: req.query.d_sr_number,
       so_no: req.query.so_no,
       party_name: req.query.party_name,
-      search: req.query.search
+      search: req.query.search,
+      manual_sauda_no: req.query.manual_sauda_no,
+      do_date_from: req.query.do_date_from,
+      do_date_to: req.query.do_date_to
     };
 
     const pagination = {

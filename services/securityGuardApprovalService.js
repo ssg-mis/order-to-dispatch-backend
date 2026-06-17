@@ -9,6 +9,7 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { applyDispatchFilters } = require('../utils/searchUtils');
 
 class SecurityGuardApprovalService {
   /**
@@ -75,11 +76,8 @@ class SecurityGuardApprovalService {
       let queryParams = [];
       let paramIndex = 1;
 
-      if (filters.search) {
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.truck_no ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.search}%`);
-        paramIndex++;
-      }
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.customer_name) {
         whereConditions.push(`lrc.party_name = $${paramIndex}`);
@@ -135,11 +133,8 @@ class SecurityGuardApprovalService {
       let dataParams = [groupKeys];
       let dataParamIndex = 2;
 
-      if (filters.search) {
-        dataWhereConditions.push(`(lrc.so_no ILIKE $${dataParamIndex} OR lrc.party_name ILIKE $${dataParamIndex} OR lrc.truck_no ILIKE $${dataParamIndex})`);
-        dataParams.push(`%${filters.search}%`);
-        dataParamIndex++;
-      }
+      // Mirror dispatch filters with identical param positions
+      dataParamIndex = applyDispatchFilters(filters, dataWhereConditions, dataParams, dataParamIndex);
 
       if (filters.customer_name) {
         dataWhereConditions.push(`lrc.party_name = $${dataParamIndex}`);
@@ -249,11 +244,8 @@ class SecurityGuardApprovalService {
       let queryParams = [];
       let paramIndex = 1;
 
-      if (filters.search) {
-        whereConditions.push(`(lrc.so_no ILIKE $${paramIndex} OR lrc.party_name ILIKE $${paramIndex} OR lrc.truck_no ILIKE $${paramIndex})`);
-        queryParams.push(`%${filters.search}%`);
-        paramIndex++;
-      }
+      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.customer_name) {
         whereConditions.push(`lrc.party_name = $${paramIndex}`);
