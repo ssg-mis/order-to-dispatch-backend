@@ -230,6 +230,48 @@ class VehicleMasterService {
         created_by = null
       } = data;
 
+      // ---------------------------------------------------------------
+      // If a REJECTED record already exists with the same registration_no,
+      // reuse it: reset to pending with the updated data instead of
+      // trying to INSERT (which would fail the unique constraint).
+      // ---------------------------------------------------------------
+      const existingRejected = await pool.query(
+        `SELECT vehicle_id FROM vehicle_master
+         WHERE UPPER(TRIM(registration_no)) = UPPER(TRIM($1))
+           AND approval_status = 'rejected'
+         LIMIT 1`,
+        [registration_no]
+      );
+
+      if (existingRejected.rows.length > 0) {
+        const rejectedId = existingRejected.rows[0].vehicle_id;
+        Logger.info(`Re-using rejected vehicle record ${rejectedId} for registration_no "${registration_no}"`);
+        const resubmitResult = await pool.query(
+          `UPDATE vehicle_master SET
+             status = $1, vehicle_type = $2, transporter = $3, rto = $4,
+             road_tax = $5, road_tax_image = $6, pollution = $7, pollution_image = $8,
+             insurance = $9, insurance_image = $10, fitness = $11, fitness_image = $12,
+             state_permit = $13, state_permit_image = $14, state_permit_type = $15,
+             fuel_type = $16, gvw = $17, ulw = $18, passing = $19,
+             life_time_tax = $20, life_time_tax_image = $21,
+             approval_status = $22, rejection_reason = NULL,
+             reviewed_by = NULL, created_by = $23, created_at = NOW()
+           WHERE vehicle_id = $24
+           RETURNING vehicle_id as id, *`,
+          [
+            status, vehicle_type, transporter, rto,
+            road_tax || null, road_tax_image || null, pollution || null, pollution_image || null,
+            insurance || null, insurance_image || null, fitness || null, fitness_image || null,
+            state_permit || null, state_permit_image || null, state_permit_type || null,
+            fuel_type || null, gvw || 0, ulw || 0, passing || 0,
+            life_time_tax || null, life_time_tax_image || null,
+            approval_status, created_by, rejectedId
+          ]
+        );
+        return { ...resubmitResult.rows[0], resubmitted: true };
+      }
+
+      // Normal INSERT for a brand-new registration number
       const query = `
         INSERT INTO vehicle_master (
           vehicle_master_id, status, registration_no, vehicle_type, transporter,

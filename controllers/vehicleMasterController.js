@@ -6,6 +6,36 @@ const vehicleMasterService = require('../services/vehicleMasterService');
 const Logger = require('../utils/logger');
 
 /**
+ * Translate a raw DB / service error into a user-friendly message.
+ */
+function friendlyError(error) {
+  const msg = error?.message || '';
+  const code = error?.code || '';
+
+  // PostgreSQL unique-constraint violation
+  if (code === '23505') {
+    if (msg.includes('registration_no')) return 'A vehicle with this Registration Number already exists.';
+    if (msg.includes('vehicle_master_id')) return 'A vehicle with this Vehicle ID already exists.';
+    return 'A duplicate record already exists.';
+  }
+  // PostgreSQL not-null violation
+  if (code === '23502') {
+    const match = msg.match(/column "(.*?)"/);
+    const col = match ? match[1].replace(/_/g, ' ') : 'a required field';
+    return `Missing required value: ${col}.`;
+  }
+  // PostgreSQL foreign-key violation
+  if (code === '23503') return 'Related record not found. Please check your inputs.';
+  // PostgreSQL check constraint violation
+  if (code === '23514') return 'One or more values are out of the allowed range.';
+  // Service-level guard messages
+  if (msg.includes('not found')) return msg;
+  if (msg.includes('cannot stage edit')) return 'Cannot submit edit — the vehicle record is not in an approved state.';
+  // Fallback — still better than nothing
+  return msg || 'An unexpected error occurred. Please try again.';
+}
+
+/**
  * Get all vehicles
  */
 async function getAllVehicles(req, res) {
@@ -64,7 +94,7 @@ async function createVehicle(req, res) {
     res.status(201).json({ success: true, message: isAdmin ? 'Vehicle created successfully' : 'Vehicle submitted for approval', data: vehicle });
   } catch (error) {
     Logger.error('Error in createVehicle controller:', error);
-    res.status(500).json({ success: false, message: 'Failed to create vehicle', error: error.message });
+    res.status(500).json({ success: false, message: friendlyError(error) });
   }
 }
 
@@ -72,7 +102,7 @@ async function getPendingVehicles(req, res) {
   try {
     if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') return res.status(403).json({ success: false, message: 'Admin access required' });
     res.status(200).json({ success: true, data: await vehicleMasterService.getPendingVehicles() });
-  } catch (error) { res.status(500).json({ success: false, message: 'Failed to fetch pending vehicles', error: error.message }); }
+  } catch (error) { res.status(500).json({ success: false, message: friendlyError(error) }); }
 }
 
 async function reviewVehicle(req, res) {
@@ -82,7 +112,7 @@ async function reviewVehicle(req, res) {
     if (!['approve', 'reject'].includes(action)) return res.status(400).json({ success: false, message: 'action must be approve or reject' });
     const vehicle = await vehicleMasterService.reviewVehicle(req.params.id, action, req.user.id, reason, overrides);
     res.status(200).json({ success: true, message: `Vehicle ${action === 'approve' ? 'approved' : 'rejected'} successfully`, data: vehicle });
-  } catch (error) { res.status(500).json({ success: false, message: 'Failed to review vehicle', error: error.message }); }
+  } catch (error) { res.status(500).json({ success: false, message: friendlyError(error) }); }
 }
 
 /**
@@ -105,8 +135,7 @@ async function updateVehicle(req, res) {
     Logger.error('Error in updateVehicle controller:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to update vehicle',
-      error: error.message
+      message: friendlyError(error)
     });
   }
 }
@@ -126,8 +155,7 @@ async function deleteVehicle(req, res) {
     Logger.error('Error in deleteVehicle controller:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to delete vehicle',
-      error: error.message
+      message: friendlyError(error)
     });
   }
 }
