@@ -306,6 +306,84 @@ const saveCsvFormats = async (req, res) => {
 };
 
 /**
+ * Get all column preferences for a user
+ */
+const getColumnPrefs = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const prefs = await userService.getColumnPrefs(parseInt(id));
+    if (prefs === null) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.json({
+      success: true,
+      message: 'Column preferences retrieved successfully',
+      data: prefs,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    Logger.error('Error in getColumnPrefs controller', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to retrieve column preferences',
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+/**
+ * Save (deep-merge) one stage's column preferences for a user
+ */
+const saveColumnPrefs = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stageKey, visible, order } = req.body;
+    if (!stageKey || typeof stageKey !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'stageKey is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+    const partial = {};
+    if (Array.isArray(visible)) partial.visible = visible;
+    if (Array.isArray(order)) partial.order = order;
+    if (Object.keys(partial).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one of visible[] or order[] is required',
+        timestamp: new Date().toISOString()
+      });
+    }
+    const saved = await userService.saveColumnPrefs(parseInt(id), stageKey, partial);
+    if (saved === null) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.json({
+      success: true,
+      message: 'Column preferences saved successfully',
+      data: saved,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    Logger.error('Error in saveColumnPrefs controller', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to save column preferences',
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+/**
  * Get page access options
  */
 const getPageAccessOptions = async (req, res) => {
@@ -394,5 +472,7 @@ module.exports = {
   logoutUser,
   getPageAccessOptions,
   getCsvFormats,
-  saveCsvFormats
+  saveCsvFormats,
+  getColumnPrefs,
+  saveColumnPrefs
 };

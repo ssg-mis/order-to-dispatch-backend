@@ -404,6 +404,61 @@ class UserService {
   }
 
   /**
+   * Get all column preferences for a user.
+   * Shape: { [stageKey]: { visible?: string[], order?: string[] } }
+   * @param {number} userId
+   * @returns {Promise<Object|null>} prefs map, or null if user not found
+   */
+  async getColumnPrefs(userId) {
+    try {
+      const result = await db.query(
+        `SELECT features->'column_prefs' AS column_prefs FROM login WHERE id = $1`,
+        [userId]
+      );
+      if (result.rows.length === 0) return null;
+      return result.rows[0].column_prefs || {};
+    } catch (error) {
+      Logger.error('Error fetching column prefs', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Save (deep-merge) one stage's column preferences for a user.
+   * Only the provided keys of `partial` ({ visible?, order? }) are updated; the
+   * other key and every other stage are preserved. Uses nested shallow jsonb
+   * merges so concurrent visible/order saves can't clobber each other (each
+   * UPDATE is atomic on the row).
+   * @param {number} userId
+   * @param {string} stageKey  e.g. "check-invoice"
+   * @param {Object} partial   { visible?: string[], order?: string[] }
+   * @returns {Promise<Object|null>} updated column_prefs map, or null if user not found
+   */
+  async saveColumnPrefs(userId, stageKey, partial) {
+    try {
+      const result = await db.query(
+        `UPDATE login
+         SET features = COALESCE(features, '{}'::jsonb) || jsonb_build_object(
+               'column_prefs',
+               COALESCE(features->'column_prefs', '{}'::jsonb) || jsonb_build_object(
+                 $2::text,
+                 COALESCE(features #> ARRAY['column_prefs', $2], '{}'::jsonb) || $3::jsonb
+               )
+             ),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+         RETURNING features->'column_prefs' AS column_prefs`,
+        [userId, stageKey, JSON.stringify(partial)]
+      );
+      if (result.rows.length === 0) return null;
+      return result.rows[0].column_prefs || {};
+    } catch (error) {
+      Logger.error('Error saving column prefs', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get available page access options
    * @returns {Array<string>} List of page names
    */

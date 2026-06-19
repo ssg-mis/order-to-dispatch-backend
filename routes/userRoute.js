@@ -19,6 +19,8 @@ router.get('/me', userController.getMe);
 router.get('/', userController.getAllUsers);
 router.get('/:id/csv-formats', userController.getCsvFormats);
 router.put('/:id/csv-formats', userController.saveCsvFormats);
+router.get('/:id/column-prefs', userController.getColumnPrefs);
+router.put('/:id/column-prefs', userController.saveColumnPrefs);
 router.get('/:id', userController.getUserById);
 router.post('/', userController.createUser);
 router.put('/:id', userController.updateUser);

@@ -272,7 +272,11 @@ class MakeInvoiceService {
         qty: data.qty || null,
         bill_amount: data.bill_amount || null,
         make_invoice_user: data.username || null,
-        cd_amount: cd_amount
+        cd_amount: cd_amount,
+        // Clear any prior "Issue" flag raised by Check Invoice so that a re-issued
+        // record returns to "Pending Review" (not stuck on "Issue Reported").
+        status_1: null,
+        remarks_2: null
       };
 
       const fields = Object.keys(updateData);
