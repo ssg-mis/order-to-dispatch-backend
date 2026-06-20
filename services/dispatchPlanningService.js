@@ -58,6 +58,12 @@ class DispatchPlanningService {
         }
       }
 
+      if (filters.manual_sauda_no) {
+        whereConditions.push(`processid ILIKE $${paramIndex}`);
+        queryParams.push(`%${filters.manual_sauda_no}%`);
+        paramIndex++;
+      }
+
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
       // Unified Base DO Expression for grouping (e.g. extracts DO-657 from DO-657D)
@@ -155,6 +161,12 @@ class DispatchPlanningService {
           queryParams.push(filters.depo_names);
           paramIndex++;
         }
+      }
+
+      if (filters.manual_sauda_no) {
+        whereConditions.push(`processid ILIKE $${paramIndex}`);
+        queryParams.push(`%${filters.manual_sauda_no}%`);
+        paramIndex++;
       }
 
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
