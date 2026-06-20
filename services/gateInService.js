@@ -61,10 +61,10 @@ class GateInService {
           LEFT JOIN LATERAL (
             SELECT
               lrc.party_name, lrc.so_no, lrc.processid, lrc.product_name,
-              lrc.qty_to_be_dispatched, lrc.dispatch_from, lrc.uom,
-              lrc.order_quantity, lrc.alternate_uom, lrc.alternate_qty_kg,
+              lrc.qty_to_be_dispatched, lrc.dispatch_from,
               lrc.remarks, lrc.revert_security_remarks,
               lrc.revert_dispatch_remarks, lrc.revert_planning_remarks,
+              od.uom, od.order_quantity, od.alternate_uom, od.alternate_qty_kg,
               od.party_so_date, od.order_type, od.customer_type,
               od.order_type_delivery_purpose, od.delivery_date,
               od.start_date, od.end_date, od.oil_type,
@@ -95,7 +95,7 @@ class GateInService {
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
       };
     } catch (error) {
-      Logger.error('[GATE IN] Error fetching pending', error);
+      Logger.error('[GATE IN] Error fetching pending', error.message || error);
       throw new Error('Failed to fetch pending gate-ins');
     }
   }
