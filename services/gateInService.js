@@ -43,8 +43,6 @@ class GateInService {
             ord.party_name, ord.so_no, ord.processid, ord.product_name,
             ord.qty_to_be_dispatched, ord.dispatch_from, ord.uom,
             ord.order_quantity, ord.alternate_uom, ord.alternate_qty_kg,
-            ord.remarks, ord.revert_security_remarks,
-            ord.revert_dispatch_remarks, ord.revert_planning_remarks,
             ord.party_so_date, ord.order_type, ord.customer_type,
             ord.order_type_delivery_purpose, ord.delivery_date,
             ord.start_date, ord.end_date, ord.oil_type,
@@ -62,8 +60,6 @@ class GateInService {
             SELECT
               lrc.party_name, lrc.so_no, lrc.processid, lrc.product_name,
               lrc.qty_to_be_dispatched, lrc.dispatch_from,
-              lrc.remarks, lrc.revert_security_remarks,
-              lrc.revert_dispatch_remarks, lrc.revert_planning_remarks,
               od.uom, od.order_quantity, od.alternate_uom, od.alternate_qty_kg,
               od.party_so_date, od.order_type, od.customer_type,
               od.order_type_delivery_purpose, od.delivery_date,
