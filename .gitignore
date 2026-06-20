@@ -33,6 +33,5 @@ migrations
 # Local-only dev scratch / one-off scripts — not for deployment
 scratch/
 
-key
-
-key.pub
+sshyam-aws-key
+sshyam-aws-key.pub
