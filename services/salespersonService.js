@@ -13,11 +13,15 @@ class SalespersonService {
   async getAllSalespersons(params = {}) {
     try {
       const { all, page = 1, limit = 20, search = '' } = params;
+      const isAll = all === true || all === 'true';
+      // When `all` is requested without an explicit limit, return the full set
+      // (skip LIMIT/OFFSET). Callers that pass a limit still get pagination.
+      const noLimit = isAll && params.limit === undefined;
       const offset = (page - 1) * limit;
       const values = [];
 
       const conditions = ["approval_status = 'approved'"];
-      if (!all || all === 'false') conditions.push("status = 'Active'");
+      if (!isAll) conditions.push("status = 'Active'");
       if (search) {
         values.push(`%${search}%`);
         conditions.push(`(salesman_name ILIKE $${values.length} OR broker_id ILIKE $${values.length} OR depot_name ILIKE $${values.length} OR email_id ILIKE $${values.length})`);
@@ -36,10 +40,10 @@ class SalespersonService {
         FROM salesperson_details
         ${whereClause}
         ORDER BY salesman_name ASC
-        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+        ${noLimit ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
       `;
-      
-      values.push(limit, offset);
+
+      if (!noLimit) values.push(limit, offset);
       const result = await pool.query(query, values);
       
       Logger.info(`Fetched ${result.rows.length} salespersons (total: ${total}, search: "${search}")`);
@@ -96,7 +100,7 @@ class SalespersonService {
     try {
       const result = await pool.query(`
         SELECT sd.broker_id, sd.salesman_name, sd.status, sd.email_id, sd.mobile_no,
-               sd.depot_name, sd.rejection_reason, sd.created_at,
+               sd.depot_name, sd.depot_id, sd.rejection_reason, sd.created_at,
                sd.pending_changes, sd.pending_edit_at,
                CASE WHEN sd.approval_status = 'pending' THEN 'create' ELSE 'edit' END AS request_type,
                l.username  AS created_by_name,

@@ -13,11 +13,15 @@ class DepotService {
   async getAllDepots(params = {}) {
     try {
       const { all, page = 1, limit = 20, search = '' } = params;
+      const isAll = all === true || all === 'true';
+      // When `all` is requested without an explicit limit, return the full set
+      // (skip LIMIT/OFFSET). Callers that pass a limit still get pagination.
+      const noLimit = isAll && params.limit === undefined;
       const offset = (page - 1) * limit;
       const values = [];
 
       const conditions = ["approval_status = 'approved'"];
-      if (all !== 'true') conditions.push("status = 'Active'");
+      if (!isAll) conditions.push("status = 'Active'");
       if (search) {
         values.push(`%${search}%`);
         conditions.push(`(depot_name ILIKE $${values.length} OR depot_id ILIKE $${values.length} OR salesman_broker_name ILIKE $${values.length} OR depot_address ILIKE $${values.length})`);
@@ -36,10 +40,10 @@ class DepotService {
         FROM depot_details
         ${whereClause}
         ORDER BY depot_name ASC
-        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+        ${noLimit ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
       `;
 
-      values.push(limit, offset);
+      if (!noLimit) values.push(limit, offset);
       const result = await pool.query(query, values);
       
       Logger.info(`Fetched ${result.rows.length} depots (total: ${total}, search: "${search}")`);

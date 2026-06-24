@@ -13,11 +13,15 @@ class SkuService {
   async getAllSkus(params = {}) {
     try {
       const { all, page = 1, limit = 20, search = "" } = params;
+      const isAll = all === true || all === 'true';
+      // When `all` is requested without an explicit limit, return the full set
+      // (skip LIMIT/OFFSET). Callers that pass a limit still get pagination.
+      const noLimit = isAll && params.limit === undefined;
       const offset = (page - 1) * limit;
       const values = [];
       let whereClause = "";
-      
-      if (!all) {
+
+      if (!isAll) {
         whereClause = " WHERE (status = 'Active' OR sku_code = 'Active' OR status IS NULL)";
       }
       
@@ -44,10 +48,10 @@ class SkuService {
         FROM sku_details
         ${whereClause}
         ORDER BY sku_name ASC
-        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+        ${noLimit ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
       `;
-      
-      values.push(limit, offset);
+
+      if (!noLimit) values.push(limit, offset);
       const result = await pool.query(query, values);
       
       Logger.info(`Fetched ${result.rows.length} active SKUs (total: ${total}, search: "${search}")`);

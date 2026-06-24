@@ -95,7 +95,8 @@ class TransportMasterService {
       //  - 'edit'  : an approved transporter with a staged change in pending_changes
       const result = await pool.query(`
         SELECT tm.transporter_id as id, tm.transport_master_id, tm.transporter_name, tm.contact_person,
-               tm.contact_number, tm.gstin, tm.status, tm.rejection_reason, tm.created_at,
+               tm.contact_number, tm.email_id, tm.address_line1, tm.state, tm.pincode, tm.pan,
+               tm.gstin, tm.status, tm.rejection_reason, tm.created_at,
                tm.pending_changes, tm.pending_edit_at,
                CASE WHEN tm.approval_status = 'pending' THEN 'create' ELSE 'edit' END AS request_type,
                l.username  AS created_by_name,

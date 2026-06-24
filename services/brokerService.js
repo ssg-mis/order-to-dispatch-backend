@@ -13,11 +13,15 @@ class BrokerService {
   async getAllBrokers(params = {}) {
     try {
       const { all, page = 1, limit = 20, search = '' } = params;
+      const isAll = all === true || all === 'true';
+      // When `all` is requested without an explicit limit, return the full set
+      // (skip LIMIT/OFFSET). Callers that pass a limit still get pagination.
+      const noLimit = isAll && params.limit === undefined;
       const offset = (page - 1) * limit;
       const values = [];
 
       const conditions = ["approval_status = 'approved'"];
-      if (!all) conditions.push("status = 'Active'");
+      if (!isAll) conditions.push("status = 'Active'");
       if (search) {
         values.push(`%${search}%`);
         conditions.push(`(salesman_name ILIKE $${values.length} OR broker_id ILIKE $${values.length} OR depot_name ILIKE $${values.length} OR email_id ILIKE $${values.length})`);
@@ -36,10 +40,10 @@ class BrokerService {
         FROM broker_details
         ${whereClause}
         ORDER BY salesman_name ASC
-        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+        ${noLimit ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
       `;
-      
-      values.push(limit, offset);
+
+      if (!noLimit) values.push(limit, offset);
       const result = await pool.query(query, values);
       
       Logger.info(`Fetched ${result.rows.length} brokers (total: ${total}, search: "${search}")`);
@@ -132,7 +136,7 @@ class BrokerService {
       //  - 'edit'  : an approved broker with a staged change in pending_changes
       const result = await pool.query(`
         SELECT bd.broker_id, bd.salesman_name, bd.status, bd.email_id, bd.mobile_no,
-               bd.depot_name, bd.rejection_reason, bd.created_at,
+               bd.depot_name, bd.depot_id, bd.rejection_reason, bd.created_at,
                bd.pending_changes, bd.pending_edit_at,
                CASE WHEN bd.approval_status = 'pending' THEN 'create' ELSE 'edit' END AS request_type,
                l.username  AS created_by_name,

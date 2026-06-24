@@ -33,9 +33,9 @@ class VehicleMasterService {
       let query = `
         SELECT
           vehicle_id as id, vehicle_master_id, status, registration_no, vehicle_type,
-          transporter, rto, road_tax, road_tax_image, pollution,
+          transporter, rto, rc_image, road_tax, road_tax_image, pollution,
           pollution_image, insurance, insurance_image, fitness,
-          fitness_image, state_permit, state_permit_image, state_permit_type, fuel_type, gvw, ulw, passing, created_at,
+          fitness_image, state_permit, state_permit_image, state_permit_type, national_permit, national_permit_image, fuel_type, gvw, ulw, passing, created_at,
           life_time_tax, life_time_tax_image,
           (pending_changes IS NOT NULL) AS has_pending_edit
         FROM vehicle_master
@@ -72,7 +72,7 @@ class VehicleMasterService {
           vehicle_id as id, vehicle_master_id, status, registration_no, vehicle_type, 
           transporter, rto, road_tax, road_tax_image, pollution, 
           pollution_image, insurance, insurance_image, fitness, 
-          fitness_image, state_permit, state_permit_image, state_permit_type, fuel_type, gvw, ulw, passing, created_at,
+          fitness_image, state_permit, state_permit_image, state_permit_type, national_permit, national_permit_image, fuel_type, gvw, ulw, passing, created_at,
           life_time_tax, life_time_tax_image
         FROM vehicle_master
         WHERE vehicle_id = $1
@@ -101,9 +101,9 @@ class VehicleMasterService {
       //  - 'edit'  : an approved vehicle with a staged change in pending_changes
       const result = await pool.query(`
         SELECT vm.vehicle_id as id, vm.vehicle_master_id, vm.registration_no, vm.vehicle_type,
-               vm.transporter, vm.status, vm.rto, vm.road_tax, vm.road_tax_image, vm.pollution,
+               vm.transporter, vm.status, vm.rto, vm.rc_image, vm.road_tax, vm.road_tax_image, vm.pollution,
                vm.pollution_image, vm.insurance, vm.insurance_image, vm.fitness, vm.fitness_image,
-               vm.state_permit, vm.state_permit_image, vm.state_permit_type, vm.fuel_type,
+               vm.state_permit, vm.state_permit_image, vm.state_permit_type, vm.national_permit, vm.national_permit_image, vm.fuel_type,
                vm.gvw, vm.ulw, vm.passing, vm.life_time_tax, vm.life_time_tax_image,
                vm.rejection_reason, vm.created_at,
                vm.pending_changes, vm.pending_edit_at,
@@ -125,10 +125,10 @@ class VehicleMasterService {
   static get EDITABLE_COLUMNS() {
     return [
       'registration_no','vehicle_type','transporter','rto','status','fuel_type',
-      'gvw','ulw','passing','state_permit_type',
+      'gvw','ulw','passing','state_permit_type','rc_image',
       'road_tax','road_tax_image','pollution','pollution_image',
       'insurance','insurance_image','fitness','fitness_image',
-      'state_permit','state_permit_image','life_time_tax','life_time_tax_image',
+      'state_permit','state_permit_image','national_permit','national_permit_image','life_time_tax','life_time_tax_image',
     ];
   }
 
@@ -209,6 +209,7 @@ class VehicleMasterService {
         vehicle_type,
         transporter,
         rto,
+        rc_image,
         road_tax,
         road_tax_image,
         pollution,
@@ -220,6 +221,8 @@ class VehicleMasterService {
         state_permit,
         state_permit_image,
         state_permit_type,
+        national_permit,
+        national_permit_image,
         fuel_type,
         gvw,
         ulw,
@@ -255,7 +258,9 @@ class VehicleMasterService {
              fuel_type = $16, gvw = $17, ulw = $18, passing = $19,
              life_time_tax = $20, life_time_tax_image = $21,
              approval_status = $22, rejection_reason = NULL,
-             reviewed_by = NULL, created_by = $23, created_at = NOW()
+             reviewed_by = NULL, created_by = $23, created_at = NOW(),
+             rc_image = $25,
+             national_permit = $26, national_permit_image = $27
            WHERE vehicle_id = $24
            RETURNING vehicle_id as id, *`,
           [
@@ -265,7 +270,8 @@ class VehicleMasterService {
             state_permit || null, state_permit_image || null, state_permit_type || null,
             fuel_type || null, gvw || 0, ulw || 0, passing || 0,
             life_time_tax || null, life_time_tax_image || null,
-            approval_status, created_by, rejectedId
+            approval_status, created_by, rejectedId, rc_image || null,
+            national_permit || null, national_permit_image || null
           ]
         );
         return { ...resubmitResult.rows[0], resubmitted: true };
@@ -277,9 +283,9 @@ class VehicleMasterService {
           vehicle_master_id, status, registration_no, vehicle_type, transporter,
           rto, road_tax, road_tax_image, pollution, pollution_image,
           insurance, insurance_image, fitness, fitness_image, state_permit,
-          state_permit_image, state_permit_type, fuel_type, gvw, ulw, passing, life_time_tax, life_time_tax_image, approval_status, created_by
+          state_permit_image, state_permit_type, fuel_type, gvw, ulw, passing, life_time_tax, life_time_tax_image, approval_status, created_by, rc_image, national_permit, national_permit_image
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
         RETURNING vehicle_id as id, *
       `;
 
@@ -287,7 +293,7 @@ class VehicleMasterService {
         vehicle_master_id, status, registration_no, vehicle_type, transporter,
         rto, road_tax || null, road_tax_image || null, pollution || null, pollution_image || null,
         insurance || null, insurance_image || null, fitness || null, fitness_image || null, state_permit || null,
-        state_permit_image || null, state_permit_type || null, fuel_type || null, gvw || 0, ulw || 0, passing || 0, life_time_tax || null, life_time_tax_image || null, approval_status, created_by
+        state_permit_image || null, state_permit_type || null, fuel_type || null, gvw || 0, ulw || 0, passing || 0, life_time_tax || null, life_time_tax_image || null, approval_status, created_by, rc_image || null, national_permit || null, national_permit_image || null
       ];
 
       const result = await pool.query(query, values);
@@ -336,6 +342,7 @@ class VehicleMasterService {
         vehicle_type,
         transporter,
         rto,
+        rc_image,
         road_tax,
         road_tax_image,
         pollution,
@@ -347,6 +354,8 @@ class VehicleMasterService {
         state_permit,
         state_permit_image,
         state_permit_type,
+        national_permit,
+        national_permit_image,
         fuel_type,
         gvw,
         ulw,
@@ -380,7 +389,10 @@ class VehicleMasterService {
           ulw = $20,
           passing = $21,
           life_time_tax = $22,
-          life_time_tax_image = $23
+          life_time_tax_image = $23,
+          rc_image = $25,
+          national_permit = $26,
+          national_permit_image = $27
         WHERE vehicle_id = $24
         RETURNING vehicle_id as id, *
       `;
@@ -389,7 +401,7 @@ class VehicleMasterService {
         vehicle_master_id, status, registration_no, vehicle_type, transporter,
         rto, road_tax || null, road_tax_image || null, pollution || null, pollution_image || null,
         insurance || null, insurance_image || null, fitness || null, fitness_image || null, state_permit || null,
-        state_permit_image || null, state_permit_type || null, fuel_type || null, gvw || 0, ulw || 0, passing || 0, life_time_tax || null, life_time_tax_image || null, id
+        state_permit_image || null, state_permit_type || null, fuel_type || null, gvw || 0, ulw || 0, passing || 0, life_time_tax || null, life_time_tax_image || null, id, rc_image || null, national_permit || null, national_permit_image || null
       ];
 
       const result = await pool.query(query, values);

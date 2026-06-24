@@ -95,7 +95,10 @@ class DriverMasterService {
       //  - 'edit'  : an approved driver with a staged change in pending_changes
       const result = await pool.query(`
         SELECT dm.driver_id as id, dm.driver_master_id, dm.driver_name, dm.mobile_no,
-               dm.driving_licence_no, dm.status, dm.rejection_reason, dm.created_at,
+               dm.driving_licence_no, dm.driving_licence_type, dm.valid_upto, dm.rto,
+               dm.email_id, dm.address_line1, dm.state, dm.pincode,
+               dm.aadhaar_no, dm.pan_no, dm.aadhaar_upload, dm.dl_upload,
+               dm.status, dm.rejection_reason, dm.created_at,
                dm.pending_changes, dm.pending_edit_at,
                CASE WHEN dm.approval_status = 'pending' THEN 'create' ELSE 'edit' END AS request_type,
                l.username  AS created_by_name,
