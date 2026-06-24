@@ -457,11 +457,9 @@ class DispatchPlanningService {
       }
 
       const order = orderResult.rows[0];
-      // Keep the current remaining_dispatch_qty (e.g. 20) — do NOT reset to approval_qty (50).
-      // If remaining_dispatch_qty is NULL (never partially dispatched), fall back to approval_qty.
-      const qtyToRestore = order.remaining_dispatch_qty !== null
-        ? parseFloat(order.remaining_dispatch_qty)
-        : parseFloat(order.approval_qty || order.order_quantity || 0);
+      // On revert, always restore the full approved chunk (order_quantity).
+      // Partial dispatch progress is discarded — the whole row goes back to pending.
+      const qtyToRestore = parseFloat(order.order_quantity || order.approval_qty || 0);
 
       // Step 2 (SKIPPED): Do NOT delete lift_receiving_confirmation records here.
       // Those records were created by actual dispatch (actualDispatchService) and should

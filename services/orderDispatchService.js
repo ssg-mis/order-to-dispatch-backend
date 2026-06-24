@@ -523,11 +523,12 @@ class OrderDispatchService {
    * @param {Object} data - Optional additional data to update
    * @returns {Promise<Object>} Updated order
    */
-  async submitPreApproval(id, data = {}) {
-    const client = await db.getClient();
-    
+  async submitPreApproval(id, data = {}, externalClient = null) {
+    const client = externalClient || await db.getClient();
+    const manageTx = !externalClient;
+
     try {
-      await client.query('BEGIN');
+      if (manageTx) await client.query('BEGIN');
       
       // Step 1: Get original order data
       const originalQuery = 'SELECT * FROM order_dispatch WHERE id = $1';
@@ -594,8 +595,18 @@ class OrderDispatchService {
         
         Logger.info(`Partial approval detected. Creating new row for remaining qty: ${remainingQty}`);
         
-        // Generate new order number with -1 suffix (e.g., DO-106A-1)
-        const newOrderNo = `${originalOrder.order_no}-1`;
+        // Generate next available split suffix (-1, -2, -3, ...) to avoid duplicates.
+        let splitCounter = 1;
+        let newOrderNo;
+        while (true) {
+          newOrderNo = `${originalOrder.order_no}-${splitCounter}`;
+          const existsCheck = await client.query(
+            'SELECT id FROM order_dispatch WHERE order_no = $1',
+            [newOrderNo]
+          );
+          if (existsCheck.rows.length === 0) break;
+          splitCounter++;
+        }
         
         // Create new order row with remaining quantity
         const remainingOrderData = new OrderDispatch({
@@ -656,13 +667,13 @@ class OrderDispatchService {
         Logger.info(`Created remaining order with ID: ${remainingOrder.id}, order_no: ${remainingOrder.order_no}`);
       }
       
-      await client.query('COMMIT');
-      
+      if (manageTx) await client.query('COMMIT');
+
       Logger.info(`Pre-approval submitted for order ID: ${id}`);
-      
+
       return {
         success: true,
-        message: remainingOrder 
+        message: remainingOrder
           ? `Pre-approval submitted. Remaining quantity (${remainingOrder.order_quantity}) added to pending.`
           : 'Pre-approval submitted successfully',
         data: {
@@ -671,11 +682,11 @@ class OrderDispatchService {
         }
       };
     } catch (error) {
-      await client.query('ROLLBACK');
+      if (manageTx) await client.query('ROLLBACK');
       Logger.error('Error submitting pre-approval', error);
       throw error;
     } finally {
-      client.release();
+      if (manageTx) client.release();
     }
   }
   
@@ -710,6 +721,98 @@ class OrderDispatchService {
     } catch (error) {
       Logger.error(`Error fetching suffixes for prefix ${prefix}`, error);
       throw error;
+    }
+  }
+
+  /**
+   * Deduct qty from an existing order without advancing it in the workflow.
+   * Used when a new SKU consumes budget from existing pending orders.
+   * If qty reaches 0, sets planned_1 = NULL so the row is neutralised for audit only.
+   */
+  async deductBudget(id, orderQuantity, externalClient = null) {
+    const qty = Math.max(0, parseFloat(orderQuantity) || 0);
+    const db_ = externalClient || db;
+
+    let query;
+    let params;
+    if (qty === 0) {
+      query = `UPDATE order_dispatch SET order_quantity = $1, planned_1 = NULL, remaining_dispatch_qty = CASE WHEN remaining_dispatch_qty IS NOT NULL THEN 0 ELSE NULL END WHERE id = $2 RETURNING *`;
+      params = [qty, id];
+    } else {
+      query = `UPDATE order_dispatch SET order_quantity = $1, remaining_dispatch_qty = CASE WHEN remaining_dispatch_qty IS NOT NULL THEN LEAST(remaining_dispatch_qty, $1) ELSE NULL END WHERE id = $2 RETURNING *`;
+      params = [qty, id];
+    }
+
+    const result = await db_.query(query, params);
+    if (result.rows.length === 0) throw new Error('Order not found');
+    return result.rows[0];
+  }
+
+  /**
+   * Atomically submit one or more pre-approvals and apply cascade deductions
+   * in a single DB transaction so totals never go out of sync on partial failure.
+   * @param {Array<{id: number, data: object}>} approvals
+   * @param {Array<{id: number, order_quantity: number}>} deductions
+   */
+  async submitBatch(approvals = [], cascadeBudgets = [], deductions = []) {
+    const client = await db.getClient();
+    try {
+      await client.query('BEGIN');
+
+      const approvedIds = [];
+      const results = [];
+      for (const { id, data } of approvals) {
+        const result = await this.submitPreApproval(id, data, client);
+        results.push(result);
+        approvedIds.push(parseInt(id));
+      }
+
+      // Legacy explicit deductions (kept for backward compat)
+      for (const { id, order_quantity } of deductions) {
+        await this.deductBudget(id, order_quantity, client);
+      }
+
+      // Server-side cascade: runs AFTER all splits are created so it can target them too.
+      // Frontend sends {base_do, oil_type, qty} tuples; we find the right rows here.
+      for (const { base_do, oil_type, qty } of cascadeBudgets) {
+        if (!qty || qty <= 0) continue;
+
+        const { rows: targets } = await client.query(
+          `SELECT id, order_quantity
+           FROM order_dispatch
+           WHERE COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?(\\d+))'), order_no)
+               = COALESCE(substring($1::text from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?(\\d+))'), $1::text)
+             AND LOWER(TRIM(COALESCE(oil_type, ''))) = LOWER(TRIM($2))
+             AND planned_1 IS NOT NULL
+             AND actual_1 IS NULL
+             AND id != ALL($3::int[])
+           ORDER BY id ASC`,
+          [base_do, oil_type, approvedIds.length > 0 ? approvedIds : [0]]
+        );
+
+        let remaining = qty;
+        for (const target of targets) {
+          if (remaining <= 0) break;
+          const targetQty = parseFloat(target.order_quantity) || 0;
+          if (targetQty <= 0) continue;
+          const deduction = Math.min(targetQty, remaining);
+          remaining -= deduction;
+          await this.deductBudget(target.id, Math.max(0, targetQty - deduction), client);
+        }
+
+        if (remaining > 0) {
+          Logger.warn(`[CASCADE] Unabsorbed budget: ${remaining} of ${oil_type} for ${base_do}`);
+        }
+      }
+
+      await client.query('COMMIT');
+      return { success: true, results };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      Logger.error('Error in submitBatch', error);
+      throw error;
+    } finally {
+      client.release();
     }
   }
 }

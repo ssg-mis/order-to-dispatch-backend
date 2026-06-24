@@ -42,4 +42,28 @@ router.post(
   preApprovalController.submitPreApproval
 );
 
+/**
+ * @route   PATCH /api/v1/pre-approval/deduct-budget/:id
+ * @desc    Deduct qty from an existing order without advancing it in the workflow.
+ *          Sets planned_1 = NULL if qty reaches 0 (audit-only row).
+ * @access  Public
+ * @body    { order_quantity: number }
+ */
+router.patch(
+  '/deduct-budget/:id',
+  preApprovalController.deductBudget
+);
+
+/**
+ * @route   POST /api/v1/pre-approval/submit-batch
+ * @desc    Atomically submit approvals + cascade deductions in one transaction.
+ * @access  Public
+ * @body    { approvals: [{id, ...submissionData}], deductions: [{id, order_quantity}] }
+ */
+router.post(
+  '/submit-batch',
+  pageAccess,
+  preApprovalController.submitBatch
+);
+
 module.exports = router;

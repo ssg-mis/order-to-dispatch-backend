@@ -169,7 +169,6 @@ class OrderDispatch {
       order_punch_user: this.order_punch_user,
       pre_approval_user: this.pre_approval_user,
       order_approval_user: this.order_approval_user,
-      order_approval_user: this.order_approval_user,
       dispatch_planning_user: this.dispatch_planning_user,
       transfer: this.transfer,
       bill_company_name: this.bill_company_name,

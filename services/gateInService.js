@@ -48,12 +48,13 @@ class GateInService {
             ord.start_date, ord.end_date, ord.oil_type,
             ord.rate_per_15kg, ord.rate_per_ltr, ord.rate_of_material,
             ord.final_rate, ord.total_amount_with_gst,
+            ord.freight_rate, ord.depo_name,
             ord.type_of_transporting, ord.customer_contact_person_name,
             ord.customer_contact_person_whatsapp_no, ord.customer_address,
             ord.payment_terms, ord.advance_payment_to_be_taken,
             ord.advance_amount, ord.is_order_through_broker,
             ord.broker_name, ord.order_punch_remarks,
-            ord.sku_name, ord.approval_qty
+            ord.sku_name, ord.approval_qty, ord.nos_per_main_uom
           FROM dispatch_drafts dd
           LEFT JOIN gate_in_records gi ON dd.order_key = gi.order_key
           LEFT JOIN LATERAL (
@@ -66,14 +67,17 @@ class GateInService {
               od.start_date, od.end_date, od.oil_type,
               od.rate_per_15kg, od.rate_per_ltr, od.rate_of_material,
               od.final_rate, od.total_amount_with_gst,
+              od.freight_rate, od.depo_name,
               od.type_of_transporting, od.customer_contact_person_name,
               od.customer_contact_person_whatsapp_no, od.customer_address,
               od.payment_terms, od.advance_payment_to_be_taken,
               od.advance_amount, od.is_order_through_broker,
               od.broker_name, od.order_punch_remarks,
-              od.sku_name, od.approval_qty
+              od.sku_name, od.approval_qty,
+              sd.nos_per_main_uom
             FROM lift_receiving_confirmation lrc
             LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+            LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
             WHERE lrc.so_no ILIKE dd.order_key || '%'
             LIMIT 1
           ) ord ON true

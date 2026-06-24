@@ -127,8 +127,65 @@ const submitPreApproval = async (req, res, next) => {
   }
 };
 
+/**
+ * Deduct budget from an existing order without advancing it in the workflow.
+ * @route PATCH /api/v1/pre-approval/deduct-budget/:id
+ */
+const deductBudget = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { order_quantity } = req.body;
+
+    if (order_quantity === undefined || order_quantity === null) {
+      return res.status(400).json({ success: false, message: 'order_quantity is required' });
+    }
+
+    Logger.info(`Deducting budget for order ID: ${id}, new qty: ${order_quantity}`);
+
+    const result = await orderDispatchService.deductBudget(id, order_quantity);
+
+    return ResponseUtil.success(res, result, 'Budget deducted successfully');
+  } catch (error) {
+    Logger.error('Error in deductBudget controller', error);
+    if (error.message.includes('not found')) {
+      return ResponseUtil.notFound(res, error.message);
+    }
+    next(error);
+  }
+};
+
+/**
+ * Atomically submit approvals + cascade deductions in one transaction.
+ * @route POST /api/v1/pre-approval/submit-batch
+ * @body  { approvals: [{id, ...data}], cascadeBudgets: [{base_do, oil_type, qty}], deductions?: [{id, order_quantity}] }
+ */
+const submitBatch = async (req, res, next) => {
+  try {
+    const { approvals = [], cascadeBudgets = [], deductions = [] } = req.body;
+
+    if (!Array.isArray(approvals) || !Array.isArray(cascadeBudgets)) {
+      return res.status(400).json({ success: false, message: 'approvals and cascadeBudgets must be arrays' });
+    }
+
+    Logger.info(`[BATCH] Submitting ${approvals.length} approvals, ${cascadeBudgets.length} cascade budgets`);
+
+    const result = await orderDispatchService.submitBatch(
+      approvals.map(({ id, ...data }) => ({ id, data })),
+      cascadeBudgets,
+      deductions
+    );
+
+    return ResponseUtil.success(res, result, 'Batch submitted successfully');
+  } catch (error) {
+    Logger.error('Error in submitBatch controller', error);
+    next(error);
+  }
+};
+
 module.exports = {
   getPendingPreApprovals,
   getPreApprovalHistory,
-  submitPreApproval
+  submitPreApproval,
+  deductBudget,
+  submitBatch
 };
