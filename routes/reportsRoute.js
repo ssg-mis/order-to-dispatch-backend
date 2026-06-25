@@ -52,4 +52,24 @@ router.get('/dispatch-report', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/v1/reports/pending-sauda
+ * CP Pending Sauda Report — DOs stuck in the Dispatch Planning stage, grouped by
+ * Start-Date month with per-month subtotals and a grand total.
+ * Query params: customer_name, order_no
+ */
+router.get('/pending-sauda', async (req, res) => {
+  try {
+    const filters = {
+      customer_name: req.query.customer_name || '',
+      order_no:      req.query.order_no      || '',
+    };
+    const data = await reportsService.getPendingSaudaReport(filters);
+    res.json({ success: true, data });
+  } catch (err) {
+    Logger.error('Pending Sauda report error', err);
+    res.status(500).json({ success: false, message: err.message || 'Failed to generate pending sauda report' });
+  }
+});
+
 module.exports = router;

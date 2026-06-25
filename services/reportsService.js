@@ -539,6 +539,187 @@ class ReportsService {
       client.release();
     }
   }
+
+  /**
+   * CP Pending Sauda Report
+   * Source: order_dispatch rows stuck in the Dispatch Planning stage
+   *         (planned_3 IS NOT NULL AND actual_3 IS NULL).
+   * One report row per base DO (DO-314 groups DO-314A, DO-314B, ...).
+   * Per-DO quantities are bucketed into Rice / Soya / Palm columns by oil type,
+   * KGS = balance qty × per-DO SKU weight, and the "Dispatched Qty Detail" is the
+   * list of already-dispatched quantities (lift_receiving_confirmation.qty_to_be_dispatched).
+   * Rows are grouped into months by Start Date, with per-month subtotals (units + KGS)
+   * and a grand total at the end.
+   */
+  async getPendingSaudaReport(filters = {}) {
+    const client = await db.getClient();
+    try {
+      const MONTH_NAMES = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
+        'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+
+      // Base DO grouping expression (matches dispatchPlanningService)
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+
+      const conditions = ['planned_3 IS NOT NULL', 'actual_3 IS NULL'];
+      const params = [];
+      let p = 1;
+      if (filters.customer_name) { conditions.push(`customer_name ILIKE $${p}`); params.push(`%${filters.customer_name}%`); p++; }
+      if (filters.order_no)      { conditions.push(`order_no ILIKE $${p}`);      params.push(`${filters.order_no}%`);     p++; }
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+      const ordersRes = await client.query(
+        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+         ORDER BY start_date ASC NULLS LAST, created_at ASC, order_no ASC`,
+        params
+      );
+      const rows = ordersRes.rows;
+
+      // SKU weight lookup (prefer sku_weight; fall back to oil_filling_per_unit)
+      const skuMap = new Map();
+      try {
+        const skuRes = await client.query(`SELECT sku_name, sku_weight, oil_filling_per_unit FROM sku_details`);
+        skuRes.rows.forEach(s => skuMap.set((s.sku_name || '').toUpperCase().trim(), s));
+      } catch (e) { /* table shape may differ — weights default to 0 */ }
+
+      // Already-dispatched quantities per DO (in dispatch order)
+      const orderNos = [...new Set(rows.map(r => r.order_no).filter(Boolean))];
+      const dispatchedByOrder = new Map();
+      if (orderNos.length) {
+        const lrcRes = await client.query(
+          `SELECT so_no, qty_to_be_dispatched FROM lift_receiving_confirmation
+           WHERE so_no = ANY($1) ORDER BY timestamp ASC NULLS LAST, id ASC`,
+          [orderNos]
+        );
+        lrcRes.rows.forEach(l => {
+          const q = parseFloat(l.qty_to_be_dispatched);
+          if (!q) return;
+          if (!dispatchedByOrder.has(l.so_no)) dispatchedByOrder.set(l.so_no, []);
+          dispatchedByOrder.get(l.so_no).push(q);
+        });
+      }
+
+      const classifyOil = (oilType, skuName) => {
+        const s = `${oilType || ''} ${skuName || ''}`.toLowerCase();
+        if (s.includes('palm')) return 'palm';
+        if (s.includes('soya') || s.includes('sbo')) return 'soya';
+        if (s.includes('rice') || s.includes('rbo')) return 'rice';
+        return null;
+      };
+      const balOf = (r) => {
+        const v = r.remaining_dispatch_qty != null ? parseFloat(r.remaining_dispatch_qty)
+          : (r.approval_qty != null ? parseFloat(r.approval_qty) : parseFloat(r.order_quantity));
+        return Number.isFinite(v) ? v : 0;
+      };
+      const wtOf = (r) => {
+        const sku = skuMap.get((r.sku_name || r.product_name || '').toUpperCase().trim());
+        if (!sku) return 0;
+        return parseFloat(sku.sku_weight) || parseFloat(sku.oil_filling_per_unit) || 0;
+      };
+      const rateOf = (r) => parseFloat(r.final_rate ?? r.rate_per_15kg ?? r.rate_of_material) || 0;
+
+      // Group by base DO
+      const groups = new Map();
+      for (const r of rows) {
+        const key = r.base_do || r.order_no;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+      }
+
+      // Build one row per DO
+      const doRows = [];
+      for (const [baseDo, items] of groups) {
+        const first = items[0];
+        const buckets = { rice: { qty: 0, kg: 0, rate: 0 }, soya: { qty: 0, kg: 0, rate: 0 }, palm: { qty: 0, kg: 0, rate: 0 } };
+        let totalBal = 0, totalKg = 0;
+        const dispatched = [];
+        const seenOrders = new Set();
+        for (const it of items) {
+          const bal = balOf(it);
+          const w = wtOf(it);
+          totalBal += bal;
+          totalKg += bal * w;
+          const oil = classifyOil(it.oil_type, it.sku_name || it.product_name);
+          if (oil && buckets[oil]) {
+            buckets[oil].qty += bal;
+            buckets[oil].kg += bal * w;
+            if (!buckets[oil].rate) buckets[oil].rate = rateOf(it);
+          }
+          if (!seenOrders.has(it.order_no)) {
+            seenOrders.add(it.order_no);
+            (dispatchedByOrder.get(it.order_no) || []).forEach(q => dispatched.push(q));
+          }
+        }
+        doRows.push({
+          do_date: first.created_at,
+          do_no: baseDo,
+          sauda_no: items.map(i => i.processid).find(Boolean) || '',
+          customer_name: first.customer_name || '',
+          broker_name: items.map(i => i.broker_name).find(Boolean) || '',
+          rice: buckets.rice,
+          soya: buckets.soya,
+          palm: buckets.palm,
+          total_bal: totalBal,
+          total_kg: totalKg,
+          start_date: first.start_date,
+          end_date: first.end_date,
+          delivery_purpose: first.order_type_delivery_purpose,
+          dispatched,
+        });
+      }
+
+      // Month is decided by Start Date; but rows WITHIN a month are ordered by DO
+      // Date (created_at) ascending — matching the source report.
+      const monthSortOf = (r) => {
+        if (!r.start_date) return Number.MAX_SAFE_INTEGER;
+        const d = new Date(r.start_date);
+        return d.getFullYear() * 12 + d.getMonth();
+      };
+      const doDateOf = (r) => (r.do_date ? new Date(r.do_date).getTime() : Infinity);
+      doRows.sort((a, b) => (monthSortOf(a) - monthSortOf(b)) || (doDateOf(a) - doDateOf(b)));
+
+      const months = [];
+      const monthIndex = new Map();
+      for (const r of doRows) {
+        let mkey, mlabel, msort;
+        if (r.start_date) {
+          const d = new Date(r.start_date);
+          mkey = `${d.getFullYear()}-${d.getMonth()}`;
+          mlabel = `MONTH OF ${MONTH_NAMES[d.getMonth()]}`;
+          msort = d.getFullYear() * 12 + d.getMonth();
+        } else { mkey = 'none'; mlabel = 'MONTH OF —'; msort = Number.MAX_SAFE_INTEGER; }
+        if (!monthIndex.has(mkey)) {
+          const g = { label: mlabel, sort: msort, rows: [] };
+          monthIndex.set(mkey, g);
+          months.push(g);
+        }
+        monthIndex.get(mkey).rows.push(r);
+      }
+      months.sort((a, b) => a.sort - b.sort);
+
+      // Subtotals per month + grand total
+      const blankAgg = () => ({ rice: 0, soya: 0, palm: 0, total: 0, riceKg: 0, soyaKg: 0, palmKg: 0, totalKg: 0 });
+      const grand = blankAgg();
+      months.forEach(m => {
+        const agg = blankAgg();
+        m.rows.forEach(r => {
+          agg.rice += r.rice.qty;  agg.riceKg += r.rice.kg;
+          agg.soya += r.soya.qty;  agg.soyaKg += r.soya.kg;
+          agg.palm += r.palm.qty;  agg.palmKg += r.palm.kg;
+          agg.total += r.total_bal; agg.totalKg += r.total_kg;
+        });
+        m.subtotal = agg;
+        grand.rice += agg.rice; grand.riceKg += agg.riceKg;
+        grand.soya += agg.soya; grand.soyaKg += agg.soyaKg;
+        grand.palm += agg.palm; grand.palmKg += agg.palmKg;
+        grand.total += agg.total; grand.totalKg += agg.totalKg;
+        delete m.sort;
+      });
+
+      return { months, grandTotal: grand, count: doRows.length };
+    } finally {
+      client.release();
+    }
+  }
 }
 
 module.exports = new ReportsService();
