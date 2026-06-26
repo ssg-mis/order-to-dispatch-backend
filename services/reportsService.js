@@ -720,6 +720,544 @@ class ReportsService {
       client.release();
     }
   }
+
+  /**
+   * Customer-Wise CP Pending Sauda Report (Summary)
+   * Same pending scope as getPendingSaudaReport (DOs stuck in Dispatch Planning),
+   * but grouped Customer -> Sauda (base DO) -> Oil type, with Original Qty,
+   * Pending Qty and the per-15KG-tin rate. Returns per-customer sections plus
+   * per-customer totals; the frontend aggregates the chosen customers for the
+   * final summary block.
+   */
+  async getPendingSaudaCustomerReport(filters = {}) {
+    const client = await db.getClient();
+    try {
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+
+      const conditions = ['planned_3 IS NOT NULL', 'actual_3 IS NULL'];
+      const params = [];
+      let p = 1;
+      if (filters.customer_name) { conditions.push(`customer_name ILIKE $${p}`); params.push(`%${filters.customer_name}%`); p++; }
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+      const ordersRes = await client.query(
+        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+         ORDER BY customer_name ASC, created_at ASC, order_no ASC`,
+        params
+      );
+      const rows = ordersRes.rows;
+
+      const classifyOil = (oilType, skuName) => {
+        const s = `${oilType || ''} ${skuName || ''}`.toLowerCase();
+        if (s.includes('palm')) return 'palm';
+        if (s.includes('soya') || s.includes('sbo')) return 'soya';
+        if (s.includes('rice') || s.includes('rbo')) return 'rice';
+        return null;
+      };
+      const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+      const origOf = (r) => (r.order_quantity != null ? num(r.order_quantity) : num(r.approval_qty));
+      const pendOf = (r) => (r.remaining_dispatch_qty != null ? num(r.remaining_dispatch_qty) : origOf(r));
+      const rateOf = (r) => num(r.rate_per_15kg) || num(r.final_rate) || num(r.rate_of_material);
+      const OIL_LABEL = { rice: 'Rice Oil', soya: 'Soya Oil', palm: 'Palm Oil' };
+      const OIL_ORDER = ['rice', 'soya', 'palm'];
+
+      // customer -> sauda(base DO) -> oil bucket
+      const customers = new Map();
+      for (const r of rows) {
+        const cName = r.customer_name || '—';
+        if (!customers.has(cName)) customers.set(cName, { customer_name: cName, saudas: new Map() });
+        const cust = customers.get(cName);
+        const saudaKey = r.base_do || r.order_no;
+        if (!cust.saudas.has(saudaKey)) {
+          cust.saudas.set(saudaKey, {
+            sauda_no: saudaKey,
+            sauda_date: r.created_at,
+            oils: { rice: { original: 0, pending: 0, rate: 0 }, soya: { original: 0, pending: 0, rate: 0 }, palm: { original: 0, pending: 0, rate: 0 } },
+          });
+        }
+        const sauda = cust.saudas.get(saudaKey);
+        const oil = classifyOil(r.oil_type, r.sku_name || r.product_name);
+        if (oil && sauda.oils[oil]) {
+          sauda.oils[oil].original += origOf(r);
+          sauda.oils[oil].pending += pendOf(r);
+          if (!sauda.oils[oil].rate) sauda.oils[oil].rate = rateOf(r);
+        }
+      }
+
+      // shape output
+      const customerList = [];
+      for (const cust of customers.values()) {
+        const saudas = [];
+        const totals = { rice: { original: 0, pending: 0 }, soya: { original: 0, pending: 0 }, palm: { original: 0, pending: 0 }, grand: { original: 0, pending: 0 } };
+        for (const s of cust.saudas.values()) {
+          const oils = [];
+          let totalOriginal = 0, totalPending = 0;
+          OIL_ORDER.forEach(k => {
+            const b = s.oils[k];
+            if (b.original || b.pending) {
+              oils.push({ oil_type: OIL_LABEL[k], original_qty: b.original, pending_qty: b.pending, rate: b.rate });
+              totalOriginal += b.original; totalPending += b.pending;
+              totals[k].original += b.original; totals[k].pending += b.pending;
+            }
+          });
+          totals.grand.original += totalOriginal;
+          totals.grand.pending += totalPending;
+          saudas.push({ sauda_no: s.sauda_no, sauda_date: s.sauda_date, oils, total_original: totalOriginal, total_pending: totalPending });
+        }
+        customerList.push({ customer_name: cust.customer_name, sauda_count: saudas.length, saudas, totals });
+      }
+
+      customerList.sort((a, b) => a.customer_name.localeCompare(b.customer_name));
+      return { customers: customerList, count: customerList.length };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Customer-Wise CP Pending Sauda Report (Detailed)
+   * For each pending DO (Dispatch Planning stage), shows item-level billing detail.
+   * Item rows = the full dispatch breakdown (every SKU line for the DO). Billed Qty
+   * columns come ONLY from invoiced records (the CPOIL bills in Check Invoice history) —
+   * one column per invoice — so un-billed lines appear with blank Billed. Per oil shows
+   * Sauda Qty (ordered) and Bal Qty (= Sauda − Billed); plus oil totals, a grand total,
+   * and a per-invoice footer (Doc Date, Doc No., Packing Wt, RST Wt, Diff). By customer.
+   */
+  async getPendingSaudaDetailedReport(filters = {}) {
+    const client = await db.getClient();
+    try {
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+      const baseDoOf = (s) => {
+        if (!s) return s;
+        const m = String(s).match(/^(DO[-\/](?:\d{2}-\d{2}\/)?\d+)/);
+        return m ? m[1] : s;
+      };
+
+      const conditions = ['planned_3 IS NOT NULL', 'actual_3 IS NULL'];
+      const params = [];
+      let p = 1;
+      if (filters.customer_name) { conditions.push(`customer_name ILIKE $${p}`); params.push(`%${filters.customer_name}%`); p++; }
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+      const ordersRes = await client.query(
+        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+         ORDER BY customer_name ASC, created_at ASC, order_no ASC`,
+        params
+      );
+      const orders = ordersRes.rows;
+
+      // sku_details lookup
+      const skuMap = new Map();
+      try {
+        const skuRes = await client.query(`SELECT sku_name, main_uom, sku_weight, gross_weight, oil_filling_per_unit FROM sku_details`);
+        skuRes.rows.forEach(s => skuMap.set((s.sku_name || '').toUpperCase().trim(), s));
+      } catch (e) { /* skip */ }
+
+      // Dispatch/billing lines for these DOs. Each actually-dispatched or invoiced
+      // lift_receiving_confirmation row is a billing record; the "document" is its
+      // invoice (CPOIL/…) when invoiced, otherwise its DSR number.
+      const orderNos = [...new Set(orders.map(o => o.order_no).filter(Boolean))];
+      const lrcByBaseDo = new Map(); // base_do -> [ lrc rows ]
+      if (orderNos.length) {
+        const lrcRes = await client.query(
+          `SELECT so_no, d_sr_number, product_name, actual_qty, actual_qty_dispatch, qty, qty_to_be_dispatched,
+                  invoice_no, invoice_date, actual_1, gross_weight, tare_weight, extra_weight, timestamp
+           FROM lift_receiving_confirmation
+           WHERE so_no = ANY($1)
+           ORDER BY invoice_date ASC NULLS LAST, timestamp ASC NULLS LAST, id ASC`,
+          [orderNos]
+        );
+        lrcRes.rows.forEach(r => {
+          const b = baseDoOf(r.so_no);
+          if (!lrcByBaseDo.has(b)) lrcByBaseDo.set(b, []);
+          lrcByBaseDo.get(b).push(r);
+        });
+      }
+
+      const classifyOil = (oilType, skuName) => {
+        const s = `${oilType || ''} ${skuName || ''}`.toLowerCase();
+        if (s.includes('palm')) return 'palm';
+        if (s.includes('soya') || s.includes('sbo')) return 'soya';
+        if (s.includes('rice') || s.includes('rbo')) return 'rice';
+        return null;
+      };
+      const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+      const skuWeightOf = (name) => {
+        const sku = skuMap.get((name || '').toUpperCase().trim());
+        if (!sku) return 0;
+        return num(sku.sku_weight) || num(sku.gross_weight) || num(sku.oil_filling_per_unit);
+      };
+      const uomOf = (name, fallback) => {
+        const sku = skuMap.get((name || '').toUpperCase().trim());
+        return (sku && sku.main_uom) || fallback || '';
+      };
+      const OIL_LABEL = { rice: 'Rice Oil', soya: 'Soya Oil', palm: 'Palm Oil' };
+      const OIL_ORDER = ['rice', 'soya', 'palm'];
+
+      // Group orders by base DO
+      const doGroups = new Map();
+      for (const o of orders) {
+        const key = o.base_do || o.order_no;
+        if (!doGroups.has(key)) doGroups.set(key, []);
+        doGroups.get(key).push(o);
+      }
+
+      const customers = new Map(); // name -> { customer_name, dos: [] }
+
+      for (const [baseDo, items] of doGroups) {
+        const first = items[0];
+        const cName = first.customer_name || '—';
+
+        // Per-oil ordered aggregates + rate/uom per ordered product
+        const oilAgg = {}; // oil -> { sauda, bal, orderedSkus:Set, rateByProduct:Map, uomByProduct:Map }
+        OIL_ORDER.forEach(k => { oilAgg[k] = { sauda: 0, bal: 0, orderedSkus: new Set(), rateByProduct: new Map(), uomByProduct: new Map() }; });
+        for (const o of items) {
+          const oil = classifyOil(o.oil_type, o.sku_name || o.product_name);
+          if (!oil || !oilAgg[oil]) continue;
+          const name = o.sku_name || o.product_name || '';
+          oilAgg[oil].sauda += num(o.order_quantity != null ? o.order_quantity : o.approval_qty);
+          oilAgg[oil].bal += (o.remaining_dispatch_qty != null ? num(o.remaining_dispatch_qty) : num(o.order_quantity));
+          if (name) {
+            oilAgg[oil].orderedSkus.add(name);
+            const rate = num(o.rate_of_material) || num(o.final_rate) || num(o.rate_per_15kg);
+            if (!oilAgg[oil].rateByProduct.has(name.toUpperCase())) oilAgg[oil].rateByProduct.set(name.toUpperCase(), rate);
+            oilAgg[oil].uomByProduct.set(name.toUpperCase(), o.uom || '');
+          }
+        }
+
+        // Billed quantities come ONLY from invoiced records (the CPOIL bills you see in
+        // Check Invoice history) — qty + invoice_no set at Make Invoice. The item rows,
+        // however, are the full dispatch breakdown (every SKU line for the DO) so an
+        // un-billed line still appears with a blank Billed column.
+        const lrc = lrcByBaseDo.get(baseDo) || [];
+        const docOrder = [];
+        const docMeta = new Map();                                                // invoice_no -> meta
+        const billed = { rice: new Map(), soya: new Map(), palm: new Map() };     // oil -> product -> { display, byInv }
+        const breakdown = { rice: new Map(), soya: new Map(), palm: new Map() };  // oil -> product -> display (every dispatch line)
+
+        for (const r of lrc) {
+          const oil = classifyOil(null, r.product_name);
+          const pname = (r.product_name || '').toUpperCase();
+          // Every dispatch line is part of the breakdown (the item rows)
+          if (oil && breakdown[oil] && pname && !breakdown[oil].has(pname)) breakdown[oil].set(pname, r.product_name || '');
+
+          // Billed: invoiced rows only
+          const hasInvoice = r.invoice_no && String(r.invoice_no).trim();
+          if (!hasInvoice) continue;
+          const inv = r.invoice_no;
+          if (!docMeta.has(inv)) {
+            docMeta.set(inv, { doc_no: inv, doc_date: r.invoice_date || r.timestamp, packing: 0, gross: 0, tare: 0, extra: 0 });
+            docOrder.push(inv);
+          }
+          const meta = docMeta.get(inv);
+          // Per-line billed COUNT (tins/boxes). actual_qty_dispatch / qty_to_be_dispatched
+          // hold the per-line count; qty / actual_qty hold the whole-invoice total.
+          const count = num(r.actual_qty_dispatch) || num(r.qty_to_be_dispatched) || num(r.qty) || num(r.actual_qty);
+          meta.packing += count * skuWeightOf(r.product_name);
+          // Weighbridge values repeat on every line of an invoice — take once, don't sum.
+          meta.gross = Math.max(meta.gross, num(r.gross_weight));
+          meta.tare = Math.max(meta.tare, num(r.tare_weight));
+          meta.extra = Math.max(meta.extra, num(r.extra_weight));
+          if (oil && billed[oil]) {
+            if (!billed[oil].has(pname)) billed[oil].set(pname, { display: r.product_name || '', byInv: new Map() });
+            const e = billed[oil].get(pname);
+            e.byInv.set(inv, (e.byInv.get(inv) || 0) + count);
+          }
+        }
+
+        const docs = docOrder.map(inv => {
+          const m = docMeta.get(inv);
+          const rst = m.gross - m.tare - m.extra;
+          const packing = Math.round(m.packing * 1000) / 1000;
+          const rstR = Math.round(rst * 1000) / 1000;
+          return { doc_no: m.doc_no, doc_date: m.doc_date, packing_wt: packing, rst_wt: rstR, diff: Math.round((rstR - packing) * 1000) / 1000 };
+        });
+
+        // Build oils with item rows
+        const grand = { sauda: 0, bal: 0, billed: docOrder.map(() => 0) };
+        const oils = [];
+        OIL_ORDER.forEach(k => {
+          const agg = oilAgg[k];
+          const billedMap = billed[k];
+          const breakdownMap = breakdown[k];
+          if (breakdownMap.size === 0 && billedMap.size === 0 && agg.sauda === 0) return; // nothing for this oil
+
+          // Item rows = full dispatch breakdown; fall back to billed products, then ordered SKUs
+          let itemNames;
+          if (breakdownMap.size) itemNames = [...breakdownMap.values()];
+          else if (billedMap.size) itemNames = [...billedMap.values()].map(v => v.display);
+          else itemNames = [...agg.orderedSkus];
+          itemNames.sort((a, b) => {
+            const ao = agg.orderedSkus.has(a) ? 0 : 1;
+            const bo = agg.orderedSkus.has(b) ? 0 : 1;
+            return ao - bo || a.localeCompare(b);
+          });
+
+          const items2 = itemNames.map(name => {
+            const up = name.toUpperCase();
+            const be = billedMap.get(up);
+            const billedArr = docOrder.map(inv => (be ? (be.byInv.get(inv) || 0) : 0));
+            return {
+              item_name: name,
+              uom: uomOf(name, agg.uomByProduct.get(up)),
+              rate: agg.rateByProduct.get(up) || 0,
+              billed: billedArr,
+            };
+          });
+
+          const billedTotal = docOrder.map((inv, di) => items2.reduce((s, it) => s + (it.billed[di] || 0), 0));
+          // Balance = remaining-to-dispatch (system-maintained in the order's base unit;
+          // billed counts span mixed packings, so they can't be subtracted directly).
+          const balQty = agg.bal;
+          billedTotal.forEach((v, di) => { grand.billed[di] += v; });
+          grand.sauda += agg.sauda;
+          grand.bal += balQty;
+
+          oils.push({
+            oil: k,
+            label: OIL_LABEL[k],
+            sauda_qty: agg.sauda,
+            bal_qty: balQty,
+            items: items2,
+            billed_total: billedTotal,
+          });
+        });
+
+        if (!oils.length) continue;
+
+        if (!customers.has(cName)) customers.set(cName, { customer_name: cName, dos: [] });
+        customers.get(cName).dos.push({
+          do_date: first.created_at,
+          do_no: baseDo,
+          do_valid_upto: first.end_date,
+          broker_name: items.map(i => i.broker_name).find(Boolean) || '',
+          oils,
+          docs,
+          grand,
+        });
+      }
+
+      const customerList = [...customers.values()].sort((a, b) => a.customer_name.localeCompare(b.customer_name));
+      customerList.forEach(c => { c.sauda_count = c.dos.length; });
+      return { customers: customerList, count: customerList.length };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Oil Dispatch Voucher (Reports)
+   * One voucher per pending DO (Dispatch Planning stage). Mirrors the dispatch-slip:
+   * products grouped by oil with Net Wt = sku_weight × qty and Gross Wt = gross_weight × qty,
+   * a per-DO header (Customer / Broker / Address / Mob / Status) and a Punch / Pre-Approve /
+   * Approve footer. Returns one entry per base DO; the frontend picker chooses which to print.
+   */
+  async getOilDispatchVoucher(filters = {}) {
+    const client = await db.getClient();
+    try {
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+
+      const conditions = ['planned_3 IS NOT NULL', 'actual_3 IS NULL'];
+      const params = [];
+      let p = 1;
+      if (filters.order_no) { conditions.push(`order_no ILIKE $${p}`); params.push(`${filters.order_no}%`); p++; }
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+      const ordersRes = await client.query(
+        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+         ORDER BY created_at DESC, order_no ASC`,
+        params
+      );
+      const orders = ordersRes.rows;
+
+      const skuMap = new Map();
+      try {
+        const skuRes = await client.query(`SELECT sku_name, sku_weight, gross_weight FROM sku_details`);
+        skuRes.rows.forEach(s => skuMap.set((s.sku_name || '').toUpperCase().trim(), s));
+      } catch (e) { /* skip */ }
+
+      const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+      const classifyOil = (oilType, skuName) => {
+        const s = `${oilType || ''} ${skuName || ''}`.toLowerCase();
+        if (s.includes('palm')) return 'palm';
+        if (s.includes('soya') || s.includes('sbo')) return 'soya';
+        if (s.includes('rice') || s.includes('rbo')) return 'rice';
+        return 'other';
+      };
+      const skuWtOf = (name) => {
+        const sku = skuMap.get((name || '').toUpperCase().trim());
+        return { net: sku ? num(sku.sku_weight) : 0, gross: sku ? (num(sku.gross_weight) || num(sku.sku_weight)) : 0 };
+      };
+
+      const groups = new Map();
+      for (const o of orders) {
+        const key = o.base_do || o.order_no;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(o);
+      }
+
+      const vouchers = [];
+      for (const [baseDo, items] of groups) {
+        const first = items[0];
+        const isBroker = first.is_order_through_broker || (first.is_order_through || '').toLowerCase() === 'broker';
+        const products = items.map(o => {
+          const name = o.sku_name || o.product_name || '—';
+          const qty = num(o.order_quantity != null ? o.order_quantity : o.approval_qty);
+          const w = skuWtOf(name);
+          return {
+            product_name: name,
+            uom: o.uom || '',
+            qty,
+            oil: classifyOil(o.oil_type, name),
+            net_wt: Math.round(qty * w.net * 1000) / 1000,
+            gross_wt: Math.round(qty * w.gross * 1000) / 1000,
+          };
+        });
+
+        vouchers.push({
+          do_no: baseDo,
+          do_date: first.created_at,
+          customer_name: first.customer_name || '—',
+          agent_name: (isBroker ? first.broker_name : (first.broker_name || '')) || '—',
+          agent_label: isBroker ? 'Broker' : 'Broker / Salesperson',
+          address: first.customer_address || '—',
+          mobile: first.customer_contact_person_whatsapp_no || first.customer_contact_person_name || '—',
+          status: 'Original/Pending',
+          products,
+          punch_by: first.order_punch_user || '—',
+          punch_at: first.created_at || null,
+          pre_approve_by: first.pre_approval_user || '—',
+          pre_approve_at: first.actual_1 || null,
+          approve_by: first.order_approval_user || '—',
+          approve_at: first.actual_2 || null,
+        });
+      }
+
+      vouchers.sort((a, b) => String(a.do_no).localeCompare(String(b.do_no)));
+      return { vouchers, count: vouchers.length };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Daily CP Dispatch Report (CP Sale Dispatch Report)
+   * All invoiced dispatches (CPOIL bills) for a given Doc Date (invoice_date), one
+   * numbered block per invoice: Customer + Address / Doc No. / Doc Date / Vehicle, with
+   * item lines grouped by oil (Qty / UOM / Rate / Net Wt / Gross Wt), per-oil + block
+   * grand totals. Plus a day-level Packing Wt (= total gross), RST Wt (weighbridge) and
+   * Diff, and a "Total for a Day" per-oil + grand summary.
+   */
+  async getDailyDispatchReport(filters = {}) {
+    const client = await db.getClient();
+    try {
+      const blank = () => ({ rice: { qty: 0, net: 0, gross: 0 }, soya: { qty: 0, net: 0, gross: 0 }, palm: { qty: 0, net: 0, gross: 0 }, grand: { qty: 0, net: 0, gross: 0 } });
+      const date = filters.date;
+      if (!date) return { date: null, blocks: [], dayTotals: blank(), packing_wt: 0, rst_wt: 0, diff: 0, count: 0 };
+
+      const res = await client.query(
+        `SELECT lrc.invoice_no, lrc.invoice_date, lrc.so_no, lrc.party_name, lrc.product_name, lrc.truck_no,
+                lrc.actual_qty_dispatch, lrc.qty_to_be_dispatched, lrc.qty, lrc.actual_qty,
+                lrc.gross_weight, lrc.tare_weight, lrc.extra_weight, lrc.id,
+                od.customer_name AS od_customer, od.customer_address, od.uom AS od_uom,
+                od.rate_of_material, od.final_rate, od.oil_type,
+                sd.main_uom, sd.sku_weight, sd.gross_weight AS sku_gross
+         FROM lift_receiving_confirmation lrc
+         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+         LEFT JOIN sku_details sd ON UPPER(TRIM(sd.sku_name)) = UPPER(TRIM(lrc.product_name))
+         WHERE lrc.invoice_no IS NOT NULL AND lrc.invoice_no <> ''
+           AND lrc.invoice_date::date = $1::date
+         ORDER BY lrc.invoice_no ASC, lrc.id ASC`,
+        [date]
+      );
+      const rows = res.rows;
+
+      const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+      const classifyOil = (oilType, skuName) => {
+        const s = `${oilType || ''} ${skuName || ''}`.toLowerCase();
+        if (s.includes('palm')) return 'palm';
+        if (s.includes('soya') || s.includes('sbo')) return 'soya';
+        if (s.includes('rice') || s.includes('rbo')) return 'rice';
+        return 'other';
+      };
+      const OIL_LABEL = { rice: 'Rice Oil', soya: 'Soya Oil', palm: 'Palm Oil', other: 'Other' };
+      const OIL_ORDER = ['rice', 'soya', 'palm', 'other'];
+
+      // Group by invoice (= one block: customer + vehicle + doc)
+      const invMap = new Map();
+      for (const r of rows) {
+        const inv = r.invoice_no;
+        if (!invMap.has(inv)) invMap.set(inv, []);
+        invMap.get(inv).push(r);
+      }
+
+      const dayTotals = blank();
+      let packing = 0, rst = 0;
+      const blocks = [];
+      let sn = 0;
+
+      for (const [inv, lines] of invMap) {
+        const first = lines[0];
+        sn += 1;
+        // weighbridge once per invoice
+        let gMax = 0, tMax = 0, eMax = 0;
+        lines.forEach(l => { gMax = Math.max(gMax, num(l.gross_weight)); tMax = Math.max(tMax, num(l.tare_weight)); eMax = Math.max(eMax, num(l.extra_weight)); });
+        const invRst = gMax - tMax - eMax;
+        rst += invRst;
+
+        // bucket lines by oil (each line is its own item row — do not merge)
+        const oilBuckets = { rice: [], soya: [], palm: [], other: [] };
+        const blockGrand = { qty: 0, net: 0, gross: 0 };
+        for (const l of lines) {
+          const qty = num(l.actual_qty_dispatch) || num(l.qty_to_be_dispatched) || num(l.qty) || num(l.actual_qty);
+          const netUnit = num(l.sku_weight);
+          const grossUnit = num(l.sku_gross) || num(l.sku_weight);
+          const net = Math.round(qty * netUnit * 1000) / 1000;
+          const gross = Math.round(qty * grossUnit * 1000) / 1000;
+          const oil = classifyOil(l.oil_type, l.product_name);
+          oilBuckets[oil].push({
+            item_name: l.product_name || '—',
+            qty,
+            uom: l.main_uom || l.od_uom || '',
+            rate: num(l.rate_of_material) || num(l.final_rate),
+            net, gross,
+          });
+          blockGrand.qty += qty; blockGrand.net += net; blockGrand.gross += gross;
+          dayTotals[oil].qty += qty; dayTotals[oil].net += net; dayTotals[oil].gross += gross;
+          dayTotals.grand.qty += qty; dayTotals.grand.net += net; dayTotals.grand.gross += gross;
+          packing += gross;
+        }
+
+        const oils = [];
+        OIL_ORDER.forEach(k => {
+          const items = oilBuckets[k];
+          if (!items.length) return;
+          const total = items.reduce((t, it) => ({ qty: t.qty + it.qty, net: t.net + it.net, gross: t.gross + it.gross }), { qty: 0, net: 0, gross: 0 });
+          oils.push({ oil: k, label: OIL_LABEL[k], items, total: { qty: total.qty, net: Math.round(total.net * 1000) / 1000, gross: Math.round(total.gross * 1000) / 1000 } });
+        });
+
+        blocks.push({
+          sn,
+          customer_name: first.od_customer || first.party_name || '—',
+          customer_address: first.customer_address || '',
+          doc_no: inv,
+          doc_date: first.invoice_date,
+          vehicle_no: first.truck_no || '',
+          oils,
+          grand: { qty: blockGrand.qty, net: Math.round(blockGrand.net * 1000) / 1000, gross: Math.round(blockGrand.gross * 1000) / 1000 },
+        });
+      }
+
+      const round3 = (n) => Math.round(n * 1000) / 1000;
+      ['rice', 'soya', 'palm', 'grand'].forEach(k => { dayTotals[k].net = round3(dayTotals[k].net); dayTotals[k].gross = round3(dayTotals[k].gross); });
+      packing = round3(packing);
+      rst = round3(rst);
+
+      return { date, blocks, dayTotals, packing_wt: packing, rst_wt: rst, diff: round3(rst - packing), count: blocks.length };
+    } finally {
+      client.release();
+    }
+  }
 }
 
 module.exports = new ReportsService();
