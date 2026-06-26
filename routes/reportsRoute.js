@@ -105,6 +105,22 @@ router.get('/pending-sauda-detailed', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/reports/pending-sauda-sku
+ * SKU & Customer-Wise CP Pending Sauda Report — pending DOs grouped by Customer -> DO,
+ * one row per ordered SKU. Optional query param: customer_name.
+ */
+router.get('/pending-sauda-sku', async (req, res) => {
+  try {
+    const filters = { customer_name: req.query.customer_name || '' };
+    const data = await reportsService.getPendingSaudaSkuReport(filters);
+    res.json({ success: true, data });
+  } catch (err) {
+    Logger.error('SKU & Customer-wise Pending Sauda report error', err);
+    res.status(500).json({ success: false, message: err.message || 'Failed to generate SKU & customer-wise pending sauda report' });
+  }
+});
+
+/**
  * GET /api/v1/reports/oil-dispatch-voucher
  * Oil Dispatch Voucher — one voucher per pending DO. Optional query param: order_no.
  */

@@ -1258,6 +1258,110 @@ class ReportsService {
       client.release();
     }
   }
+
+  /**
+   * SKU & Customer-Wise CP Pending Sauda Report
+   * Pending DOs (Dispatch Planning stage) grouped by Customer -> base DO, with one
+   * row per ordered SKU line (Item / Rate per pcs / Order Qty / Pending Qty). Each DO
+   * block also carries Last Dispatch (total dispatched qty + latest dispatch date from
+   * lift_receiving_confirmation), Order Type (W-W vs Future Period), Valid Upto (end_date)
+   * and Broker. Status (Expired / N days left) is derived on the client from Valid Upto
+   * vs the download date. Optional query param: customer_name.
+   */
+  async getPendingSaudaSkuReport(filters = {}) {
+    const client = await db.getClient();
+    try {
+      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
+      const baseDoOf = (s) => {
+        if (!s) return s;
+        const m = String(s).match(/^(DO[-\/](?:\d{2}-\d{2}\/)?\d+)/);
+        return m ? m[1] : s;
+      };
+
+      const conditions = ['planned_3 IS NOT NULL', 'actual_3 IS NULL'];
+      const params = [];
+      let p = 1;
+      if (filters.customer_name) { conditions.push(`customer_name ILIKE $${p}`); params.push(`%${filters.customer_name}%`); p++; }
+      const whereClause = `WHERE ${conditions.join(' AND ')}`;
+
+      const ordersRes = await client.query(
+        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+         ORDER BY customer_name ASC, created_at ASC, order_no ASC`,
+        params
+      );
+      const orders = ordersRes.rows;
+
+      const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+      const orderTypeOf = (purpose) => {
+        const s = (purpose || '').toLowerCase();
+        if (s.includes('week') || s.includes('w-w') || s.includes('w w')) return 'W-W';
+        return 'Future Period';
+      };
+
+      // Latest dispatch DATE per base DO, from the dispatch/billing records
+      // (lift_receiving_confirmation). The dispatched QTY is derived from the order's
+      // own fields below (Order Qty − Pending Qty), not summed from LRC lines.
+      const orderNos = [...new Set(orders.map(o => o.order_no).filter(Boolean))];
+      const lastDispDateByBaseDo = new Map(); // base_do -> latest date
+      if (orderNos.length) {
+        const lrcRes = await client.query(
+          `SELECT so_no, invoice_date, timestamp
+           FROM lift_receiving_confirmation
+           WHERE so_no = ANY($1)`,
+          [orderNos]
+        );
+        lrcRes.rows.forEach(r => {
+          const b = baseDoOf(r.so_no);
+          const d = r.invoice_date || r.timestamp;
+          if (!d) return;
+          const prev = lastDispDateByBaseDo.get(b);
+          if (!prev || new Date(d).getTime() > new Date(prev).getTime()) lastDispDateByBaseDo.set(b, d);
+        });
+      }
+
+      // Group by customer -> base DO, one item row per ordered SKU line.
+      const customers = new Map();
+      for (const o of orders) {
+        const cName = o.customer_name || '—';
+        if (!customers.has(cName)) customers.set(cName, { customer_name: cName, dosByKey: new Map() });
+        const cust = customers.get(cName);
+        const key = o.base_do || o.order_no;
+        if (!cust.dosByKey.has(key)) {
+          cust.dosByKey.set(key, {
+            do_no: key,
+            do_date: o.created_at,
+            valid_upto: o.end_date,
+            order_type: orderTypeOf(o.order_type_delivery_purpose),
+            broker_name: o.broker_name || '',
+            last_disp_qty: 0, // accumulated below = Σ(order_qty − pending_qty)
+            last_disp_date: lastDispDateByBaseDo.get(key) || null,
+            items: [],
+          });
+        }
+        const doObj = cust.dosByKey.get(key);
+        if (!doObj.broker_name && o.broker_name) doObj.broker_name = o.broker_name;
+        const orderQty = num(o.order_quantity != null ? o.order_quantity : o.approval_qty);
+        const pendingQty = o.remaining_dispatch_qty != null ? num(o.remaining_dispatch_qty) : orderQty;
+        doObj.last_disp_qty += Math.max(0, orderQty - pendingQty);
+        doObj.items.push({
+          item_name: o.sku_name || o.product_name || '—',
+          rate: num(o.rate_of_material) || num(o.final_rate) || num(o.rate_per_15kg),
+          order_qty: orderQty,
+          pending_qty: pendingQty,
+        });
+      }
+
+      const customerList = [];
+      for (const cust of customers.values()) {
+        const dos = [...cust.dosByKey.values()];
+        customerList.push({ customer_name: cust.customer_name, sauda_count: dos.length, dos });
+      }
+      customerList.sort((a, b) => a.customer_name.localeCompare(b.customer_name));
+      return { customers: customerList, count: customerList.length };
+    } finally {
+      client.release();
+    }
+  }
 }
 
 module.exports = new ReportsService();
