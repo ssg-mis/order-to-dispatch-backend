@@ -219,11 +219,13 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
                 };
 
                 console.log(`[WHATSAPP] ⚡ Enqueuing "${templateName}" to "${recipient.username}" (${cleanPhone})...`);
+                console.log(`[WHATSAPP] 📤 Outgoing message payload:`, JSON.stringify(payload, null, 2));
 
                 // Use the sequential queue
                 lastResponse = await enqueueMessage(apiUrl, payload, headers);
 
                 console.log(`[WHATSAPP] ✅ Message sent to "${recipient.username}" (${cleanPhone})`);
+                console.log(`[WHATSAPP] 📥 Meta API response:`, JSON.stringify(lastResponse, null, 2));
             } catch (err) {
                 console.error(`[WHATSAPP] ❌ Failed for "${recipient.username}" (${cleanPhone}):`, err.message);
             }
