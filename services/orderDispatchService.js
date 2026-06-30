@@ -540,10 +540,10 @@ class OrderDispatchService {
       
       const originalOrder = originalResult.rows[0];
       const approvalQty = parseFloat(data.approval_qty) || 0;
-      // If frontend explicitly passes order_quantity (e.g. deducting budget for newly added SKUs), respect it
-      const orderQty = data.order_quantity !== undefined 
-          ? parseFloat(data.order_quantity) 
-          : (parseFloat(originalOrder.order_quantity) || 0);
+      // Always use the DB's own order_quantity as the split basis.
+      // The frontend may send a larger order_quantity (effectiveOrderQty for cascade budget logic)
+      // but trusting it here would permanently inflate the DB value — order size can only decrease or stay the same.
+      const orderQty = parseFloat(originalOrder.order_quantity) || 0;
       const actual1 = new Date().toISOString();
       const planned2 = await this.getPlannedTimestamp(client, 'Approval of Order');
       
@@ -553,13 +553,15 @@ class OrderDispatchService {
         actual_1: actual1,
         planned_2: planned2,
         pre_approval_user: data.username || null,
+        // Never let the frontend's order_quantity override the DB value.
+        // The split logic below is the only place that may legally reduce it.
+        order_quantity: orderQty,
       };
-      
+
       // If partial approval, mutate the parent row to only represent the approved chunk
       // This strictly maintains Sum(order_quantity) across splits == Original Total
       if (approvalQty > 0 && approvalQty < orderQty) {
         updateData.order_quantity = approvalQty;
-        // The remaining_dispatch_qty should also mimic this chunk size if it's being mapped later
         if (updateData.remaining_dispatch_qty !== undefined) {
            updateData.remaining_dispatch_qty = approvalQty;
         }
