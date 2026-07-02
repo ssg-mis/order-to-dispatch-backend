@@ -650,7 +650,9 @@ class ReportsService {
           }
         }
         doRows.push({
-          do_date: first.created_at,
+          // DO Date is the date entered at Order Punch (party_so_date), NOT the DB
+          // insert timestamp. Fall back to created_at only for legacy rows missing it.
+          do_date: first.party_so_date || first.created_at,
           do_no: baseDo,
           sauda_no: items.map(i => i.processid).find(Boolean) || '',
           customer_name: first.customer_name || '',
@@ -1027,7 +1029,8 @@ class ReportsService {
 
         if (!customers.has(cName)) customers.set(cName, { customer_name: cName, dos: [] });
         customers.get(cName).dos.push({
-          do_date: first.created_at,
+          // DO Date is the date entered at Order Punch (party_so_date), not the DB insert timestamp.
+          do_date: first.party_so_date || first.created_at,
           do_no: baseDo,
           do_valid_upto: first.end_date,
           broker_name: items.map(i => i.broker_name).find(Boolean) || '',
@@ -1329,7 +1332,8 @@ class ReportsService {
         if (!cust.dosByKey.has(key)) {
           cust.dosByKey.set(key, {
             do_no: key,
-            do_date: o.created_at,
+            // DO Date is the date entered at Order Punch (party_so_date), not the DB insert timestamp.
+            do_date: o.party_so_date || o.created_at,
             valid_upto: o.end_date,
             order_type: orderTypeOf(o.order_type_delivery_purpose),
             broker_name: o.broker_name || '',

@@ -154,6 +154,9 @@ const revertActualDispatch = async (req, res, next) => {
     );
   } catch (error) {
     Logger.error('[ACTUAL DISPATCH] Error in revertActualDispatch controller', error);
+    if (error.statusCode) {
+      return ResponseUtil.error(res, error.message, error.statusCode);
+    }
     if (error.message.includes('not found')) {
       return ResponseUtil.notFound(res, error.message);
     }

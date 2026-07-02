@@ -154,6 +154,9 @@ const revertDispatchPlanning = async (req, res, next) => {
     return ResponseUtil.success(res, result, result.message);
   } catch (error) {
     Logger.error('[DISPATCH PLANNING] Error in revertDispatchPlanning controller', error);
+    if (error.statusCode) {
+      return ResponseUtil.error(res, error.message, error.statusCode);
+    }
     if (error.message.includes('not found')) {
       return ResponseUtil.notFound(res, error.message);
     }

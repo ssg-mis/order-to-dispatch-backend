@@ -535,8 +535,18 @@ class ActualDispatchService {
         const { so_no: soNo, qty_to_be_dispatched: qtyToRevert, order_type: orderType, product_name: productName, rate_of_material: rateOfMaterial } = infoResult.rows[0];
         const revertAmt = parseFloat(qtyToRevert || 0);
 
-        // Step 2: Delete from lift_receiving_confirmation
-        await client.query(`DELETE FROM lift_receiving_confirmation WHERE d_sr_number = $1`, [dsrNumber]);
+        // Step 2: Delete from lift_receiving_confirmation.
+        // The DELETE's rowCount is the concurrency gate: if 0 rows were removed, another
+        // user already reverted this dispatch. Abort BEFORE the additive quantity restore
+        // below, otherwise a stale second revert would double-restore remaining_dispatch_qty
+        // (lost-update / stale-write race).
+        const deleteResult = await client.query(`DELETE FROM lift_receiving_confirmation WHERE d_sr_number = $1`, [dsrNumber]);
+        if (deleteResult.rowCount === 0) {
+          Logger.warn(`[REVERT] Stale actual-dispatch revert rejected for DSR: ${dsrNumber} — record was already reverted by another user.`);
+          const conflict = new Error('This dispatch was already reverted by another user. Please refresh and try again.');
+          conflict.statusCode = 409;
+          throw conflict;
+        }
 
         // Step 3: Update order_dispatch to restore quantity, reset status, and save revert remarks
         if (soNo) {

@@ -481,11 +481,17 @@ class DispatchPlanningService {
       // Step 3: Update order_dispatch - null all stage columns, restore qty, and save remarks
       let updateQuery;
 
+      // Guard: only revert if the row is STILL in dispatch planning
+      // (planned_3 set, actual_3 not yet set). This makes the write conditional
+      // so a stale client cannot overwrite a row another user already reverted or
+      // that has since moved forward to actual dispatch (lost-update / stale-write race).
+      const stageGuard = `planned_3 IS NOT NULL AND actual_3 IS NULL`;
+
       if (order.order_type && order.order_type.toLowerCase() === 'regular') {
         // For regular orders: set planned_1 to current date
         updateQuery = `
-          UPDATE order_dispatch 
-          SET 
+          UPDATE order_dispatch
+          SET
             actual_3 = NULL,
             planned_3 = NULL,
             actual_2 = NULL,
@@ -495,14 +501,14 @@ class DispatchPlanningService {
             order_type = 'pre-approval',
             remaining_dispatch_qty = $1,
             revert_planning_remarks = $3
-          WHERE id = $2
+          WHERE id = $2 AND ${stageGuard}
           RETURNING *
         `;
       } else {
         // For non-regular orders: keep existing behavior (don't touch planned_1)
         updateQuery = `
-          UPDATE order_dispatch 
-          SET 
+          UPDATE order_dispatch
+          SET
             actual_3 = NULL,
             planned_3 = NULL,
             actual_2 = NULL,
@@ -510,12 +516,22 @@ class DispatchPlanningService {
             actual_1 = NULL,
             remaining_dispatch_qty = $1,
             revert_planning_remarks = $3
-          WHERE id = $2
+          WHERE id = $2 AND ${stageGuard}
           RETURNING *
         `;
       }
 
-      await client.query(updateQuery, [qtyToRestore, orderId, remarks || null]);
+      const updateResult = await client.query(updateQuery, [qtyToRestore, orderId, remarks || null]);
+
+      // 0 rows updated → the row was NOT in dispatch planning when we wrote.
+      // Someone else already reverted it, or it advanced to actual dispatch.
+      if (updateResult.rowCount === 0) {
+        Logger.warn(`[REVERT] Stale revert rejected for order ID: ${orderId} — row is no longer in Dispatch Planning.`);
+        const conflict = new Error('This order is no longer in Dispatch Planning — it was already reverted or moved by another user. Please refresh and try again.');
+        conflict.statusCode = 409;
+        throw conflict;
+      }
+
       Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Kept remaining_dispatch_qty: ${qtyToRestore} (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
 
       // Step 4: For regular orders, map oil_type and derive rates FOR THE ENTIRE GROUP
