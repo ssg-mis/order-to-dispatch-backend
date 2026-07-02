@@ -259,6 +259,30 @@ class OrderApprovalService {
     try {
       await client.query('BEGIN');
       Logger.info(`submitApproval called for ID: ${id}`, { data });
+
+      // Concurrency guard: lock the order row so simultaneous approval
+      // submissions serialize instead of both running. If the order was
+      // already approved/rejected (actual_2 set), abort — otherwise the
+      // second run re-stamps the stage flags and, for Stock Transfer orders,
+      // inserts a duplicate DSR row into lift_receiving_confirmation
+      // (the "shows 2x in actual dispatch" bug).
+      const lockRes = await client.query(
+        'SELECT actual_2 FROM order_dispatch WHERE id = $1 FOR UPDATE',
+        [id]
+      );
+      if (lockRes.rows.length === 0) {
+        throw new Error('Order not found');
+      }
+      if (lockRes.rows[0].actual_2 !== null) {
+        await client.query('ROLLBACK');
+        Logger.warn(`[DUPLICATE APPROVAL] Order ID ${id} already approved (actual_2 set) — ignoring duplicate submission`);
+        return {
+          success: false,
+          alreadyProcessed: true,
+          message: 'Order has already been approved',
+        };
+      }
+
       await this.disablePlanned3Trigger(client);
       const planned3 = await this.getPlannedTimestamp(client, 'Dispatch Planning');
 

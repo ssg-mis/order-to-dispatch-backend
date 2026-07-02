@@ -70,6 +70,13 @@ class InventoryService {
         SELECT depot_name, product_name FROM stock_out_data
         UNION
         SELECT depot_name, product_name FROM sales_data
+        UNION
+        -- Production happens only at BANARI (the plant), so produced SKUs
+        -- must surface as BANARI rows even without any stock movement.
+        SELECT d.depot_name, pt.sku_name AS product_name
+        FROM production_totals pt
+        JOIN depots d ON UPPER(TRIM(d.depot_name)) = 'BANARI'
+        WHERE COALESCE(pt.total_production, 0) <> 0
       )
       SELECT
         ak.depot_name,
@@ -81,7 +88,10 @@ class InventoryService {
         COALESCE(sa.sales_qty, 0)::integer AS sales,
         COALESCE(oq.opening_qty, 0) AS opening_qty,
         oq.updated_at AS opening_qty_updated_at,
-        COALESCE(pt.total_production, 0)::integer AS production_qty
+        -- Attribute production to BANARI only; every other depot shows 0.
+        CASE WHEN UPPER(TRIM(ak.depot_name)) = 'BANARI'
+             THEN COALESCE(pt.total_production, 0)
+             ELSE 0 END::integer AS production_qty
       FROM all_keys ak
       LEFT JOIN stock_in_data si ON si.depot_name = ak.depot_name AND si.product_name = ak.product_name
       LEFT JOIN stock_out_data so ON so.depot_name = ak.depot_name AND so.product_name = ak.product_name

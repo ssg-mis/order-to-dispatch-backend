@@ -238,14 +238,18 @@ class DispatchPlanningService {
 
       Logger.info(`Submitting dispatch planning for order ID: ${orderId}`, { data });
 
-      // First, get the order details from order_dispatch
+      // First, get the order details from order_dispatch.
+      // FOR UPDATE locks the row so simultaneous dispatch submissions
+      // serialize; the second one then sees the depleted remaining qty
+      // and is rejected below (prevents duplicate DSR / lift_receiving rows).
       const orderQuery = `
-        SELECT 
-          order_no, customer_name, product_name, 
+        SELECT
+          order_no, customer_name, product_name,
           order_quantity, type_of_transporting,
           approval_qty, remaining_dispatch_qty, processid
-        FROM order_dispatch 
+        FROM order_dispatch
         WHERE id = $1
+        FOR UPDATE
       `;
       const orderResult = await client.query(orderQuery, [orderId]);
 
@@ -260,6 +264,14 @@ class DispatchPlanningService {
       const currentAvailable = order.remaining_dispatch_qty !== null
         ? parseFloat(order.remaining_dispatch_qty)
         : parseFloat(order.approval_qty || order.order_quantity || 0);
+
+      // Nothing left to dispatch → reject. Combined with the FOR UPDATE lock
+      // above, this makes concurrent/duplicate submissions safe: the first
+      // commit sets remaining to 0, so the second read sees 0 and bails out
+      // instead of inserting another DSR row.
+      if (!(currentAvailable > 0)) {
+        throw new Error('No remaining quantity to dispatch — order already fully dispatched');
+      }
 
       const dispatchQty = parseFloat(data.dispatch_qty || order.order_quantity || 0);
 
