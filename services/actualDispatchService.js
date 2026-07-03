@@ -136,6 +136,7 @@ class ActualDispatchService {
           od.bill_company_name,
           od.depo_name,
           od.order_category,
+          od.processid,
           od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
@@ -269,6 +270,7 @@ class ActualDispatchService {
           od.transfer,
           od.bill_company_name,
           od.depo_name,
+          od.processid,
           od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
