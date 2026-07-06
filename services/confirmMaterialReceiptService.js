@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
 
@@ -109,6 +110,7 @@ class ConfirmMaterialReceiptService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} pending material receipts`);
 
@@ -225,6 +227,7 @@ class ConfirmMaterialReceiptService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} material receipt history records`);
 
@@ -263,7 +266,7 @@ class ConfirmMaterialReceiptService {
       const updateData = {
         actual_8: new Date().toISOString(),
         planned_9: isDamaged ? await this.getPlannedTimestamp(client, 'Damage Adjustment') : null,
-        material_receipt_user: data.username || null,
+        material_receipt_user: data.user_id || null,
         material_received_date: data.material_received_date || null,
         received_image_proof: data.received_image_proof || null,
         damage_status: data.damage_status || null,

@@ -7,6 +7,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { deriveRatesForRegularOrder, deriveConsolidatedRatesForGroup, detectOilType } = require('../utils/rateDerivation');
 const { buildSearchCondition } = require('../utils/searchUtils');
@@ -98,6 +99,7 @@ class DispatchPlanningService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} pending dispatch planning orders`);
 
@@ -203,6 +205,7 @@ class DispatchPlanningService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} dispatch history records`);
 
@@ -345,7 +348,7 @@ class DispatchPlanningService {
         updateParams = [
           0,
           orderId,
-          data.username || null,
+          data.user_id || null,
           data.transfer || 'no',
           data.bill_company_name || null,
           data.bill_address || null,
@@ -372,7 +375,7 @@ class DispatchPlanningService {
         updateParams = [
           newRemainingQty,
           orderId,
-          data.username || null,
+          data.user_id || null,
           data.transfer || 'no',
           data.bill_company_name || null,
           data.bill_address || null,

@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { applyDispatchFilters } = require('../utils/searchUtils');
 const { Logger } = require('../utils');
 const { deriveRatesForRegularOrder, deriveConsolidatedRatesForGroup, detectOilType } = require('../utils/rateDerivation');
@@ -146,6 +147,7 @@ class ActualDispatchService {
       `;
 
       const dataResult = await db.query(dataQuery, [baseDos, ...queryParams]);
+      await resolveAuditUsers(dataResult.rows);
 
       return {
         success: true,
@@ -280,6 +282,7 @@ class ActualDispatchService {
       `;
 
       const dataResult = await db.query(dataQuery, [baseDos, ...queryParams]);
+      await resolveAuditUsers(dataResult.rows);
 
       return {
         success: true,
@@ -302,7 +305,7 @@ class ActualDispatchService {
       const updateData = {
         actual_1: new Date().toISOString(),
         product_name_1: data.product_name_1 || null,
-        actual_dispatch_user: data.username || null,
+        actual_dispatch_user: data.user_id || null,
         actual_qty_dispatch: parseFloat(data.actual_qty_dispatch) || 0,
         check_status: data.check_status || null,
         remarks: data.remarks || null,

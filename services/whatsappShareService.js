@@ -46,6 +46,11 @@ const enqueueMessage = (apiUrl, payload, headers) => {
  * WhatsApp notification service using Meta WhatsApp Cloud API.
  */
 const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPage = '') => {
+    if (process.env.WHATSAPP_ENABLED === 'false') {
+        console.log('[WHATSAPP] Disabled via WHATSAPP_ENABLED flag — skipping notification');
+        return null;
+    }
+
     const accessToken = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
     const headerImageUrl = process.env.WHATSAPP_HEADER_IMAGE_URL?.trim();

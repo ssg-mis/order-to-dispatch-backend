@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
 
@@ -208,6 +209,7 @@ class SecurityGuardApprovalService {
       `;
 
       const dataResult = await db.query(dataQuery, dataParams);
+      await resolveAuditUsers(dataResult.rows);
 
       return {
         success: true,
@@ -363,6 +365,7 @@ class SecurityGuardApprovalService {
       `;
 
       const dataResult = await db.query(dataQuery, [baseDos]);
+      await resolveAuditUsers(dataResult.rows);
 
       return {
         success: true,
@@ -412,7 +415,7 @@ class SecurityGuardApprovalService {
             actual_1: null,
             actual_4: null,
             security_guard_status: 'REJECT',
-            security_guard_user: data.username || null,
+            security_guard_user: data.user_id || null,
             revert_security_remarks: data.remarks || null,
           };
         } else {
@@ -422,7 +425,7 @@ class SecurityGuardApprovalService {
             bilty_no: data.bilty_no || null,
             bilty_image: data.bilty_image || null,
             vehicle_image_attachemrnt: data.vehicle_image_attachemrnt || null,
-            security_guard_user: data.username || null,
+            security_guard_user: data.user_id || null,
             security_guard_status: 'APPROVE',
           };
         }

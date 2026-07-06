@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 
 class MaterialLoadService {
@@ -51,6 +52,7 @@ class MaterialLoadService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       return {
         success: true,
@@ -89,6 +91,7 @@ class MaterialLoadService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       return {
         success: true,
@@ -107,7 +110,7 @@ class MaterialLoadService {
 
       const updateData = {
         actual_qty: data.actual_qty || null,
-        material_load_user: data.username || null,
+        material_load_user: data.user_id || null,
         weightment_slip_copy: data.weightment_slip_copy || null,
         rst_no: data.rst_no || null,
         gross_weight: data.gross_weight || null,

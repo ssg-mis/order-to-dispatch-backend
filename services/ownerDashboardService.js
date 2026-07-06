@@ -10,6 +10,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 
 class OwnerDashboardService {
@@ -850,6 +851,7 @@ class OwnerDashboardService {
     ]);
 
     if (!odRes.rows[0]) throw new Error('Order not found');
+    await resolveAuditUsers([...odRes.rows, ...lrcRes.rows]);
     const od  = odRes.rows[0];
     const lrc = lrcRes.rows[0] || {};
 

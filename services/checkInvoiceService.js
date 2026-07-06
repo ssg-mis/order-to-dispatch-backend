@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
 
@@ -108,6 +109,7 @@ class CheckInvoiceService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} pending check invoices`);
 
@@ -222,6 +224,7 @@ class CheckInvoiceService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} check invoice history records`);
 
@@ -270,7 +273,7 @@ class CheckInvoiceService {
       const updateData = {
         actual_6: data.status_1 === "Issue" ? null : new Date().toISOString(),
         planned_7: planned7,
-        check_invoice_user: data.username || null,
+        check_invoice_user: data.user_id || null,
         actual_5: data.status_1 === "Issue" ? null : undefined, // Revert to Make Invoice stage on Issue
         status_1: data.status_1 || null,
         remarks_2: data.remarks_2 || null
@@ -282,7 +285,7 @@ class CheckInvoiceService {
         Logger.info(`Skipping Gate Out (Stage 11) for depot: ${depoName} (Order: ${infoResult.rows[0]?.so_no})`);
         const now = new Date().toISOString();
         updateData.actual_7 = now;
-        updateData.gate_out_user = data.username || "SYSTEM_SKIP";
+        updateData.gate_out_user = data.user_id || null;
       }
 
       // Remove undefined fields so they don't get set in the query

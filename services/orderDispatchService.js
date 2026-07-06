@@ -4,6 +4,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const OrderDispatch = require('../models/orderDispatchModel');
 const { Logger } = require('../utils');
 
@@ -69,7 +70,7 @@ class OrderDispatchService {
             planned_2: planned2,
             // For regular orders, set remaining_dispatch_qty to order_quantity immediately
             remaining_dispatch_qty: isRegular ? product.order_quantity : null,
-            order_punch_user: orderData.username || null
+            order_punch_user: orderData.user_id || null
           });
 
           Logger.info(`[DEBUG-TRACKING] Prepared OrderDispatch row (Multi):`, { 
@@ -88,7 +89,7 @@ class OrderDispatchService {
 
         const orderRow = new OrderDispatch({
           ...orderData,
-          order_punch_user: orderData.username || null,
+          order_punch_user: orderData.user_id || null,
           // Set initial stage timestamps
           planned_1: planned1,
           planned_2: planned2,
@@ -237,6 +238,7 @@ class OrderDispatchService {
       `;
       
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
       
       return {
         success: true,
@@ -268,11 +270,13 @@ class OrderDispatchService {
       `;
       
       const result = await db.query(query, [orderNo]);
-      
+
       if (result.rows.length === 0) {
         throw new Error('Order not found');
       }
-      
+
+      await resolveAuditUsers(result.rows);
+
       return {
         success: true,
         data: result.rows
@@ -413,6 +417,7 @@ class OrderDispatchService {
       `;
       
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
       
       return {
         success: true,
@@ -499,6 +504,7 @@ class OrderDispatchService {
       `;
       
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
       
       return {
         success: true,
@@ -552,7 +558,7 @@ class OrderDispatchService {
         ...data,
         actual_1: actual1,
         planned_2: planned2,
-        pre_approval_user: data.username || null,
+        pre_approval_user: data.user_id || null,
         // Never let the frontend's order_quantity override the DB value.
         // The split logic below is the only place that may legally reduce it.
         order_quantity: orderQty,
@@ -567,8 +573,9 @@ class OrderDispatchService {
         }
       }
       
-      // Remove username from data if it exists to avoid trying to update a non-existent column in the spread (...data)
+      // Remove username/user_id from data if present to avoid trying to update a non-existent column in the spread (...data)
       if (updateData.username) delete updateData.username;
+      if (updateData.user_id !== undefined) delete updateData.user_id;
       // Remove remark since it's not a column but passed from the frontend for history
       if (updateData.remark !== undefined) delete updateData.remark;
       
@@ -638,6 +645,7 @@ class OrderDispatchService {
           order_punch_remarks: originalOrder.order_punch_remarks,
           total_amount_with_gst: originalOrder.total_amount_with_gst,
           item_confirm_by_manager: originalOrder.item_confirm_by_manager,
+          order_punch_user: originalOrder.order_punch_user,
           
           // Product details
           product_name: originalOrder.product_name,

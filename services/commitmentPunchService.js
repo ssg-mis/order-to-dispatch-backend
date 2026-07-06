@@ -555,8 +555,9 @@ class CommitmentPunchService {
            start_date, end_date, delivery_date,
            is_order_through, order_type_regular_preapproval,
            order_punch_remarks, upload_copy, future_period_date, order_category,
-           customer_contact_person_name, customer_contact_person_whatsapp_no, customer_address)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)`,
+           customer_contact_person_name, customer_contact_person_whatsapp_no, customer_address,
+           order_punch_user)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)`,
         [
           orderNo,
           orderTitleCase,
@@ -592,6 +593,7 @@ class CommitmentPunchService {
           cm.customer_contact_person_name || null,
           cm.whatsapp_no || null,
           cm.address || null,
+          data.user_id || null,
         ]
       );
 

@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
 
@@ -109,6 +110,7 @@ class GateOutService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} pending gate out records`);
 
@@ -225,6 +227,7 @@ class GateOutService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} gate out history records`);
 
@@ -262,7 +265,7 @@ class GateOutService {
       const updateData = {
         actual_7: new Date().toISOString(), // Gate Out Timestamp
         planned_8: await this.getPlannedTimestamp(client, 'Confirm Material Receipt'),
-        gate_out_user: data.username || null,
+        gate_out_user: data.user_id || null,
         gate_pass_copy: data.gate_pass || null, // Renamed column
         vehicle_loaded_image: data.vehicle_image || null // Renamed column
       };

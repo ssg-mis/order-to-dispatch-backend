@@ -290,11 +290,12 @@ class OrderApprovalService {
         ...data,
         actual_2: new Date().toISOString(),
         planned_3: planned3,
-        order_approval_user: data.username || null,
+        order_approval_user: data.user_id || null,
       };
 
-      // Remove username/remark from data to avoid column errors
+      // Remove username/user_id/remark from data to avoid column errors
       if (updateData.username) delete updateData.username;
+      if (updateData.user_id !== undefined) delete updateData.user_id;
       if (updateData.remark !== undefined) delete updateData.remark;
 
       const fields = Object.keys(updateData);

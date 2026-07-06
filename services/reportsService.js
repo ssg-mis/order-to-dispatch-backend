@@ -4,6 +4,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 
 class ReportsService {
@@ -342,6 +343,8 @@ class ReportsService {
         ORDER BY lrc.id, lrc.timestamp DESC
         ${limitClause}
       `, params);
+
+      await resolveAuditUsers(result.rows);
 
       // ── Pass 1: per-row calculations ─────────────────────────────────────────
       const pass1 = result.rows.map((r, i) => {
@@ -1072,6 +1075,7 @@ class ReportsService {
         params
       );
       const orders = ordersRes.rows;
+      await resolveAuditUsers(orders);
 
       const skuMap = new Map();
       try {

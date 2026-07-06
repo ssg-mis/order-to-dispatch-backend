@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
 
@@ -111,6 +112,7 @@ class MakeInvoiceService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} pending invoices`);
 
@@ -226,6 +228,7 @@ class MakeInvoiceService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} invoice history records`);
 
@@ -271,7 +274,7 @@ class MakeInvoiceService {
         invoice_copy: data.invoice_copy || null,
         qty: data.qty || null,
         bill_amount: data.bill_amount || null,
-        make_invoice_user: data.username || null,
+        make_invoice_user: data.user_id || null,
         cd_amount: cd_amount,
         // Clear any prior "Issue" flag raised by Check Invoice so that a re-issued
         // record returns to "Pending Review" (not stuck on "Issue Reported").

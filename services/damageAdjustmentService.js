@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
 
@@ -90,6 +91,7 @@ class DamageAdjustmentService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} pending damage adjustments`);
 
@@ -191,6 +193,7 @@ class DamageAdjustmentService {
       `;
 
       const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
+      await resolveAuditUsers(dataResult.rows);
 
       Logger.info(`Fetched ${dataResult.rows.length} damage adjustment history records`);
 
@@ -224,7 +227,7 @@ class DamageAdjustmentService {
 
       const updateData = {
         actual_9: new Date().toISOString(), // Adjustment Timestamp
-        damage_adjustment_user: data.username || null,
+        damage_adjustment_user: data.user_id || null,
         delay_9: data.delay_9 || null,
         status_2: data.status_2 || null, // Final Status
         credit_note_date: data.credit_note_date || null,
