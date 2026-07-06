@@ -138,6 +138,12 @@ class ActualDispatchService {
           od.depo_name,
           od.order_category,
           od.processid,
+          od.order_punch_user,
+          od.created_at AS order_punch_at,
+          od.pre_approval_user,
+          od.actual_1 AS pre_approval_at,
+          od.order_approval_user,
+          od.actual_2 AS order_approval_at,
           od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
