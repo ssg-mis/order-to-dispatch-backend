@@ -474,8 +474,12 @@ class ActualDispatchService {
     try {
       await client.query('BEGIN');
 
+      // order_no has no uniqueness guarantee on order_dispatch, so the exact
+      // row id is captured here and used for the update below — matching by
+      // order_no text alone could zero out an unrelated row that happens to
+      // share the same order number.
       const infoQuery = `
-        SELECT lrc.d_sr_number, lrc.so_no
+        SELECT lrc.d_sr_number, lrc.so_no, od.id AS order_dispatch_id
         FROM lift_receiving_confirmation lrc
         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
         WHERE lrc.d_sr_number = ANY($1::text[])
@@ -487,8 +491,8 @@ class ActualDispatchService {
 
       for (const row of infoResult.rows) {
         await client.query(`DELETE FROM lift_receiving_confirmation WHERE d_sr_number = $1`, [row.d_sr_number]);
-        if (row.so_no) {
-          await client.query(`UPDATE order_dispatch SET remaining_dispatch_qty = 0 WHERE order_no = $1`, [row.so_no]);
+        if (row.order_dispatch_id) {
+          await client.query(`UPDATE order_dispatch SET remaining_dispatch_qty = 0 WHERE id = $1`, [row.order_dispatch_id]);
         }
       }
 
