@@ -15,13 +15,13 @@ const draftController = require('../controllers/draftController');
 router.post('/', draftController.saveDraft);
 
 /**
- * @route   GET /api/v1/drafts?username={u}&orderKey={k}
- * @desc    Retrieve a draft by username + orderKey
+ * @route   GET /api/v1/drafts?orderKey={k}
+ * @desc    Retrieve a draft by orderKey — shared across all users
  */
 router.get('/', draftController.getDraft);
 
 /**
- * @route   DELETE /api/v1/drafts?username={u}&orderKey={k}
+ * @route   DELETE /api/v1/drafts?orderKey={k}
  * @desc    Delete a draft after successful submission
  */
 router.delete('/', draftController.deleteDraft);

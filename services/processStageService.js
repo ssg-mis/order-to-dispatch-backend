@@ -70,29 +70,28 @@ class ProcessStageService {
         [stageName]
       );
 
-      const params = [stageName, totalMinutes];
-      const query = existing.rows.length
-        ? `
+      let result;
+      if (existing.rows.length) {
+        const query = `
           UPDATE process_stages
-          SET stage_time = ($2::int * INTERVAL '1 minute'),
+          SET stage_time = ($1::int * INTERVAL '1 minute'),
               submitted_at = CURRENT_TIMESTAMP
-          WHERE id = $3
+          WHERE id = $2
           RETURNING id, stage_name, stage_time::text AS stage_time,
             EXTRACT(EPOCH FROM stage_time)::integer AS stage_time_seconds,
             submitted_at
-        `
-        : `
+        `;
+        result = await db.query(query, [totalMinutes, existing.rows[0].id]);
+      } else {
+        const query = `
           INSERT INTO process_stages (stage_name, stage_time)
           VALUES ($1, $2::int * INTERVAL '1 minute')
           RETURNING id, stage_name, stage_time::text AS stage_time,
             EXTRACT(EPOCH FROM stage_time)::integer AS stage_time_seconds,
             submitted_at
         `;
-
-      const result = await db.query(
-        query,
-        existing.rows.length ? [...params, existing.rows[0].id] : params
-      );
+        result = await db.query(query, [stageName, totalMinutes]);
+      }
 
       return result.rows[0];
     } catch (error) {

@@ -32,8 +32,7 @@ class GateInService {
       const countResult = await db.query(countQuery);
       const total = parseInt(countResult.rows[0].total);
 
-      // Deduplicates by order_key (most recent draft wins) because multiple users
-      // can save a draft for the same order, creating duplicate pending entries.
+      // dispatch_drafts is unique on order_key, so DISTINCT ON is just defensive.
       // LATERAL join fetches one representative order row (from lrc + od) per draft
       // so the frontend can display actual-dispatch columns without a separate API call.
       const dataQuery = `

@@ -458,6 +458,52 @@ class ActualDispatchService {
     }
   }
 
+  /**
+   * Cancel sibling SKU rows of a Stock Transfer DO that were left unselected
+   * when the user processed only some of the DO's products in Actual Dispatch.
+   * Stock Transfer DOs are dispatched in one go, so anything deselected is
+   * dropped entirely rather than staying pending for a future partial dispatch
+   * (which is the desired behaviour for regular Sales orders).
+   */
+  async cancelUnselectedDispatches(dsrNumbers) {
+    if (!Array.isArray(dsrNumbers) || dsrNumbers.length === 0) {
+      return { success: true, cancelled: 0 };
+    }
+
+    const client = await db.getClient();
+    try {
+      await client.query('BEGIN');
+
+      const infoQuery = `
+        SELECT lrc.d_sr_number, lrc.so_no
+        FROM lift_receiving_confirmation lrc
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        WHERE lrc.d_sr_number = ANY($1::text[])
+          AND lrc.planned_1 IS NOT NULL
+          AND lrc.actual_1 IS NULL
+          AND UPPER(COALESCE(od.order_category, '')) = 'STOCK TRANSFER'
+      `;
+      const infoResult = await client.query(infoQuery, [dsrNumbers]);
+
+      for (const row of infoResult.rows) {
+        await client.query(`DELETE FROM lift_receiving_confirmation WHERE d_sr_number = $1`, [row.d_sr_number]);
+        if (row.so_no) {
+          await client.query(`UPDATE order_dispatch SET remaining_dispatch_qty = 0 WHERE order_no = $1`, [row.so_no]);
+        }
+      }
+
+      await client.query('COMMIT');
+      Logger.info(`[ACTUAL DISPATCH] Cancelled ${infoResult.rows.length} unselected Stock Transfer SKU(s)`, { dsrNumbers: infoResult.rows.map(r => r.d_sr_number) });
+      return { success: true, cancelled: infoResult.rows.length };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      Logger.error('[ACTUAL DISPATCH] Error cancelling unselected dispatches', error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getPlannedTimestamp(client, stageName) {
     const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const normalizedStageName = normalizeStageName(stageName);

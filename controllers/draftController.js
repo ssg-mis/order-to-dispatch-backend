@@ -32,21 +32,20 @@ const saveDraft = async (req, res, next) => {
 };
 
 /**
- * Retrieve a draft
- * @route GET /api/v1/drafts?username={u}&orderKey={k}
+ * Retrieve a draft — shared per order, regardless of who saved it
+ * @route GET /api/v1/drafts?orderKey={k}
  */
 const getDraft = async (req, res, next) => {
   try {
-    const { username, orderKey } = req.query;
+    const { orderKey } = req.query;
 
-    if (!username || !orderKey) {
+    if (!orderKey) {
       return ResponseUtil.validationError(res, [
-        !username && { field: 'username', message: 'username is required' },
-        !orderKey && { field: 'orderKey', message: 'orderKey is required' },
-      ].filter(Boolean));
+        { field: 'orderKey', message: 'orderKey is required' },
+      ]);
     }
 
-    const result = await draftService.getDraft(username, orderKey);
+    const result = await draftService.getDraft(orderKey);
     return ResponseUtil.success(res, result.data, result.data ? 'Draft found' : 'No draft found');
   } catch (error) {
     Logger.error('Error in getDraft controller', error);
@@ -56,20 +55,19 @@ const getDraft = async (req, res, next) => {
 
 /**
  * Delete a draft
- * @route DELETE /api/v1/drafts?username={u}&orderKey={k}
+ * @route DELETE /api/v1/drafts?orderKey={k}
  */
 const deleteDraft = async (req, res, next) => {
   try {
-    const { username, orderKey } = req.query;
+    const { orderKey } = req.query;
 
-    if (!username || !orderKey) {
+    if (!orderKey) {
       return ResponseUtil.validationError(res, [
-        !username && { field: 'username', message: 'username is required' },
-        !orderKey && { field: 'orderKey', message: 'orderKey is required' },
-      ].filter(Boolean));
+        { field: 'orderKey', message: 'orderKey is required' },
+      ]);
     }
 
-    await draftService.deleteDraft(username, orderKey);
+    await draftService.deleteDraft(orderKey);
     return ResponseUtil.success(res, null, 'Draft deleted successfully');
   } catch (error) {
     Logger.error('Error in deleteDraft controller', error);

@@ -66,4 +66,16 @@ router.post(
   actualDispatchController.revertActualDispatch
 );
 
+/**
+ * @route   POST /api/v1/actual-dispatch/cancel-unselected
+ * @desc    Cancel Stock Transfer SKUs left unselected in an Actual Dispatch submission
+ *          so they no longer sit in the pending list under the same DO
+ * @access  Public
+ * @body    { dsrNumbers: string[] }
+ */
+router.post(
+  '/cancel-unselected',
+  actualDispatchController.cancelUnselectedDispatches
+);
+
 module.exports = router;

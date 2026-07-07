@@ -178,10 +178,30 @@ const getFilterOptions = async (req, res, next) => {
   }
 };
 
+/**
+ * Cancel unselected Stock Transfer SKUs left out of an Actual Dispatch submission
+ * @route POST /api/v1/actual-dispatch/cancel-unselected
+ */
+const cancelUnselectedDispatches = async (req, res, next) => {
+  try {
+    const { dsrNumbers } = req.body;
+
+    Logger.info('[ACTUAL DISPATCH] Cancelling unselected Stock Transfer SKUs', { dsrNumbers });
+
+    const result = await actualDispatchService.cancelUnselectedDispatches(dsrNumbers);
+
+    return ResponseUtil.success(res, { cancelled: result.cancelled }, 'Unselected dispatches cancelled successfully');
+  } catch (error) {
+    Logger.error('[ACTUAL DISPATCH] Error in cancelUnselectedDispatches controller', error);
+    next(error);
+  }
+};
+
 module.exports = {
   getPendingDispatches,
   getDispatchHistory,
   submitActualDispatch,
   revertActualDispatch,
-  getFilterOptions
+  getFilterOptions,
+  cancelUnselectedDispatches
 };
