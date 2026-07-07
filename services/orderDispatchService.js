@@ -361,7 +361,19 @@ class OrderDispatchService {
       const limit = parseInt(pagination.limit) || 10;
       const offset = (page - 1) * limit;
       
-      let whereConditions = ['planned_1 IS NOT NULL', 'actual_1 IS NULL'];
+      let whereConditions = [
+        'planned_1 IS NOT NULL',
+        'actual_1 IS NULL',
+        // For Stock Transfer orders, hide remaining/split rows from the pending list.
+        // Split rows are created when partial pre-approval happens and are named with a
+        // trailing numeric suffix (e.g. DO-657A-1, DO/26-27/0195A-1).
+        // Original Stock Transfer orders use letter suffixes (A, B, C...) and are NOT affected.
+        // Sales orders are completely unaffected by this condition.
+        `NOT (
+          UPPER(TRIM(COALESCE(order_category, ''))) = 'STOCK TRANSFER'
+          AND order_no ~ '^.*-[0-9]+$'
+        )`
+      ];
       let queryParams = [];
       let paramIndex = 1;
       
@@ -546,10 +558,13 @@ class OrderDispatchService {
       
       const originalOrder = originalResult.rows[0];
       const approvalQty = parseFloat(data.approval_qty) || 0;
-      // Always use the DB's own order_quantity as the split basis.
-      // The frontend may send a larger order_quantity (effectiveOrderQty for cascade budget logic)
-      // but trusting it here would permanently inflate the DB value — order size can only decrease or stay the same.
       const orderQty = parseFloat(originalOrder.order_quantity) || 0;
+      const isStockTransferOrder = (originalOrder.order_category || '').toLowerCase().trim() === 'stock transfer';
+
+      // For Stock Transfer, allow approval qty to exceed original order qty (no cap).
+      // For Sales orders: the frontend may send a larger order_quantity for cascade budget logic,
+      // but trusting it would permanently inflate the DB value — order size can only decrease or stay the same.
+      const effectiveOrderQty = isStockTransferOrder && approvalQty > orderQty ? approvalQty : orderQty;
       const actual1 = new Date().toISOString();
       const planned2 = await this.getPlannedTimestamp(client, 'Approval of Order');
       
@@ -559,18 +574,23 @@ class OrderDispatchService {
         actual_1: actual1,
         planned_2: planned2,
         pre_approval_user: data.user_id || null,
-        // Never let the frontend's order_quantity override the DB value.
-        // The split logic below is the only place that may legally reduce it.
-        order_quantity: orderQty,
+        // Lock in the effective order quantity (may be elevated for Stock Transfer).
+        order_quantity: effectiveOrderQty,
       };
 
-      // If partial approval, mutate the parent row to only represent the approved chunk
-      // This strictly maintains Sum(order_quantity) across splits == Original Total
-      if (approvalQty > 0 && approvalQty < orderQty) {
+      // If partial approval (approved < effective total), mutate parent row to approved chunk.
+      // This strictly maintains Sum(order_quantity) across splits == Original Total (for Sales).
+      // For Stock Transfer we never split, so this condition is naturally skipped when approvalQty >= effectiveOrderQty.
+      if (approvalQty > 0 && approvalQty < effectiveOrderQty) {
         updateData.order_quantity = approvalQty;
         if (updateData.remaining_dispatch_qty !== undefined) {
            updateData.remaining_dispatch_qty = approvalQty;
         }
+      }
+      
+      // Also sync remaining_dispatch_qty for Stock Transfer when approval > original qty
+      if (isStockTransferOrder && approvalQty > 0) {
+        updateData.remaining_dispatch_qty = approvalQty;
       }
       
       // Remove username/user_id from data if present to avoid trying to update a non-existent column in the spread (...data)
@@ -599,7 +619,8 @@ class OrderDispatchService {
       const updatedOrderQty = orderQty;
 
       let remainingOrder = null;
-      if (approvalQty > 0 && approvalQty < updatedOrderQty) {
+      // For Stock Transfer, never create a remaining-qty split row — remaining qty is irrelevant.
+      if (!isStockTransferOrder && approvalQty > 0 && approvalQty < updatedOrderQty) {
         const remainingQty = updatedOrderQty - approvalQty;
         
         Logger.info(`Partial approval detected. Creating new row for remaining qty: ${remainingQty}`);
