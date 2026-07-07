@@ -784,8 +784,9 @@ class OrderDispatchService {
    * in a single DB transaction so totals never go out of sync on partial failure.
    * @param {Array<{id: number, data: object}>} approvals
    * @param {Array<{id: number, order_quantity: number}>} deductions
+   * @param {Array<number>} skipIds
    */
-  async submitBatch(approvals = [], cascadeBudgets = [], deductions = []) {
+  async submitBatch(approvals = [], cascadeBudgets = [], deductions = [], skipIds = []) {
     const client = await db.getClient();
     try {
       await client.query('BEGIN');
@@ -833,6 +834,26 @@ class OrderDispatchService {
 
         if (remaining > 0) {
           Logger.warn(`[CASCADE] Unabsorbed budget: ${remaining} of ${oil_type} for ${base_do}`);
+        }
+      }
+
+      // Auto-close skipped Stock Transfer rows: stamp actual_1 and zero out qty
+      // so they exit the pending list without being deleted from the DB.
+      if (skipIds.length > 0) {
+        const safeIds = skipIds.map(id => parseInt(id)).filter(id => !isNaN(id));
+        if (safeIds.length > 0) {
+          Logger.info(`[BATCH] Auto-closing ${safeIds.length} skipped Stock Transfer rows: ${safeIds.join(', ')}`);
+          await client.query(
+            `UPDATE order_dispatch
+             SET actual_1 = NOW(),
+                 order_quantity = 0,
+                 remaining_dispatch_qty = 0
+             WHERE id = ANY($1::int[])
+               AND UPPER(TRIM(COALESCE(order_category, ''))) = 'STOCK TRANSFER'
+               AND planned_1 IS NOT NULL
+               AND actual_1 IS NULL`,
+            [safeIds]
+          );
         }
       }
 

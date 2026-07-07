@@ -161,18 +161,19 @@ const deductBudget = async (req, res, next) => {
  */
 const submitBatch = async (req, res, next) => {
   try {
-    const { approvals = [], cascadeBudgets = [], deductions = [] } = req.body;
+    const { approvals = [], cascadeBudgets = [], deductions = [], skipIds = [] } = req.body;
 
     if (!Array.isArray(approvals) || !Array.isArray(cascadeBudgets)) {
       return res.status(400).json({ success: false, message: 'approvals and cascadeBudgets must be arrays' });
     }
 
-    Logger.info(`[BATCH] Submitting ${approvals.length} approvals, ${cascadeBudgets.length} cascade budgets`);
+    Logger.info(`[BATCH] Submitting ${approvals.length} approvals, ${cascadeBudgets.length} cascade budgets, ${skipIds.length} skipped (auto-close)`);
 
     const result = await orderDispatchService.submitBatch(
       approvals.map(({ id, ...data }) => ({ id, data })),
       cascadeBudgets,
-      deductions
+      deductions,
+      skipIds
     );
 
     return ResponseUtil.success(res, result, 'Batch submitted successfully');
