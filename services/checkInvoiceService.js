@@ -263,12 +263,25 @@ class CheckInvoiceService {
 
       // Step 1: Fetch depository information to check for skipping Stage 11 (Gate Out)
       const infoQuery = `
-        SELECT lrc.so_no, od.depo_name 
-        FROM lift_receiving_confirmation lrc 
-        JOIN order_dispatch od ON lrc.so_no = od.order_no 
+        SELECT lrc.so_no, lrc.actual_5, od.depo_name
+        FROM lift_receiving_confirmation lrc
+        JOIN order_dispatch od ON lrc.so_no = od.order_no
         WHERE lrc.id = $1
       `;
       const infoResult = await client.query(infoQuery, [id]);
+
+      // Guard: a record can only be verified (non-"Issue") once Make Invoice has
+      // actually (re-)completed it (actual_5 set). Without this, a record that was
+      // reported as an "Issue" (actual_5 reset to NULL, awaiting re-issue from Make
+      // Invoice) could be verified a second time directly from Check Invoice —
+      // e.g. via a stale/batched selection that hasn't picked up the "Issue" status
+      // yet — leaving actual_6 set while actual_5 stays NULL forever. That silently
+      // corrupts the record: it looks "done" in Check Invoice history while also
+      // still sitting in Make Invoice's pending queue.
+      if (data.status_1 !== "Issue" && !infoResult.rows[0]?.actual_5) {
+        throw new Error('This record has not been (re-)issued from Make Invoice yet and cannot be verified. It may still be awaiting correction after a reported issue.');
+      }
+
       const depoName = infoResult.rows[0]?.depo_name || '';
       const planned7 = data.status_1 === "Issue" ? undefined : await this.getPlannedTimestamp(client, 'Gate Out');
 
