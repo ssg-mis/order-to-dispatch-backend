@@ -165,6 +165,36 @@ const revertActualDispatch = async (req, res, next) => {
 };
 
 /**
+ * Revert actual dispatch back to Dispatch Planning (one stage back)
+ * @route POST /api/v1/actual-dispatch/revert-to-planning/:dsrNumber
+ */
+const revertToDispatchPlanning = async (req, res, next) => {
+  try {
+    const { dsrNumber } = req.params;
+    const { username, remarks } = req.body;
+
+    Logger.info(`[ACTUAL DISPATCH] Reverting DSR to Dispatch Planning: ${dsrNumber}`, { username, remarks });
+
+    const result = await actualDispatchService.revertToDispatchPlanning(dsrNumber, username, remarks);
+
+    return ResponseUtil.success(
+      res,
+      null,
+      result.message
+    );
+  } catch (error) {
+    Logger.error('[ACTUAL DISPATCH] Error in revertToDispatchPlanning controller', error);
+    if (error.statusCode) {
+      return ResponseUtil.error(res, error.message, error.statusCode);
+    }
+    if (error.message.includes('not found')) {
+      return ResponseUtil.notFound(res, error.message);
+    }
+    next(error);
+  }
+};
+
+/**
  * Get dynamic filter options for Actual Dispatch stage
  * @route GET /api/v1/actual-dispatch/filters
  */
@@ -202,6 +232,7 @@ module.exports = {
   getDispatchHistory,
   submitActualDispatch,
   revertActualDispatch,
+  revertToDispatchPlanning,
   getFilterOptions,
   cancelUnselectedDispatches
 };

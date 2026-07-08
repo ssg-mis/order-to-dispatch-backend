@@ -165,6 +165,40 @@ const revertDispatchPlanning = async (req, res, next) => {
 };
 
 /**
+ * Cancel an order from Dispatch Planning — Super Admin only
+ * @route POST /api/v1/dispatch-planning/cancel/:id
+ */
+const cancelDispatchPlanning = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { username, remarks } = req.body;
+
+    if (req.user?.role !== 'super_admin') {
+      return ResponseUtil.error(res, 'Only Super Admin can cancel a Dispatch Planning order', 403);
+    }
+
+    if (!remarks || !String(remarks).trim()) {
+      return ResponseUtil.error(res, 'Cancellation remarks are required', 400);
+    }
+
+    Logger.info(`[DISPATCH PLANNING] Cancelling order ID: ${id}`, { username, remarks });
+
+    const result = await dispatchPlanningService.cancelDispatchPlanning(id, username, remarks);
+
+    return ResponseUtil.success(res, null, result.message);
+  } catch (error) {
+    Logger.error('[DISPATCH PLANNING] Error in cancelDispatchPlanning controller', error);
+    if (error.statusCode) {
+      return ResponseUtil.error(res, error.message, error.statusCode);
+    }
+    if (error.message.includes('not found')) {
+      return ResponseUtil.notFound(res, error.message);
+    }
+    next(error);
+  }
+};
+
+/**
  * Update transfer details for an order
  * @route POST /api/v1/dispatch-planning/update-transfer/:id
  */
@@ -219,6 +253,7 @@ module.exports = {
   getDispatchHistory,
   submitDispatchPlanning,
   revertDispatchPlanning,
+  cancelDispatchPlanning,
   updateTransferDetails,
   precloseDispatchPlanning
 };

@@ -67,6 +67,19 @@ router.post(
 );
 
 /**
+ * @route   POST /api/v1/actual-dispatch/revert-to-planning/:dsrNumber
+ * @desc    Revert actual dispatch back to Dispatch Planning only (one stage back,
+ *          not all the way to Pre-Approval). Removes from list, restores quantity,
+ *          and nulls actual_3 on order_dispatch so it reappears in Dispatch Planning.
+ * @access  Public
+ * @body    { username, remarks }
+ */
+router.post(
+  '/revert-to-planning/:dsrNumber',
+  actualDispatchController.revertToDispatchPlanning
+);
+
+/**
  * @route   POST /api/v1/actual-dispatch/cancel-unselected
  * @desc    Cancel Stock Transfer SKUs left unselected in an Actual Dispatch submission
  *          so they no longer sit in the pending list under the same DO

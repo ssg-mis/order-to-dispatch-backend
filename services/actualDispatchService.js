@@ -706,6 +706,87 @@ class ActualDispatchService {
   }
 
   /**
+   * Revert actual dispatch back to Dispatch Planning (one stage back, not all the way to Pre-Approval)
+   * 1. Delete from lift_receiving_confirmation
+   * 2. Restore quantity to order_dispatch.remaining_dispatch_qty
+   * 3. Null only actual_3 on order_dispatch — planned_3 stays intact, so the order
+   *    reappears in Dispatch Planning's pending list (planned_3 IS NOT NULL AND actual_3 IS NULL).
+   *    actual_1/actual_2/planned_1/planned_2 and order_type are left untouched since the
+   *    order isn't going back past Dispatch Planning.
+   * @param {string} dsrNumber - DSR Number
+   * @param {string} username - User who is reverting
+   * @param {string} remarks - Reason for reverting
+   * @returns {Promise<Object>} Status of reversion
+   */
+  async revertToDispatchPlanning(dsrNumber, username, remarks) {
+    try {
+      Logger.info(`Reverting actual dispatch to Dispatch Planning for DSR: ${dsrNumber} by user: ${username}`, { remarks });
+
+      const client = await db.getClient();
+      try {
+        await client.query('BEGIN');
+
+        // Step 1: Get dispatch info before deleting. Match the order_dispatch row by
+        // id (via so_no = order_no AND product_name), not order_no alone — order_no
+        // has no uniqueness guarantee across sibling SKU rows on the same DO.
+        const infoQuery = `
+          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.id AS order_dispatch_id
+          FROM lift_receiving_confirmation lrc
+          LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
+          WHERE lrc.d_sr_number = $1
+        `;
+        const infoResult = await client.query(infoQuery, [dsrNumber]);
+
+        if (infoResult.rows.length === 0) {
+          throw new Error('Dispatch record not found');
+        }
+
+        const { so_no: soNo, qty_to_be_dispatched: qtyToRevert, order_dispatch_id: orderDispatchId } = infoResult.rows[0];
+        const revertAmt = parseFloat(qtyToRevert || 0);
+
+        // Step 2: Delete from lift_receiving_confirmation. The DELETE's rowCount is the
+        // concurrency gate: if 0 rows were removed, another user already reverted this
+        // dispatch — abort BEFORE the additive quantity restore below to avoid a
+        // double-restore (lost-update / stale-write race).
+        const deleteResult = await client.query(`DELETE FROM lift_receiving_confirmation WHERE d_sr_number = $1`, [dsrNumber]);
+        if (deleteResult.rowCount === 0) {
+          Logger.warn(`[REVERT TO PLANNING] Stale actual-dispatch revert rejected for DSR: ${dsrNumber} — record was already reverted by another user.`);
+          const conflict = new Error('This dispatch was already reverted by another user. Please refresh and try again.');
+          conflict.statusCode = 409;
+          throw conflict;
+        }
+
+        // Step 3: Restore quantity and reopen Dispatch Planning for this order
+        if (orderDispatchId) {
+          const updateOrderQuery = `
+            UPDATE order_dispatch
+            SET
+              remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
+              actual_3 = NULL,
+              revert_dispatch_remarks = $3
+            WHERE id = $2
+          `;
+          await client.query(updateOrderQuery, [revertAmt, orderDispatchId, remarks || null]);
+          Logger.info(`[REVERT TO PLANNING] Restored ${revertAmt} to SO: ${soNo} (order_dispatch id: ${orderDispatchId}, remarks: ${remarks || 'none'})`);
+        } else {
+          Logger.warn(`[REVERT TO PLANNING] No matching order_dispatch row found for SO: ${soNo} — quantity not restored`);
+        }
+
+        await client.query('COMMIT');
+        return { success: true, message: 'Actual dispatch reverted to Dispatch Planning successfully' };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      Logger.error('Error reverting actual dispatch to Dispatch Planning', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get dynamic filter options for Actual Dispatch stage
    * @returns {Promise<Object>} Unique party names
    */

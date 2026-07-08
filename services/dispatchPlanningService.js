@@ -591,6 +591,71 @@ class DispatchPlanningService {
   }
 
   /**
+   * Cancel an order from Dispatch Planning (Super Admin only — enforced in controller).
+   * Terminates the order permanently: it never proceeds to Actual Dispatch or any
+   * later stage (no lift_receiving_confirmation row is created), it drops out of
+   * every stage's pending list, and it is flagged so the dashboard counts it under
+   * Rejected Orders. It still shows up in Dispatch Planning's own History with the
+   * cancellation remarks.
+   * 1. Guard: only cancel if the row is still pending in Dispatch Planning
+   *    (planned_3 set, actual_3 not yet set) — prevents cancelling a stale/already-moved row.
+   * 2. Set actual_3 = NOW() so it leaves the pending list and appears in History.
+   * 3. Zero out remaining_dispatch_qty — nothing left to dispatch.
+   * 4. Mark overall_status_of_order = 'Cancelled' — the dashboard's Rejected Orders
+   *    KPI and detail list already recognize this exact value.
+   * @param {number} orderId - Order ID from order_dispatch table
+   * @param {string} username - User who is cancelling
+   * @param {string} remarks - Reason for cancelling
+   * @returns {Promise<Object>} Status of cancellation
+   */
+  async cancelDispatchPlanning(orderId, username, remarks) {
+    const client = await db.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      Logger.info(`[DISPATCH PLANNING] Cancelling order ID: ${orderId} by user: ${username}`, { remarks });
+
+      // Self-healing: ensure the cancel audit columns exist without a separate migration
+      await client.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS cancel_remarks TEXT`);
+      await client.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS cancel_user TEXT`);
+
+      const stageGuard = `planned_3 IS NOT NULL AND actual_3 IS NULL`;
+
+      const updateQuery = `
+        UPDATE order_dispatch
+        SET
+          actual_3 = NOW(),
+          remaining_dispatch_qty = 0,
+          overall_status_of_order = 'Cancelled',
+          cancel_remarks = $2,
+          cancel_user = $3
+        WHERE id = $1 AND ${stageGuard}
+        RETURNING order_no
+      `;
+      const updateResult = await client.query(updateQuery, [orderId, remarks || null, username || null]);
+
+      if (updateResult.rowCount === 0) {
+        Logger.warn(`[CANCEL] Stale cancel rejected for order ID: ${orderId} — row is no longer pending in Dispatch Planning.`);
+        const conflict = new Error('This order is no longer in Dispatch Planning — it was already processed or moved by another user. Please refresh and try again.');
+        conflict.statusCode = 409;
+        throw conflict;
+      }
+
+      Logger.info(`[CANCEL] Order ${updateResult.rows[0].order_no} (id: ${orderId}) cancelled by ${username || 'unknown'}. Remarks: ${remarks || 'none'}`);
+
+      await client.query('COMMIT');
+      return { success: true, message: 'Order cancelled successfully' };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      Logger.error('Error cancelling dispatch planning order', error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Update transfer details for an order
    * @param {number} orderId - Order ID from order_dispatch table
    * @param {Object} data - Transfer data

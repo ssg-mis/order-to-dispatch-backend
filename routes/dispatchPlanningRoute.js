@@ -57,6 +57,20 @@ router.post(
 );
 
 /**
+ * @route   POST /api/v1/dispatch-planning/cancel/:id
+ * @desc    Cancel an order from Dispatch Planning — Super Admin only. Terminates the
+ *          order (never proceeds further), zeroes remaining qty, flags
+ *          overall_status_of_order = 'Cancelled' (counted under dashboard Rejected
+ *          Orders), and keeps it visible only in Dispatch Planning's History with remarks.
+ * @access  Super Admin
+ * @body    { username: string, remarks: string }
+ */
+router.post(
+  '/cancel/:id',
+  dispatchPlanningController.cancelDispatchPlanning
+);
+
+/**
  * @route   POST /api/v1/dispatch-planning/update-transfer/:id
  * @desc    Update transfer details for an order
  * @access  Public
