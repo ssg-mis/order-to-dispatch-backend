@@ -75,7 +75,7 @@ class GateInService {
               od.sku_name, od.approval_qty,
               sd.nos_per_main_uom
             FROM lift_receiving_confirmation lrc
-            LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+            LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
             LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
             WHERE lrc.so_no ILIKE dd.order_key || '%'
             LIMIT 1

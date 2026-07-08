@@ -49,7 +49,7 @@ class MakeInvoiceService {
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
       // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no ${whereClause}`;
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -104,7 +104,7 @@ class MakeInvoiceService {
           COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
           NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
         LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
         ${whereClause}
@@ -171,7 +171,7 @@ class MakeInvoiceService {
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
       // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no ${whereClause}`;
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -222,7 +222,7 @@ class MakeInvoiceService {
           COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
           NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
         ${whereClause}
         ORDER BY lrc.actual_5 DESC, lrc.d_sr_number ASC

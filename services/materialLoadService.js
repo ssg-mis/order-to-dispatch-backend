@@ -45,7 +45,7 @@ class MaterialLoadService {
       const dataQuery = `
         SELECT lrc.*, od.sku_name, od.approval_qty, od.transfer, od.bill_company_name 
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         ORDER BY lrc.timestamp DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -84,7 +84,7 @@ class MaterialLoadService {
       const dataQuery = `
         SELECT lrc.*, od.transfer, od.bill_company_name 
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         ORDER BY lrc.actual_1 DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

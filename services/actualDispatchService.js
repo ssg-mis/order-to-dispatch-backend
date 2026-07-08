@@ -59,7 +59,7 @@ class ActualDispatchService {
       const groupQuery = `
         SELECT ${baseDoExp} as base_do, MIN(lrc.timestamp) as sort_date
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         GROUP BY base_do
         ORDER BY sort_date DESC
@@ -81,7 +81,7 @@ class ActualDispatchService {
       const countQuery = `
         SELECT COUNT(DISTINCT ${baseDoExp}) as total
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
       `;
       const countResult = await db.query(countQuery, queryParams);
@@ -146,7 +146,7 @@ class ActualDispatchService {
           od.actual_2 AS order_approval_at,
           od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         WHERE ${dataWhereConditions.join(' AND ')}
         AND lrc.planned_1 IS NOT NULL AND lrc.actual_1 IS NULL
         ORDER BY lrc.timestamp DESC, lrc.so_no ASC
@@ -203,7 +203,7 @@ class ActualDispatchService {
       const groupQuery = `
         SELECT ${baseDoExp} as base_do, MAX(lrc.actual_1) as sort_date
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         GROUP BY base_do
         ORDER BY sort_date DESC
@@ -225,7 +225,7 @@ class ActualDispatchService {
       const countQuery = `
         SELECT COUNT(DISTINCT ${baseDoExp}) as total
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
       `;
       const countResult = await db.query(countQuery, queryParams);
@@ -281,7 +281,7 @@ class ActualDispatchService {
           od.processid,
           od.upload_copy AS upload_so
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         WHERE ${dataWhereConditions.join(' AND ')}
         AND lrc.planned_1 IS NOT NULL AND lrc.actual_1 IS NOT NULL
         ORDER BY lrc.actual_1 DESC, lrc.so_no ASC
@@ -369,7 +369,7 @@ class ActualDispatchService {
         const currentQuery = `
           SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_category, od.depo_name
           FROM lift_receiving_confirmation lrc
-          LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+          LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
           WHERE lrc.d_sr_number = $1
         `;
         const currentResult = await client.query(currentQuery, [dsrNumber]);
@@ -481,7 +481,7 @@ class ActualDispatchService {
       const infoQuery = `
         SELECT lrc.d_sr_number, lrc.so_no, od.id AS order_dispatch_id
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         WHERE lrc.d_sr_number = ANY($1::text[])
           AND lrc.planned_1 IS NOT NULL
           AND lrc.actual_1 IS NULL
@@ -584,7 +584,7 @@ class ActualDispatchService {
         const infoQuery = `
           SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_type, od.product_name, od.rate_of_material
           FROM lift_receiving_confirmation lrc
-          LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+          LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
           WHERE lrc.d_sr_number = $1
         `;
         const infoResult = await client.query(infoQuery, [dsrNumber]);

@@ -49,7 +49,7 @@ class DamageAdjustmentService {
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
       // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no ${whereClause}`;
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -84,7 +84,7 @@ class DamageAdjustmentService {
           od.transfer,
           od.bill_company_name
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         ORDER BY lrc.planned_9 ASC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -149,7 +149,7 @@ class DamageAdjustmentService {
       const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
       // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no ${whereClause}`;
+      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
       const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].count);
 
@@ -186,7 +186,7 @@ class DamageAdjustmentService {
           od.transfer,
           od.bill_company_name
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         ORDER BY lrc.actual_9 DESC, lrc.d_sr_number ASC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

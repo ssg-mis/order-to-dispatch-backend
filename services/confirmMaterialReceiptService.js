@@ -62,7 +62,7 @@ class ConfirmMaterialReceiptService {
       const countQuery = `
         SELECT COUNT(*) 
         FROM lift_receiving_confirmation lrc 
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
       `;
       const countResult = await db.query(countQuery, queryParams);
@@ -103,7 +103,7 @@ class ConfirmMaterialReceiptService {
           od.bill_company_name,
           sd.nos_per_main_uom
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
         ${whereClause}
         ORDER BY lrc.planned_8 DESC, lrc.id DESC
@@ -182,7 +182,7 @@ class ConfirmMaterialReceiptService {
       const countQuery = `
         SELECT COUNT(*) 
         FROM lift_receiving_confirmation lrc 
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
       `;
       const countResult = await db.query(countQuery, queryParams);
@@ -222,7 +222,7 @@ class ConfirmMaterialReceiptService {
           od.transfer,
           od.bill_company_name
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         ORDER BY lrc.actual_8 DESC, lrc.id DESC
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

@@ -330,7 +330,7 @@ class ReportsService {
           dm.driving_licence_no     AS dm_driving_licence_no,
           dm.valid_upto             AS dm_valid_upto
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         LEFT JOIN customer_details cd ON LOWER(TRIM(od.customer_name)) = LOWER(TRIM(cd.customer_name))
         LEFT JOIN depot_details dd ON LOWER(TRIM(od.depo_name)) = LOWER(TRIM(dd.depot_name))
         LEFT JOIN transport_master tm ON LOWER(TRIM(lrc.transporter_name)) = LOWER(TRIM(tm.transporter_name))
@@ -1170,7 +1170,7 @@ class ReportsService {
                 od.rate_of_material, od.final_rate, od.oil_type,
                 sd.main_uom, sd.sku_weight, sd.gross_weight AS sku_gross
          FROM lift_receiving_confirmation lrc
-         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+         LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
          LEFT JOIN sku_details sd ON UPPER(TRIM(sd.sku_name)) = UPPER(TRIM(lrc.product_name))
          WHERE lrc.invoice_no IS NOT NULL AND lrc.invoice_no <> ''
            AND lrc.invoice_date::date = $1::date

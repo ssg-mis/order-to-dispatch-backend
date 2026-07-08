@@ -102,7 +102,7 @@ class SecurityGuardApprovalService {
       const groupQuery = `
         SELECT ${groupKeyExp} as group_key, MAX(lrc.actual_1) as sort_date
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         GROUP BY group_key
         ORDER BY sort_date DESC
@@ -124,7 +124,7 @@ class SecurityGuardApprovalService {
       const countQuery = `
         SELECT COUNT(DISTINCT ${groupKeyExp}) as total
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
       `;
       const countResult = await db.query(countQuery, queryParams);
@@ -201,7 +201,7 @@ class SecurityGuardApprovalService {
           COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
           NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
         JOIN selected_groups sg ON ${groupKeyExp} = sg.group_key
         WHERE ${dataWhereConditions.join(' AND ')}
@@ -284,7 +284,7 @@ class SecurityGuardApprovalService {
       const groupQuery = `
         SELECT ${baseDoExp} as base_do, MAX(lrc.actual_4) as sort_date
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
         GROUP BY base_do
         ORDER BY sort_date DESC
@@ -306,7 +306,7 @@ class SecurityGuardApprovalService {
       const countQuery = `
         SELECT COUNT(DISTINCT ${baseDoExp}) as total
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         ${whereClause}
       `;
       const countResult = await db.query(countQuery, queryParams);
@@ -357,7 +357,7 @@ class SecurityGuardApprovalService {
           COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
           NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
         FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no
+        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
         WHERE ${baseDoExp} = ANY($1)
           AND lrc.planned_4 IS NOT NULL AND lrc.actual_4 IS NOT NULL
