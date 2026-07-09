@@ -474,8 +474,6 @@ class DispatchPlanningService {
       const order = orderResult.rows[0];
       // On revert, always restore the full approved chunk (order_quantity).
       // Partial dispatch progress is discarded — the whole row goes back to pending.
-      const qtyToRestore = parseFloat(order.order_quantity || order.approval_qty || 0);
-
       // Step 2 (SKIPPED): Do NOT delete lift_receiving_confirmation records here.
       // Those records were created by actual dispatch (actualDispatchService) and should
       // only be removed when actual dispatch is reverted, not dispatch planning.
@@ -502,7 +500,6 @@ class DispatchPlanningService {
             actual_1 = NULL,
             planned_1 = NOW(),
             order_type = 'pre-approval',
-            remaining_dispatch_qty = $1,
             revert_planning_remarks = $3
           WHERE id = $2 AND ${stageGuard}
           RETURNING *
@@ -517,7 +514,6 @@ class DispatchPlanningService {
             actual_2 = NULL,
             planned_2 = NULL,
             actual_1 = NULL,
-            remaining_dispatch_qty = $1,
             revert_planning_remarks = $3
           WHERE id = $2 AND ${stageGuard}
           RETURNING *
