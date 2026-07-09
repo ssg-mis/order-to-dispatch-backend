@@ -15,6 +15,7 @@ class OrderDispatchService {
   async ensureColumns() {
     try {
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS gst TEXT`);
+      await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS salesperson_name TEXT`);
     } catch (error) {
       Logger.error('Error ensuring order_dispatch columns', error);
     }

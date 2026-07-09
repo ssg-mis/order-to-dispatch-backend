@@ -50,9 +50,25 @@ class OrderDispatch {
     this.advance_payment_to_be_taken = data.advance_payment_to_be_taken || false;
     this.advance_amount = data.advance_amount || null;
 
-    this.is_order_through_broker = data.is_order_through_broker || false;
-    this.broker_name = data.broker_name || null;
-    this.is_order_through = data.is_order_through || null;
+    const orderThroughValue = (data.is_order_through ?? '').toString().trim().toLowerCase();
+    const brokerName = typeof data.broker_name === 'string' ? data.broker_name.trim() : data.broker_name;
+    const salespersonName = typeof data.salesperson_name === 'string' ? data.salesperson_name.trim() : data.salesperson_name;
+
+    const isBrokerMode = orderThroughValue === 'broker' || orderThroughValue === 'broker ' || orderThroughValue === 'broker_name';
+    const isSalespersonMode = orderThroughValue === 'salesperson' || orderThroughValue === 'salesman' || orderThroughValue === 'sales person';
+    const isDirectMode = orderThroughValue === 'direct' || orderThroughValue === 'self';
+
+    let isOrderThroughBroker = Boolean(data.is_order_through_broker);
+    if (isBrokerMode) {
+      isOrderThroughBroker = true;
+    } else if (isSalespersonMode || isDirectMode) {
+      isOrderThroughBroker = false;
+    }
+
+    this.is_order_through_broker = isOrderThroughBroker;
+    this.broker_name = isOrderThroughBroker && brokerName ? brokerName : null;
+    this.salesperson_name = !isOrderThroughBroker && salespersonName ? salespersonName : null;
+    this.is_order_through = isBrokerMode ? 'broker' : isSalespersonMode ? 'salesperson' : isDirectMode ? 'direct' : (data.is_order_through || null);
 
     this.upload_so = data.upload_so || null;
 
@@ -144,6 +160,7 @@ class OrderDispatch {
       advance_amount: this.advance_amount,
       is_order_through_broker: this.is_order_through_broker,
       broker_name: this.broker_name,
+      salesperson_name: this.salesperson_name,
       is_order_through: this.is_order_through,
       upload_so: this.upload_so,
       planned_1: this.planned_1,
