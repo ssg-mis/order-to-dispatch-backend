@@ -593,7 +593,16 @@ class OrderDispatchService {
       if (isStockTransferOrder && approvalQty > 0) {
         updateData.remaining_dispatch_qty = approvalQty;
       }
-      
+
+      // Safety net (pre-approval only): a pre-approval order must NEVER advance with a
+      // NULL remaining_dispatch_qty. If the approver left appr. qty blank, treat it as
+      // approving the full original order quantity; otherwise seed from the approved qty.
+      const orderTypeNorm = (originalOrder.order_type || '').toLowerCase().replace(/[\s-]/g, '');
+      if (orderTypeNorm === 'preapproval' &&
+          (updateData.remaining_dispatch_qty === undefined || updateData.remaining_dispatch_qty === null)) {
+        updateData.remaining_dispatch_qty = approvalQty > 0 ? approvalQty : effectiveOrderQty;
+      }
+
       // Remove username/user_id from data if present to avoid trying to update a non-existent column in the spread (...data)
       if (updateData.username) delete updateData.username;
       if (updateData.user_id !== undefined) delete updateData.user_id;

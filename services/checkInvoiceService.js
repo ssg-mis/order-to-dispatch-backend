@@ -265,7 +265,7 @@ class CheckInvoiceService {
       const infoQuery = `
         SELECT lrc.so_no, lrc.actual_5, od.depo_name
         FROM lift_receiving_confirmation lrc
-        JOIN order_dispatch od ON lrc.so_no = od.order_no
+        JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
         WHERE lrc.id = $1
       `;
       const infoResult = await client.query(infoQuery, [id]);

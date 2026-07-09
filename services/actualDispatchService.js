@@ -365,9 +365,12 @@ class ActualDispatchService {
       try {
         await client.query('BEGIN');
 
-        // Step 1: Get original dispatch info (planned quantity, SO number, and category)
+        // Step 1: Get original dispatch info (planned quantity, SO number, and category).
+        // Resolve od.id here (join includes product_name, so the row is unambiguous) so the
+        // partial-dispatch update below can key on the primary key instead of order_no —
+        // order_no is NOT unique across sibling SKU rows on the same DO (legacy duplicates).
         const currentQuery = `
-          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_category, od.depo_name
+          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.id AS order_dispatch_id, od.order_category, od.depo_name
           FROM lift_receiving_confirmation lrc
           LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
           WHERE lrc.d_sr_number = $1
@@ -383,6 +386,7 @@ class ActualDispatchService {
         const actualQty = parseFloat(data.actual_qty_dispatch || data.actual_qty || plannedQty);
         const diffQty = plannedQty - actualQty;
         const soNo = originalDispatch.so_no;
+        const orderDispatchId = originalDispatch.order_dispatch_id;
         const orderCategory = (originalDispatch.order_category || "").toUpperCase();
         const depotName = (originalDispatch.depo_name || "").toUpperCase();
         await this.ensurePlanned4TriggerUsesTat(client);
@@ -408,13 +412,14 @@ class ActualDispatchService {
 
         const result = await client.query(query, [...values, dsrNumber]);
 
-        // Step 3: Handle partial dispatch by updating order_dispatch
-        if (diffQty !== 0 && soNo) {
-          Logger.info(`[ACTUAL DISPATCH] Partial dispatch detected for SO: ${soNo}. Category: ${orderCategory}, Planned: ${plannedQty}, Actual: ${actualQty}, Difference: ${diffQty}`);
+        // Step 3: Handle partial dispatch by updating order_dispatch (keyed on the primary
+        // key id so a duplicate order_no can't read/write the wrong sibling row)
+        if (diffQty !== 0 && orderDispatchId) {
+          Logger.info(`[ACTUAL DISPATCH] Partial dispatch detected for SO: ${soNo} (order_dispatch id: ${orderDispatchId}). Category: ${orderCategory}, Planned: ${plannedQty}, Actual: ${actualQty}, Difference: ${diffQty}`);
 
           // Get current remaining_dispatch_qty from order_dispatch
-          const orderQuery = `SELECT remaining_dispatch_qty FROM order_dispatch WHERE order_no = $1`;
-          const orderResult = await client.query(orderQuery, [soNo]);
+          const orderQuery = `SELECT remaining_dispatch_qty FROM order_dispatch WHERE id = $1`;
+          const orderResult = await client.query(orderQuery, [orderDispatchId]);
 
           if (orderResult.rows.length > 0) {
             const currentOrder = orderResult.rows[0];
@@ -432,11 +437,11 @@ class ActualDispatchService {
             let updateOrderParams;
 
             if (newRemaining > 0 && !isStockTransfer) {
-              updateOrderQuery = `UPDATE order_dispatch SET remaining_dispatch_qty = $1, actual_3 = NULL WHERE order_no = $2`;
-              updateOrderParams = [newRemaining, soNo];
+              updateOrderQuery = `UPDATE order_dispatch SET remaining_dispatch_qty = $1, actual_3 = NULL WHERE id = $2`;
+              updateOrderParams = [newRemaining, orderDispatchId];
             } else {
-              updateOrderQuery = `UPDATE order_dispatch SET remaining_dispatch_qty = $1 WHERE order_no = $2`;
-              updateOrderParams = [0, soNo];
+              updateOrderQuery = `UPDATE order_dispatch SET remaining_dispatch_qty = $1 WHERE id = $2`;
+              updateOrderParams = [0, orderDispatchId];
             }
 
             await client.query(updateOrderQuery, updateOrderParams);
@@ -580,9 +585,12 @@ class ActualDispatchService {
       try {
         await client.query('BEGIN');
 
-        // Step 1: Get dispatch info before deleting (join with order_dispatch to get order_type, product_name, rate_of_material)
+        // Step 1: Get dispatch info before deleting. Resolve the order_dispatch row by
+        // id (via so_no = order_no AND product_name) — order_no is NOT unique across
+        // sibling SKU rows on the same DO (legacy/backfilled data has duplicates), so the
+        // quantity restore below MUST target the primary key, not order_no.
         const infoQuery = `
-          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.order_type, od.product_name, od.rate_of_material
+          SELECT lrc.so_no, lrc.qty_to_be_dispatched, od.id AS order_dispatch_id, od.order_type, od.product_name, od.rate_of_material
           FROM lift_receiving_confirmation lrc
           LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
           WHERE lrc.d_sr_number = $1
@@ -593,7 +601,7 @@ class ActualDispatchService {
           throw new Error('Dispatch record not found');
         }
 
-        const { so_no: soNo, qty_to_be_dispatched: qtyToRevert, order_type: orderType, product_name: productName, rate_of_material: rateOfMaterial } = infoResult.rows[0];
+        const { so_no: soNo, qty_to_be_dispatched: qtyToRevert, order_dispatch_id: orderDispatchId, order_type: orderType, product_name: productName, rate_of_material: rateOfMaterial } = infoResult.rows[0];
         const revertAmt = parseFloat(qtyToRevert || 0);
 
         // Step 2: Delete from lift_receiving_confirmation.
@@ -609,15 +617,16 @@ class ActualDispatchService {
           throw conflict;
         }
 
-        // Step 3: Update order_dispatch to restore quantity, reset status, and save revert remarks
-        if (soNo) {
+        // Step 3: Update order_dispatch to restore quantity, reset status, and save revert remarks.
+        // Keyed on the primary key (id) so a duplicate order_no can't restore qty to sibling rows.
+        if (orderDispatchId) {
           let updateOrderQuery;
 
           if (orderType && orderType.toLowerCase() === 'regular') {
             // For regular orders: set planned_1 to current date instead of leaving it
             updateOrderQuery = `
-              UPDATE order_dispatch 
-              SET 
+              UPDATE order_dispatch
+              SET
                 remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
                 planned_3 = NULL,
                 actual_3 = NULL,
@@ -627,13 +636,13 @@ class ActualDispatchService {
                 planned_1 = NOW(),
                 order_type = 'pre-approval',
                 revert_dispatch_remarks = $3
-              WHERE order_no = $2
+              WHERE id = $2
             `;
           } else {
             // For non-regular orders: keep existing behavior (don't touch planned_1)
             updateOrderQuery = `
-              UPDATE order_dispatch 
-              SET 
+              UPDATE order_dispatch
+              SET
                 remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
                 planned_3 = NULL,
                 actual_3 = NULL,
@@ -641,12 +650,12 @@ class ActualDispatchService {
                 actual_2 = NULL,
                 actual_1 = NULL,
                 revert_dispatch_remarks = $3
-              WHERE order_no = $2
+              WHERE id = $2
             `;
           }
 
-          await client.query(updateOrderQuery, [revertAmt, soNo, remarks || null]);
-          Logger.info(`[REVERT] Restored ${revertAmt} to SO: ${soNo} (order_type: ${orderType || 'unknown'}, remarks: ${remarks || 'none'})`);
+          await client.query(updateOrderQuery, [revertAmt, orderDispatchId, remarks || null]);
+          Logger.info(`[REVERT] Restored ${revertAmt} to SO: ${soNo} (order_dispatch id: ${orderDispatchId}, order_type: ${orderType || 'unknown'}, remarks: ${remarks || 'none'})`);
 
           // Step 4: For regular orders, map oil_type and derive rates FOR THE ENTIRE GROUP
           if (orderType && orderType.toLowerCase() === 'regular' && productName) {
