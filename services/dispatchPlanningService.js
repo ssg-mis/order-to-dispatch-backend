@@ -520,7 +520,7 @@ class DispatchPlanningService {
         `;
       }
 
-      const updateResult = await client.query(updateQuery, [qtyToRestore, orderId, remarks || null]);
+      const updateResult = await client.query(updateQuery, [orderId, remarks || null]);
 
       // 0 rows updated → the row was NOT in dispatch planning when we wrote.
       // Someone else already reverted it, or it advanced to actual dispatch.
@@ -531,7 +531,7 @@ class DispatchPlanningService {
         throw conflict;
       }
 
-      Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. Kept remaining_dispatch_qty: ${qtyToRestore} (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
+      Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
 
       // Step 4: For regular orders, map oil_type and derive rates FOR THE ENTIRE GROUP
       if (order.order_type && order.order_type.toLowerCase() === 'regular' && order.product_name) {
