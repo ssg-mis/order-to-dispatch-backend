@@ -472,14 +472,17 @@ class DispatchPlanningService {
       }
 
       const order = orderResult.rows[0];
-      // On revert, always restore the full approved chunk (order_quantity).
-      // Partial dispatch progress is discarded — the whole row goes back to pending.
+      // NEVER touch remaining_dispatch_qty on revert — it is the source of truth.
+      // Any quantity already consumed by actual dispatch stays consumed; restoring
+      // the full chunk here would double-count (e.g. 100 punched, 50 dispatched →
+      // remaining is 50; resetting to 100 resurrects the 50 stuck downstream).
       // Step 2 (SKIPPED): Do NOT delete lift_receiving_confirmation records here.
       // Those records were created by actual dispatch (actualDispatchService) and should
       // only be removed when actual dispatch is reverted, not dispatch planning.
       Logger.info(`[REVERT] Dispatch planning revert — keeping lift_receiving_confirmation records intact for SO: ${order.order_no}`);
 
-      // Step 3: Update order_dispatch - null all stage columns, restore qty, and save remarks
+      // Step 3: Update order_dispatch - null all stage columns and save remarks.
+      // remaining_dispatch_qty is intentionally left untouched (see note above).
       let updateQuery;
 
       // Guard: only revert if the row is STILL in dispatch planning
@@ -500,8 +503,8 @@ class DispatchPlanningService {
             actual_1 = NULL,
             planned_1 = NOW(),
             order_type = 'pre-approval',
-            revert_planning_remarks = $3
-          WHERE id = $2 AND ${stageGuard}
+            revert_planning_remarks = $2
+          WHERE id = $1 AND ${stageGuard}
           RETURNING *
         `;
       } else {
@@ -514,8 +517,8 @@ class DispatchPlanningService {
             actual_2 = NULL,
             planned_2 = NULL,
             actual_1 = NULL,
-            revert_planning_remarks = $3
-          WHERE id = $2 AND ${stageGuard}
+            revert_planning_remarks = $2
+          WHERE id = $1 AND ${stageGuard}
           RETURNING *
         `;
       }
