@@ -559,7 +559,16 @@ class OrderDispatchService {
       
       const originalOrder = originalResult.rows[0];
       const approvalQty = parseFloat(data.approval_qty) || 0;
-      const orderQty = parseFloat(originalOrder.order_quantity) || 0;
+      // Basis for all partial-approval math (approved chunk + leftover split) must be the
+      // TRUE remaining quantity, not the original order_quantity. After a partial dispatch
+      // followed by a revert to pre-approval, order_quantity is stale (still the full
+      // original) while remaining_dispatch_qty holds what's actually left. Using
+      // order_quantity here would resurrect already-dispatched units into the leftover
+      // split (e.g. 100 order, 47 dispatched → remaining 53; approving 12 must leave 41,
+      // not 88). Fall back to order_quantity only when remaining is NULL (a fresh order).
+      const orderQty = originalOrder.remaining_dispatch_qty != null
+        ? parseFloat(originalOrder.remaining_dispatch_qty) || 0
+        : parseFloat(originalOrder.order_quantity) || 0;
       const isStockTransferOrder = (originalOrder.order_category || '').toLowerCase().trim() === 'stock transfer';
 
       // For Stock Transfer, allow approval qty to exceed original order qty (no cap).
