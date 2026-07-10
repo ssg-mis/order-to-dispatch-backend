@@ -85,7 +85,7 @@ async function submitInvoice(req, res) {
     res.json(result);
   } catch (error) {
     Logger.error('Error in submitInvoice controller', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message, code: error.code });
   }
 }
 

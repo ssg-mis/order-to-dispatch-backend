@@ -267,7 +267,7 @@ class OrderApprovalService {
       // inserts a duplicate DSR row into lift_receiving_confirmation
       // (the "shows 2x in actual dispatch" bug).
       const lockRes = await client.query(
-        'SELECT actual_2 FROM order_dispatch WHERE id = $1 FOR UPDATE',
+        'SELECT planned_2, actual_2 FROM order_dispatch WHERE id = $1 FOR UPDATE',
         [id]
       );
       if (lockRes.rows.length === 0) {
@@ -281,6 +281,19 @@ class OrderApprovalService {
           alreadyProcessed: true,
           message: 'Order has already been approved',
         };
+      }
+      // Stale-write guard: the row must STILL be pending at Approval of Order
+      // (planned_2 set, actual_2 null). planned_2 is cleared when an order is reverted
+      // back to Pre-Approval from a later stage, so a stale Approval screen could
+      // otherwise re-approve an order that has already moved backwards. Reject it.
+      if (lockRes.rows[0].planned_2 === null) {
+        // Throw only — the catch below owns the ROLLBACK. (The alreadyProcessed branch
+        // above rolls back explicitly because it RETURNS instead of throwing.)
+        Logger.warn(`[STALE APPROVAL] Order ID ${id} is no longer awaiting Approval (planned_2 null) — rejecting stale submission`);
+        const conflict = new Error('This order is no longer awaiting Approval of Order — it was already processed or moved by another user. Please refresh and try again.');
+        conflict.statusCode = 409;
+        conflict.code = 'STALE_WRITE';
+        throw conflict;
       }
 
       await this.disablePlanned3Trigger(client);

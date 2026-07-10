@@ -7,6 +7,7 @@ const db = require('../config/db');
 const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const OrderDispatch = require('../models/orderDispatchModel');
 const { Logger } = require('../utils');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
 
 class OrderDispatchService {
   /**
@@ -622,15 +623,23 @@ class OrderDispatchService {
       const values = Object.values(updateData);
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
       
+      // Stale-write guard: only advance a row that is STILL pending at Pre-Approval
+      // (planned_1 set, actual_1 not yet stamped). A legitimately-pending row always
+      // satisfies this, so it is a no-op on the happy path; it fires ONLY on a stale
+      // second submit (row already pre-approved, reverted, or moved by another user).
+      // This MUST gate the partial-approval split below — otherwise a stale re-submit
+      // would re-stamp the stage AND create a duplicate leftover-qty row.
       const updateQuery = `
-        UPDATE order_dispatch 
+        UPDATE order_dispatch
         SET ${setClause}
-        WHERE id = $${fields.length + 1}
+        WHERE id = $${fields.length + 1} AND planned_1 IS NOT NULL AND actual_1 IS NULL
         RETURNING *
       `;
-      
+
       const updateResult = await client.query(updateQuery, [...values, id]);
-      
+
+      assertStageOpen(updateResult, 'Pre-Approval');
+
       // Step 3: Check for partial approval and create remaining qty row
       const updatedOrder = updateResult.rows[0];
       // IMPORTANT: updatedOrder.order_quantity is now the strictly approved chunk (e.g. 40)

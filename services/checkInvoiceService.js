@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
@@ -313,18 +314,19 @@ class CheckInvoiceService {
 
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
 
+      // Stale-write guard: only act on a row still pending at Check Invoice (actual_6 NULL).
+      // Covers both branches — a verify (sets actual_6) or an Issue (leaves actual_6 NULL)
+      // cannot land on a record another user already verified.
       const query = `
-        UPDATE lift_receiving_confirmation 
+        UPDATE lift_receiving_confirmation
         SET ${setClause}
-        WHERE id = $${fields.length + 1}
+        WHERE id = $${fields.length + 1} AND actual_6 IS NULL
         RETURNING *
       `;
 
       const result = await client.query(query, [...values, id]);
 
-      if (result.rows.length === 0) {
-        throw new Error('Record not found');
-      }
+      assertStageOpen(result, 'Check Invoice');
 
       await client.query('COMMIT');
       Logger.info(`Check invoice submitted successfully for ID: ${id}`);

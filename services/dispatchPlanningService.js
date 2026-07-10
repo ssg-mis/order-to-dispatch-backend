@@ -9,6 +9,7 @@
 const db = require('../config/db');
 const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { deriveRatesForRegularOrder, deriveConsolidatedRatesForGroup, detectOilType } = require('../utils/rateDerivation');
 const { buildSearchCondition } = require('../utils/searchUtils');
 
@@ -249,7 +250,8 @@ class DispatchPlanningService {
         SELECT
           order_no, customer_name, product_name,
           order_quantity, type_of_transporting,
-          approval_qty, remaining_dispatch_qty, processid
+          approval_qty, remaining_dispatch_qty, processid,
+          planned_3, actual_3
         FROM order_dispatch
         WHERE id = $1
         FOR UPDATE
@@ -261,6 +263,20 @@ class DispatchPlanningService {
       }
 
       const order = orderResult.rows[0];
+
+      // Stale-write guard: the row must STILL be pending in Dispatch Planning
+      // (planned_3 set, actual_3 null). A revert back to Pre-Approval clears planned_3
+      // WITHOUT restoring remaining_dispatch_qty, so the remaining-qty check below would
+      // not catch that case — a stale Dispatch Planning screen could otherwise create a
+      // DSR row and advance an order that has already moved backwards. Reject it here,
+      // under the FOR UPDATE lock, before any DSR/lift_receiving row is inserted.
+      if (order.planned_3 === null || order.actual_3 !== null) {
+        Logger.warn(`[STALE PLANNING] Order ID ${orderId} is no longer pending in Dispatch Planning (planned_3=${order.planned_3}, actual_3=${order.actual_3}) — rejecting stale submission`);
+        const conflict = new Error('This order is no longer in Dispatch Planning — it was already processed or moved by another user. Please refresh and try again.');
+        conflict.statusCode = 409;
+        conflict.code = 'STALE_WRITE';
+        throw conflict;
+      }
 
       // Calculate remaining quantity logic
       // If remaining_dispatch_qty is null, use approval_qty (or order_quantity if approval_qty is missing)

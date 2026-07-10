@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
@@ -289,34 +290,53 @@ class MakeInvoiceService {
 
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
 
+      // Stale-write guard: only advance a row still pending at Make Invoice (actual_5 NULL).
       const query = `
-        UPDATE lift_receiving_confirmation 
+        UPDATE lift_receiving_confirmation
         SET ${setClause}
-        WHERE id = $${fields.length + 1}
-        RETURNING so_no
+        WHERE id = $${fields.length + 1} AND actual_5 IS NULL
+        RETURNING so_no, product_name
       `;
 
       const result = await client.query(query, [...values, id]);
 
-      if (result.rows.length === 0) {
-        throw new Error('Record not found');
-      }
+      assertStageOpen(result, 'Make Invoice');
 
       const so_no = result.rows[0].so_no;
+      const productName = result.rows[0].product_name;
 
-      // Update order_dispatch table: minus cd_amount from rate columns
+      // Update order_dispatch table: minus cd_amount from rate columns.
+      // Resolve the exact order_dispatch row for THIS invoiced product and key the rate
+      // update on its primary key id. order_no is NOT unique across sibling SKU rows on the
+      // same DO, so keying on order_no alone would subtract the discount from every sibling
+      // product's rates, not just the one being invoiced (matches the (order_no, product_name)
+      // → id disambiguation used elsewhere). If product_name is absent we fall back to the
+      // single order_no match so a legacy single-product DO still gets adjusted.
       if (cd_amount > 0 && so_no) {
-        const updateRatesQuery = `
-          UPDATE order_dispatch
-          SET 
-            final_rate = CASE WHEN final_rate IS NOT NULL THEN final_rate - $1 ELSE NULL END,
-            rate_of_material = CASE WHEN rate_of_material IS NOT NULL THEN rate_of_material - $1 ELSE NULL END,
-            rate_per_15kg = CASE WHEN rate_per_15kg IS NOT NULL THEN rate_per_15kg - $1 ELSE NULL END,
-            rate_per_ltr = CASE WHEN rate_per_ltr IS NOT NULL THEN rate_per_ltr - $1 ELSE NULL END
-          WHERE order_no = $2
-        `;
-        await client.query(updateRatesQuery, [cd_amount, so_no]);
-        Logger.info(`Adjusted rates in order_dispatch for order: ${so_no} by minus ${cd_amount}`);
+        const targetRes = await client.query(
+          `SELECT id FROM order_dispatch
+           WHERE order_no = $1 AND (product_name = $2 OR $2 IS NULL)
+           ORDER BY id ASC
+           LIMIT 1`,
+          [so_no, productName]
+        );
+
+        if (targetRes.rows.length > 0) {
+          const orderDispatchId = targetRes.rows[0].id;
+          const updateRatesQuery = `
+            UPDATE order_dispatch
+            SET
+              final_rate = CASE WHEN final_rate IS NOT NULL THEN final_rate - $1 ELSE NULL END,
+              rate_of_material = CASE WHEN rate_of_material IS NOT NULL THEN rate_of_material - $1 ELSE NULL END,
+              rate_per_15kg = CASE WHEN rate_per_15kg IS NOT NULL THEN rate_per_15kg - $1 ELSE NULL END,
+              rate_per_ltr = CASE WHEN rate_per_ltr IS NOT NULL THEN rate_per_ltr - $1 ELSE NULL END
+            WHERE id = $2
+          `;
+          await client.query(updateRatesQuery, [cd_amount, orderDispatchId]);
+          Logger.info(`Adjusted rates in order_dispatch id ${orderDispatchId} (SO: ${so_no}, product: ${productName || 'n/a'}) by minus ${cd_amount}`);
+        } else {
+          Logger.warn(`[MAKE INVOICE] No matching order_dispatch row for SO: ${so_no} (product: ${productName || 'n/a'}) — CD rate adjustment skipped`);
+        }
       }
 
       await client.query('COMMIT');

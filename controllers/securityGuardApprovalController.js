@@ -135,8 +135,9 @@ const submitApproval = async (req, res, next) => {
     res.status(200).json(result);
   } catch (error) {
     Logger.error('Error in submitApproval controller', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
+      code: error.code,
       message: error.message || 'Failed to submit security guard approval'
     });
   }

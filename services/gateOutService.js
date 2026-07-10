@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
@@ -275,18 +276,17 @@ class GateOutService {
 
       const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
 
+      // Stale-write guard: only advance a row still pending at Gate Out (actual_7 NULL).
       const query = `
-        UPDATE lift_receiving_confirmation 
+        UPDATE lift_receiving_confirmation
         SET ${setClause}
-        WHERE id = $${fields.length + 1}
+        WHERE id = $${fields.length + 1} AND actual_7 IS NULL
         RETURNING *
       `;
 
       const result = await client.query(query, [...values, id]);
 
-      if (result.rows.length === 0) {
-        throw new Error('Record not found');
-      }
+      assertStageOpen(result, 'Gate Out');
 
       await client.query('COMMIT');
       Logger.info(`Gate out submitted successfully for ID: ${id}`);

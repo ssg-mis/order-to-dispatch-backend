@@ -85,7 +85,7 @@ async function submitGateOut(req, res) {
     res.json(result);
   } catch (error) {
     Logger.error('Error in submitGateOut controller', error);
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message, code: error.code });
   }
 }
 

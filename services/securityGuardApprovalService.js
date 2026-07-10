@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { applyDispatchFilters } = require('../utils/searchUtils');
@@ -435,18 +436,19 @@ class SecurityGuardApprovalService {
 
         const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
 
+        // Stale-write guard: only act on a row still pending at Security Guard (actual_4
+        // NULL). Blocks a second Approve, and Approve/Reject landing on an already-approved
+        // record, when two guards act from stale screens.
         const query = `
-          UPDATE lift_receiving_confirmation 
+          UPDATE lift_receiving_confirmation
           SET ${setClause}
-          WHERE id = $${fields.length + 1}
+          WHERE id = $${fields.length + 1} AND actual_4 IS NULL
           RETURNING *
         `;
 
         const result = await client.query(query, [...values, id]);
 
-        if (result.rows.length === 0) {
-          throw new Error('Record not found');
-        }
+        assertStageOpen(result, 'Security Guard Approval');
 
         await client.query('COMMIT');
 

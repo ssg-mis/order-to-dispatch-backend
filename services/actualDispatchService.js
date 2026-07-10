@@ -8,6 +8,7 @@
  */
 
 const db = require('../config/db');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { applyDispatchFilters } = require('../utils/searchUtils');
 const { Logger } = require('../utils');
@@ -403,14 +404,19 @@ class ActualDispatchService {
         const values = Object.values(updateData);
         const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
 
+        // Stale-write guard: only dispatch a row still pending (actual_1 NULL). This MUST
+        // fire before the partial-dispatch qty math below, otherwise a stale second submit
+        // would re-adjust remaining_dispatch_qty a second time (double-counting the diff).
         const query = `
-          UPDATE lift_receiving_confirmation 
+          UPDATE lift_receiving_confirmation
           SET ${setClause}
-          WHERE d_sr_number = $${fields.length + 1}
+          WHERE d_sr_number = $${fields.length + 1} AND actual_1 IS NULL
           RETURNING *
         `;
 
         const result = await client.query(query, [...values, dsrNumber]);
+
+        assertStageOpen(result, 'Actual Dispatch');
 
         // Step 3: Handle partial dispatch by updating order_dispatch (keyed on the primary
         // key id so a duplicate order_no can't read/write the wrong sibling row)
@@ -453,6 +459,9 @@ class ActualDispatchService {
       } catch (error) {
         await client.query('ROLLBACK');
         Logger.error('[ACTUAL DISPATCH] Transaction error:', error);
+        // Preserve stale-write / already-typed errors (statusCode) instead of masking
+        // them as a generic 500 "Database error".
+        if (error.statusCode) throw error;
         throw new Error(`Database error: ${error.message} (Field check: ${Object.keys(updateData).join(', ')})`);
       } finally {
         client.release();
