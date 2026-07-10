@@ -309,8 +309,21 @@ class ActualDispatchService {
 
       // Explicitly pick only the fields the user wants to submit
       // This avoids sending fields that don't exist in the table (like planned_2)
+      // Actual Dispatch Date: use the date manually entered in the Confirm Dispatch
+      // modal (data.actual_dispatch_date, "YYYY-MM-DD") as the source of truth. Store
+      // at noon UTC so the calendar date is stable when read back (IST = UTC+5:30, so
+      // date-only casts and local Date parsing both resolve to the entered day).
+      // Falls back to the submit time if no date was provided.
+      // TODO: once historical dispatch dates are backfilled, drop the manual input and
+      // revert this to `new Date().toISOString()`.
+      const enteredDispatchDate = data.actual_dispatch_date;
+      const actualDispatchTimestamp =
+        (typeof enteredDispatchDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(enteredDispatchDate))
+          ? `${enteredDispatchDate}T12:00:00.000Z`
+          : new Date().toISOString();
+
       const updateData = {
-        actual_1: new Date().toISOString(),
+        actual_1: actualDispatchTimestamp,
         product_name_1: data.product_name_1 || null,
         actual_dispatch_user: data.user_id || null,
         actual_qty_dispatch: parseFloat(data.actual_qty_dispatch) || 0,
