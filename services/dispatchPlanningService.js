@@ -88,7 +88,13 @@ class DispatchPlanningService {
           ORDER BY sort_date DESC
           LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
         )
-        SELECT *
+        SELECT *,
+          -- Slip Status: has any qty of this base DO already passed Actual Dispatch (actual_1 set)?
+          EXISTS(
+            SELECT 1 FROM lift_receiving_confirmation prev
+            WHERE COALESCE(substring(prev.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), prev.so_no) = ${baseDoExp}
+              AND prev.actual_1 IS NOT NULL
+          ) as has_prior_dispatch
         FROM order_dispatch
         WHERE ${baseDoExp} IN (SELECT base_do FROM paginated_dos)
         AND id IN (
@@ -194,7 +200,13 @@ class DispatchPlanningService {
           ORDER BY sort_date DESC
           LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
         )
-        SELECT *
+        SELECT *,
+          -- Slip Status: has any qty of this base DO already passed Actual Dispatch (actual_1 set)?
+          EXISTS(
+            SELECT 1 FROM lift_receiving_confirmation prev
+            WHERE COALESCE(substring(prev.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), prev.so_no) = ${baseDoExp}
+              AND prev.actual_1 IS NOT NULL
+          ) as has_prior_dispatch
         FROM order_dispatch
         WHERE ${baseDoExp} IN (SELECT base_do FROM paginated_dos)
         AND id IN (

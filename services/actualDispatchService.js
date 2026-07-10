@@ -109,6 +109,12 @@ class ActualDispatchService {
           lrc.*,
           EXISTS(SELECT 1 FROM gate_in_records gi WHERE gi.order_key = ${baseDoExp}) as has_gate_in,
           EXISTS(SELECT 1 FROM dispatch_drafts dd WHERE dd.order_key = ${baseDoExp}) as has_draft,
+          -- Slip Status: has any qty of this base DO already passed Actual Dispatch (actual_1 set)?
+          EXISTS(
+            SELECT 1 FROM lift_receiving_confirmation prev
+            WHERE COALESCE(substring(prev.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), prev.so_no) = ${baseDoExp}
+              AND prev.actual_1 IS NOT NULL
+          ) as has_prior_dispatch,
           od.order_type_delivery_purpose,
           od.start_date,
           od.end_date,
