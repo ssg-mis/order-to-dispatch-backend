@@ -78,7 +78,7 @@ class SecurityGuardApprovalService {
       let queryParams = [];
       let paramIndex = 1;
 
-      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      // Search (DO No.), Manual Sauda No. and DO Date range filters
       paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.customer_name) {
@@ -247,7 +247,7 @@ class SecurityGuardApprovalService {
       let queryParams = [];
       let paramIndex = 1;
 
-      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      // Search (DO No.), Manual Sauda No. and DO Date range filters
       paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.customer_name) {

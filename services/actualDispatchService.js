@@ -35,7 +35,7 @@ class ActualDispatchService {
       let queryParams = [];
       let paramIndex = 1;
 
-      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      // Search (DO No.), Manual Sauda No. and DO Date range filters
       paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.customer_name) {
@@ -109,11 +109,12 @@ class ActualDispatchService {
           lrc.*,
           EXISTS(SELECT 1 FROM gate_in_records gi WHERE gi.order_key = ${baseDoExp}) as has_gate_in,
           EXISTS(SELECT 1 FROM dispatch_drafts dd WHERE dd.order_key = ${baseDoExp}) as has_draft,
-          -- Slip Status: has any qty of this base DO already passed Actual Dispatch (actual_1 set)?
+          -- Slip Status: has any OTHER line item under this base DO already been dispatch-planned (qty already drawn down)?
           EXISTS(
-            SELECT 1 FROM lift_receiving_confirmation prev
-            WHERE COALESCE(substring(prev.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), prev.so_no) = ${baseDoExp}
-              AND prev.actual_1 IS NOT NULL
+            SELECT 1 FROM order_dispatch sib
+            WHERE COALESCE(substring(sib.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), sib.order_no) = ${baseDoExp}
+              AND sib.id <> od.id
+              AND sib.remaining_dispatch_qty IS DISTINCT FROM sib.order_quantity
           ) as has_prior_dispatch,
           od.order_type_delivery_purpose,
           od.start_date,
@@ -185,7 +186,7 @@ class ActualDispatchService {
       let queryParams = [];
       let paramIndex = 1;
 
-      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      // Search (DO No.), Manual Sauda No. and DO Date range filters
       paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.customer_name) {

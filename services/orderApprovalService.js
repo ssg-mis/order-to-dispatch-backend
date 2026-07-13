@@ -57,9 +57,9 @@ class OrderApprovalService {
       // Base DO Expression for grouping
       const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
 
-      // Enhanced Search (filters both order_no and customer_name)
+      // DO Number search only
       if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no', 'customer_name'], filters.search, paramIndex);
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no'], filters.search, paramIndex);
         whereConditions.push(sClause);
         queryParams.push(...sParams);
         paramIndex = sIdx;
@@ -100,13 +100,17 @@ class OrderApprovalService {
       }
 
       // Fetch all rows for these Base DOs
-      // Re-create where conditions with shifted indices because $1 is now reserved for baseDos
+      // Re-create where conditions with shifted indices because $1 is now reserved for baseDos.
+      // Mirror the search clause exactly (same columns/order) so param positions line up with
+      // the values already bound in queryParams below — otherwise a base DO that only matches
+      // via the space-stripped search would be counted/paginated but its rows silently dropped here.
       let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
       let dataParamIndex = 2;
-      
+
       if (filters.search) {
-        dataWhereConditions.push(`(order_no ILIKE $${dataParamIndex} OR customer_name ILIKE $${dataParamIndex})`);
-        dataParamIndex++;
+        const { clause: dsClause, newIndex: dsIdx } = buildSearchCondition(['order_no'], filters.search, dataParamIndex);
+        dataWhereConditions.push(dsClause);
+        dataParamIndex = dsIdx;
       }
       if (filters.customer_name) {
         dataWhereConditions.push(`customer_name = $${dataParamIndex}`);
@@ -162,9 +166,9 @@ class OrderApprovalService {
       // Base DO Expression for grouping
       const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
 
-      // Enhanced Search
+      // DO Number search only
       if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no', 'customer_name'], filters.search, paramIndex);
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no'], filters.search, paramIndex);
         whereConditions.push(sClause);
         queryParams.push(...sParams);
         paramIndex = sIdx;
@@ -205,13 +209,17 @@ class OrderApprovalService {
       }
 
       // Fetch all rows for these Base DOs
-      // Re-create where conditions with shifted indices
+      // Re-create where conditions with shifted indices. Mirror the search clause exactly
+      // (same columns/order) so param positions line up with the values already bound in
+      // queryParams below — otherwise a base DO that only matches via the space-stripped
+      // search would be counted/paginated but its rows silently dropped here.
       let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
       let dataParamIndex = 2;
 
       if (filters.search) {
-        dataWhereConditions.push(`(order_no ILIKE $${dataParamIndex} OR customer_name ILIKE $${dataParamIndex})`);
-        dataParamIndex++;
+        const { clause: dsClause, newIndex: dsIdx } = buildSearchCondition(['order_no'], filters.search, dataParamIndex);
+        dataWhereConditions.push(dsClause);
+        dataParamIndex = dsIdx;
       }
       if (filters.customer_name) {
         dataWhereConditions.push(`customer_name = $${dataParamIndex}`);

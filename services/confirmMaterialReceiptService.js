@@ -37,7 +37,7 @@ class ConfirmMaterialReceiptService {
         paramIndex++;
       }
 
-      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      // Search (DO No.), Manual Sauda No. and DO Date range filters
       paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.party_name) {
@@ -157,7 +157,7 @@ class ConfirmMaterialReceiptService {
         paramIndex++;
       }
 
-      // Search (DO No. / Customer), Manual Sauda No. and DO Date range filters
+      // Search (DO No.), Manual Sauda No. and DO Date range filters
       paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
 
       if (filters.party_name) {

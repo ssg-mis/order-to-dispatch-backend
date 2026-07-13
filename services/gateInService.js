@@ -8,17 +8,32 @@
 
 const db = require('../config/db');
 const { Logger } = require('../utils');
+const { buildSearchCondition } = require('../utils/searchUtils');
 
 class GateInService {
   /**
    * Get pending gate-ins: orders saved as draft in Actual Dispatch
    * that have not yet been processed through Gate In.
    */
-  async getPending(pagination = {}) {
+  async getPending(filters = {}, pagination = {}) {
     try {
       const page  = parseInt(pagination.page)  || 1;
       const limit = parseInt(pagination.limit) || 20;
       const offset = (page - 1) * limit;
+
+      let whereConditions = ['gi.order_key IS NULL'];
+      let queryParams = [];
+      let paramIndex = 1;
+
+      // DO Number search only
+      if (filters.search) {
+        const { clause, params, newIndex } = buildSearchCondition(['dd.order_key'], filters.search, paramIndex);
+        whereConditions.push(clause);
+        queryParams.push(...params);
+        paramIndex = newIndex;
+      }
+
+      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
       const countQuery = `
         SELECT COUNT(*) as total
@@ -26,10 +41,10 @@ class GateInService {
           SELECT DISTINCT dd.order_key
           FROM dispatch_drafts dd
           LEFT JOIN gate_in_records gi ON dd.order_key = gi.order_key
-          WHERE gi.order_key IS NULL
+          ${whereClause}
         ) sub
       `;
-      const countResult = await db.query(countQuery);
+      const countResult = await db.query(countQuery, queryParams);
       const total = parseInt(countResult.rows[0].total);
 
       // dispatch_drafts is unique on order_key, so DISTINCT ON is just defensive.
@@ -80,13 +95,13 @@ class GateInService {
             WHERE lrc.so_no ILIKE dd.order_key || '%'
             LIMIT 1
           ) ord ON true
-          WHERE gi.order_key IS NULL
+          ${whereClause}
           ORDER BY dd.order_key, dd.saved_at DESC
         ) deduped
         ORDER BY saved_at DESC
-        LIMIT $1 OFFSET $2
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
-      const dataResult = await db.query(dataQuery, [limit, offset]);
+      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
 
       return {
         success: true,

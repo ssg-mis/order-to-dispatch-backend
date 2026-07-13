@@ -300,7 +300,7 @@ class CommitmentPunchService {
         idx++;
       }
       if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['commitment_no', 'party_name'], filters.search, idx);
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['commitment_no'], filters.search, idx);
         where.push(sClause);
         params.push(...sParams);
         idx = sIdx;
@@ -348,7 +348,7 @@ class CommitmentPunchService {
       let idx = 1;
 
       if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['cm.commitment_no', 'cm.party_name'], filters.search, idx);
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['cm.commitment_no'], filters.search, idx);
         where.push(sClause);
         params.push(...sParams);
         idx = sIdx;

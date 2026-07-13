@@ -24,7 +24,7 @@ function buildSearchCondition(columns, search, paramIndex) {
 
 /**
  * Shared filter builder for the dispatch-stage search bar. Appends:
- *  - free-text search across DO No. (lrc.so_no) and Customer (lrc.party_name), space-insensitive
+ *  - free-text search across DO No. (lrc.so_no) only, space-insensitive
  *  - Manual Sauda No. (od.processid) — contains match
  *  - DO Date range (od.party_so_date) — from/to (inclusive)
  * Mutates whereConditions/queryParams in place and returns the next param index.
@@ -38,7 +38,7 @@ function buildSearchCondition(columns, search, paramIndex) {
  */
 function applyDispatchFilters(filters, whereConditions, queryParams, paramIndex) {
   if (filters.search) {
-    const { clause, params, newIndex } = buildSearchCondition(['lrc.so_no', 'lrc.party_name'], filters.search, paramIndex);
+    const { clause, params, newIndex } = buildSearchCondition(['lrc.so_no'], filters.search, paramIndex);
     whereConditions.push(clause);
     queryParams.push(...params);
     paramIndex = newIndex;

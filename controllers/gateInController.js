@@ -8,9 +8,9 @@ const { ResponseUtil, Logger } = require('../utils');
 
 const getPending = async (req, res, next) => {
   try {
-    const { page, limit } = req.query;
-    Logger.info('[GATE IN] Fetching pending');
-    const result = await gateInService.getPending({ page, limit });
+    const { page, limit, search } = req.query;
+    Logger.info('[GATE IN] Fetching pending', { search });
+    const result = await gateInService.getPending({ search }, { page, limit });
     return ResponseUtil.success(res, { records: result.data, pagination: result.pagination }, 'Pending gate-ins fetched successfully');
   } catch (error) {
     Logger.error('[GATE IN] Error in getPending controller', error);

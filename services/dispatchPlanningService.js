@@ -33,8 +33,8 @@ class DispatchPlanningService {
 
       // Add optional filters
       if (filters.order_no) {
-        // Optimized search: match order_no OR customer_name with partial match
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no', 'customer_name'], filters.order_no, paramIndex);
+        // DO Number search only
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no'], filters.order_no, paramIndex);
         whereConditions.push(sClause);
         queryParams.push(...sParams);
         paramIndex = sIdx;
@@ -89,11 +89,13 @@ class DispatchPlanningService {
           LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
         )
         SELECT *,
-          -- Slip Status: has any qty of this base DO already passed Actual Dispatch (actual_1 set)?
+          -- Slip Status: has any OTHER line item under this base DO already been dispatch-planned (qty already drawn down)?
           EXISTS(
-            SELECT 1 FROM lift_receiving_confirmation prev
-            WHERE COALESCE(substring(prev.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), prev.so_no) = ${baseDoExp}
-              AND prev.actual_1 IS NOT NULL
+            SELECT 1 FROM order_dispatch sib
+            WHERE COALESCE(substring(sib.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), sib.order_no)
+                = COALESCE(substring(order_dispatch.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_dispatch.order_no)
+              AND sib.id <> order_dispatch.id
+              AND sib.remaining_dispatch_qty IS DISTINCT FROM sib.order_quantity
           ) as has_prior_dispatch
         FROM order_dispatch
         WHERE ${baseDoExp} IN (SELECT base_do FROM paginated_dos)
@@ -145,8 +147,8 @@ class DispatchPlanningService {
 
       // Add optional filters
       if (filters.order_no) {
-        // Optimized search: match order_no OR customer_name with partial match
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no', 'customer_name'], filters.order_no, paramIndex);
+        // DO Number search only
+        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no'], filters.order_no, paramIndex);
         whereConditions.push(sClause);
         queryParams.push(...sParams);
         paramIndex = sIdx;
@@ -201,11 +203,13 @@ class DispatchPlanningService {
           LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
         )
         SELECT *,
-          -- Slip Status: has any qty of this base DO already passed Actual Dispatch (actual_1 set)?
+          -- Slip Status: has any OTHER line item under this base DO already been dispatch-planned (qty already drawn down)?
           EXISTS(
-            SELECT 1 FROM lift_receiving_confirmation prev
-            WHERE COALESCE(substring(prev.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), prev.so_no) = ${baseDoExp}
-              AND prev.actual_1 IS NOT NULL
+            SELECT 1 FROM order_dispatch sib
+            WHERE COALESCE(substring(sib.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), sib.order_no)
+                = COALESCE(substring(order_dispatch.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_dispatch.order_no)
+              AND sib.id <> order_dispatch.id
+              AND sib.remaining_dispatch_qty IS DISTINCT FROM sib.order_quantity
           ) as has_prior_dispatch
         FROM order_dispatch
         WHERE ${baseDoExp} IN (SELECT base_do FROM paginated_dos)
