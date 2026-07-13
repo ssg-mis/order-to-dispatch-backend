@@ -112,7 +112,8 @@ const submitApproval = async (req, res, next) => {
           do_number: result.data.order_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Dispatch Planning');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Dispatch Planning')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Approval of Order', err));
         }
       }
     } catch (notifyError) {

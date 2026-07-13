@@ -100,7 +100,8 @@ const submitVehicleDetails = async (req, res, next) => {
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Material Load');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Material Load')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Vehicle Details', err));
         }
       }
     } catch (notifyError) {

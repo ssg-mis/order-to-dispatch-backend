@@ -1,47 +1,5 @@
 const axios = require("axios");
 
-// ================================================================
-// SEQUENTIAL MESSAGE QUEUE
-// Ensures messages are sent one-by-one across all concurrent requests
-// ================================================================
-const messageQueue = [];
-let isProcessingQueue = false;
-
-/**
- * Processes the global message queue sequentially.
- */
-const processQueue = async () => {
-    if (isProcessingQueue || messageQueue.length === 0) return;
-    isProcessingQueue = true;
-
-    while (messageQueue.length > 0) {
-        const { apiUrl, payload, headers, resolve, reject } = messageQueue.shift();
-        try {
-            const response = await axios.post(apiUrl, payload, { headers });
-
-            // Delay between messages (e.g. 800ms) to ensure "one-by-one" requirement
-            await new Promise(r => setTimeout(r, 800));
-
-            resolve(response.data);
-        } catch (error) {
-            console.error(`[WHATSAPP-QUEUE] Failed to send to ${payload.to}:`, error.response?.data || error.message);
-            reject(error);
-        }
-    }
-
-    isProcessingQueue = false;
-};
-
-/**
- * Adds a message to the global queue and returns a promise that resolves when sent.
- */
-const enqueueMessage = (apiUrl, payload, headers) => {
-    return new Promise((resolve, reject) => {
-        messageQueue.push({ apiUrl, payload, headers, resolve, reject });
-        processQueue();
-    });
-};
-
 /**
  * WhatsApp notification service using Meta WhatsApp Cloud API.
  */
@@ -177,65 +135,69 @@ const whatsappShareService = async (docDetails, pageAccessDetails = [], targetPa
         return components;
     };
 
-    let lastResponse = null;
+    // Send to all eligible recipients in parallel — one round-trip total instead of N sequential sends
+    const sendResults = await Promise.allSettled(
+        recipients
+            .filter(recipient => recipient.phone_no)
+            .map(async (recipient) => {
+                let hasModifyAccess = false;
 
-    // Loop over recipients and enqueue messages
-    for (const recipient of recipients) {
-        if (!recipient.phone_no) continue;
-
-        let hasModifyAccess = false;
-
-        // If it's a manual share (recipient.has_access is set) or targetPage is empty, skip access check
-        if (recipient.has_access || !targetPage) {
-            hasModifyAccess = true;
-        } else {
-            const normalizedTarget = targetPage.toLowerCase().trim();
-            let accessData = recipient.page_access;
-            if (typeof accessData === 'string') {
-                try { accessData = JSON.parse(accessData); }
-                catch (e) { accessData = accessData.split(',').map(s => s.trim()); }
-            }
-
-            if (Array.isArray(accessData)) {
-                hasModifyAccess = accessData.some(p => p && p.toLowerCase().trim() === normalizedTarget);
-            } else if (accessData && typeof accessData === 'object') {
-                hasModifyAccess = Object.keys(accessData).some(k =>
-                    k.toLowerCase().trim() === normalizedTarget &&
-                    accessData[k] && accessData[k].toLowerCase().trim() === 'modify'
-                );
-            }
-        }
-
-        if (hasModifyAccess) {
-            let cleanPhone = String(recipient.phone_no || '').replace(/[\s\+\-\(\)]/g, '');
-            if (cleanPhone.length === 10) cleanPhone = `91${cleanPhone}`;
-
-            try {
-                const components = buildTemplateComponents();
-                const payload = {
-                    messaging_product: "whatsapp",
-                    to: cleanPhone,
-                    type: "template",
-                    template: {
-                        name: templateName,
-                        language: { code: "en" },
-                        components
+                // If it's a manual share (recipient.has_access is set) or targetPage is empty, skip access check
+                if (recipient.has_access || !targetPage) {
+                    hasModifyAccess = true;
+                } else {
+                    const normalizedTarget = targetPage.toLowerCase().trim();
+                    let accessData = recipient.page_access;
+                    if (typeof accessData === 'string') {
+                        try { accessData = JSON.parse(accessData); }
+                        catch (e) { accessData = accessData.split(',').map(s => s.trim()); }
                     }
-                };
 
-                console.log(`[WHATSAPP] ⚡ Enqueuing "${templateName}" to "${recipient.username}" (${cleanPhone})...`);
-                console.log(`[WHATSAPP] 📤 Outgoing message payload:`, JSON.stringify(payload, null, 2));
+                    if (Array.isArray(accessData)) {
+                        hasModifyAccess = accessData.some(p => p && p.toLowerCase().trim() === normalizedTarget);
+                    } else if (accessData && typeof accessData === 'object') {
+                        hasModifyAccess = Object.keys(accessData).some(k =>
+                            k.toLowerCase().trim() === normalizedTarget &&
+                            accessData[k] && accessData[k].toLowerCase().trim() === 'modify'
+                        );
+                    }
+                }
 
-                // Use the sequential queue
-                lastResponse = await enqueueMessage(apiUrl, payload, headers);
+                if (!hasModifyAccess) return null;
 
-                console.log(`[WHATSAPP] ✅ Message sent to "${recipient.username}" (${cleanPhone})`);
-                console.log(`[WHATSAPP] 📥 Meta API response:`, JSON.stringify(lastResponse, null, 2));
-            } catch (err) {
-                console.error(`[WHATSAPP] ❌ Failed for "${recipient.username}" (${cleanPhone}):`, err.message);
-            }
-        }
-    }
+                let cleanPhone = String(recipient.phone_no || '').replace(/[\s\+\-\(\)]/g, '');
+                if (cleanPhone.length === 10) cleanPhone = `91${cleanPhone}`;
+
+                try {
+                    const components = buildTemplateComponents();
+                    const payload = {
+                        messaging_product: "whatsapp",
+                        to: cleanPhone,
+                        type: "template",
+                        template: {
+                            name: templateName,
+                            language: { code: "en" },
+                            components
+                        }
+                    };
+
+                    console.log(`[WHATSAPP] ⚡ Sending "${templateName}" to "${recipient.username}" (${cleanPhone})...`);
+                    console.log(`[WHATSAPP] 📤 Outgoing message payload:`, JSON.stringify(payload, null, 2));
+
+                    const response = await axios.post(apiUrl, payload, { headers, timeout: 10000 });
+
+                    console.log(`[WHATSAPP] ✅ Message sent to "${recipient.username}" (${cleanPhone})`);
+                    console.log(`[WHATSAPP] 📥 Meta API response:`, JSON.stringify(response.data, null, 2));
+
+                    return response.data;
+                } catch (err) {
+                    console.error(`[WHATSAPP] ❌ Failed for "${recipient.username}" (${cleanPhone}):`, err.response?.data || err.message);
+                    return null;
+                }
+            })
+    );
+
+    const lastResponse = sendResults.find(result => result.status === 'fulfilled' && result.value)?.value || null;
 
     if (DEBUG_MODE) console.log(`[WHATSAPP-DEBUG] === FINISHED NOTIFICATION PROCESS ===\n`);
     return lastResponse;

@@ -75,7 +75,8 @@ async function submitCheck(req, res) {
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Confirm Material Receipt');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Confirm Material Receipt')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Check Invoice', err));
         }
       }
     } catch (notifyError) {

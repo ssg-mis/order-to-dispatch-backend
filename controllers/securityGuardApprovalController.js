@@ -125,7 +125,8 @@ const submitApproval = async (req, res, next) => {
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Gate Out');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Gate Out')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Security Guard Approval', err));
         }
       }
     } catch (notifyError) {

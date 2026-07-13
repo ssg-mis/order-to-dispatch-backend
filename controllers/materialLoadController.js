@@ -100,7 +100,8 @@ const submitMaterialLoad = async (req, res, next) => {
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Security Guard Approval');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Security Guard Approval')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Material Load', err));
         }
       }
     } catch (notifyError) {

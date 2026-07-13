@@ -107,7 +107,8 @@ const submitPreApproval = async (req, res, next) => {
       };
 
       if (req.pageAccessDetails) {
-        await whatsappShareService(docDetails, req.pageAccessDetails, 'Approval of Order');
+        whatsappShareService(docDetails, req.pageAccessDetails, 'Approval of Order')
+          .catch((err) => Logger.warn('Failed to send WhatsApp notifications for pre-approval submission', err));
       }
     } catch (notifyError) {
       Logger.warn('Failed to send WhatsApp notifications for pre-approval submission', notifyError);

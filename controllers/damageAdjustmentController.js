@@ -75,7 +75,8 @@ async function submitAdjustment(req, res) {
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Dashboard');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Dashboard')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Damage Adjustment', err));
         }
       }
     } catch (notifyError) {

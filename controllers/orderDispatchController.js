@@ -53,8 +53,9 @@ const createOrder = async (req, res, next) => {
       if (req.pageAccessDetails) {
         Logger.info(`[WHATSAPP] Order punch notification — targetPage: "${targetPage}", totalUsers: ${req.pageAccessDetails.length}, orderNo: ${result.data.order_no}`);
         Logger.info(`[WHATSAPP] docDetails:`, JSON.stringify(docDetails));
-        await whatsappShareService(docDetails, req.pageAccessDetails, targetPage);
-        Logger.info(`[WHATSAPP] whatsappShareService call completed for order ${result.data.order_no}`);
+        whatsappShareService(docDetails, req.pageAccessDetails, targetPage)
+          .then(() => Logger.info(`[WHATSAPP] whatsappShareService call completed for order ${result.data.order_no}`))
+          .catch((err) => Logger.warn('Failed to send WhatsApp notifications for new order', err));
       } else {
         Logger.warn(`[WHATSAPP] Skipping notification — req.pageAccessDetails is not set (pageAccess middleware may not have run)`);
       }

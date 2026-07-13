@@ -115,7 +115,8 @@ const submitDispatchPlanning = async (req, res, next) => {
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Actual Dispatch');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Actual Dispatch')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Dispatch Planning', err));
         }
       }
     } catch (notifyError) {

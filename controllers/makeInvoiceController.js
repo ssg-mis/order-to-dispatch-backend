@@ -75,7 +75,8 @@ async function submitInvoice(req, res) {
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Check Invoice');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Check Invoice')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Make Invoice', err));
         }
       }
     } catch (notifyError) {

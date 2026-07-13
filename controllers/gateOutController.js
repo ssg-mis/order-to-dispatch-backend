@@ -75,7 +75,8 @@ async function submitGateOut(req, res) {
           do_number: result.data.so_no
         };
         if (req.pageAccessDetails) {
-          await whatsappShareService(docDetails, req.pageAccessDetails, 'Make Invoice');
+          whatsappShareService(docDetails, req.pageAccessDetails, 'Make Invoice')
+            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Gate Out', err));
         }
       }
     } catch (notifyError) {
