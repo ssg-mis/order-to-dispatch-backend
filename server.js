@@ -37,7 +37,7 @@ app.use(requestLogger);
 
 // ============ AUTH ============
 // Apply JWT auth to every route except the login endpoint
-const PUBLIC_PATHS = ['/api/v1/users/login'];
+const PUBLIC_PATHS = ['/api/v1/users/login', '/health'];
 app.use((req, res, next) => {
   if (PUBLIC_PATHS.includes(req.path)) return next();
   return authMiddleware(req, res, next);
