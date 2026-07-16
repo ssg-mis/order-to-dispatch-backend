@@ -10,51 +10,18 @@ class BrokerService {
   /**
    * Get all active brokers
    */
+  // v2 schema: delegate to the shared master-lookup helper.
   async getAllBrokers(params = {}) {
     try {
-      const { all, page = 1, limit = 20, search = '' } = params;
-      const isAll = all === true || all === 'true';
-      // When `all` is requested without an explicit limit, return the full set
-      // (skip LIMIT/OFFSET). Callers that pass a limit still get pagination.
-      const noLimit = isAll && params.limit === undefined;
-      const offset = (page - 1) * limit;
-      const values = [];
-
-      const conditions = ["approval_status = 'approved'"];
-      if (!isAll) conditions.push("status = 'Active'");
-      if (search) {
-        values.push(`%${search}%`);
-        conditions.push(`(salesman_name ILIKE $${values.length} OR broker_id ILIKE $${values.length} OR depot_name ILIKE $${values.length} OR email_id ILIKE $${values.length})`);
-      }
-      const whereClause = " WHERE " + conditions.join(" AND ");
-
-      // Get count
-      const countQuery = `SELECT COUNT(*) FROM broker_details ${whereClause}`;
-      const countResult = await pool.query(countQuery, values);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get paginated data
-      let query = `
-        SELECT broker_id, salesman_name, status, email_id, mobile_no, depot_name, depot_id,
-               (pending_changes IS NOT NULL) AS has_pending_edit
-        FROM broker_details
-        ${whereClause}
-        ORDER BY salesman_name ASC
-        ${noLimit ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
-      `;
-
-      if (!noLimit) values.push(limit, offset);
-      const result = await pool.query(query, values);
-      
-      Logger.info(`Fetched ${result.rows.length} brokers (total: ${total}, search: "${search}")`);
-      return {
-        brokers: result.rows,
-        pagination: {
-          total,
-          page: parseInt(page),
-          limit: parseInt(limit)
-        }
-      };
+      const { masterLookup } = require('./masterLookupHelper');
+      const { schema } = require('../config/db-v2.ts');
+      const { rows, total } = await masterLookup(schema.brokers, {
+        nameColumn: 'brokerName',
+        searchColumns: ['brokerName', 'brokerCode', 'mobileNo', 'emailId'],
+        ...params,
+      });
+      Logger.info(`Fetched ${rows.length} brokers (total: ${total})`);
+      return { brokers: rows, pagination: { total, page: parseInt(params.page) || 1, limit: parseInt(params.limit) || total } };
     } catch (error) {
       Logger.error('Error fetching brokers:', error);
       throw error;

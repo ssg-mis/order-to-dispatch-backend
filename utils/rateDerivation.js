@@ -6,7 +6,12 @@
  * the sku_rate formulas and sku_selling_price landing cost formula.
  */
 
-const db = require('../config/db');
+// v2: sku_rate / sku_selling_price are the reference tables pulled into the
+// normalized schema, so this reads from the Drizzle client (local v2 DB), not
+// the legacy raw-pg RDS pool. drizzle's .execute() returns { rows } just like
+// node-postgres, so the row-shaped logic below is unchanged.
+const { dbV2 } = require('../config/db-v2.ts');
+const { sql } = require('drizzle-orm');
 const Logger = require('./logger');
 
 /**
@@ -234,8 +239,8 @@ async function deriveRatesForRegularOrder(productName, rateOfMaterial) {
 
     // 1. Fetch sku_rate and sku_selling_price data
     const [skuRateResult, sellingPriceResult] = await Promise.all([
-      db.query('SELECT id, sku, rate, formula FROM sku_rate ORDER BY id ASC'),
-      db.query('SELECT * FROM sku_selling_price ORDER BY id ASC')
+      dbV2.execute(sql`SELECT id, sku, rate, formula FROM sku_rate ORDER BY id ASC`),
+      dbV2.execute(sql`SELECT * FROM sku_selling_price ORDER BY id ASC`)
     ]);
 
     const skuRates = skuRateResult.rows;
@@ -345,8 +350,8 @@ async function deriveConsolidatedRatesForGroup(products) {
 
     // 1. Fetch reference data
     const [skuRateResult, sellingPriceResult] = await Promise.all([
-      db.query('SELECT id, sku, rate, formula FROM sku_rate ORDER BY id ASC'),
-      db.query('SELECT * FROM sku_selling_price ORDER BY id ASC')
+      dbV2.execute(sql`SELECT id, sku, rate, formula FROM sku_rate ORDER BY id ASC`),
+      dbV2.execute(sql`SELECT * FROM sku_selling_price ORDER BY id ASC`)
     ]);
 
     const skuRates = skuRateResult.rows;
@@ -433,8 +438,8 @@ async function deriveConsolidatedRatesForGroup(products) {
 
     // 1. Fetch reference data
     const [skuRateResult, sellingPriceResult] = await Promise.all([
-      db.query('SELECT id, sku, rate, formula FROM sku_rate ORDER BY id ASC'),
-      db.query('SELECT * FROM sku_selling_price ORDER BY id ASC')
+      dbV2.execute(sql`SELECT id, sku, rate, formula FROM sku_rate ORDER BY id ASC`),
+      dbV2.execute(sql`SELECT * FROM sku_selling_price ORDER BY id ASC`)
     ]);
 
     const skuRates = skuRateResult.rows;

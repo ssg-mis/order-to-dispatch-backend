@@ -1,545 +1,281 @@
 /**
- * Order Approval Service
- * Business logic for order approval management (Stage 3: Approval)
- * Conditions:
- * - Pending: planned_2 IS NOT NULL AND actual_2 IS NULL
- * - History: planned_2 IS NOT NULL AND actual_2 IS NOT NULL
+ * Order Approval Service (Gate 2: Approval of Order) — v2 schema.
+ *
+ * Per ORDER ITEM, mirroring Pre-Approval: the pending/history lists and the
+ * submit all key off the `order_approvals` gate (one row per order_item,
+ * seeded at Order Punch for regular orders or at Pre-Approval for pre-approval
+ * orders).
+ *   - Pending  : order_approvals.planned_at IS NOT NULL AND actual_at IS NULL
+ *   - History  : order_approvals.planned_at IS NOT NULL AND actual_at IS NOT NULL
+ *
+ * Submitting records the six-point checklist on the gate, stamps actual_at, and
+ * — only when APPROVED — queues the next gate (dispatch_plannings). A rejection
+ * closes the gate without advancing.
+ *
+ * Stock Transfer approvals skip Dispatch Planning: they close a dispatch_plannings
+ * row immediately and mint the shipment straight into Actual Dispatch (see the
+ * isApproved branch in submitApproval).
+ *
+ * Reliance rejection → revert commitment: a reject for a "Reliance" customer
+ * deletes the order's commitment_details row, restoring the drawn MT to the
+ * commitment balance (no-op for plain punched orders). Wired with the Commitment
+ * Punch migration.
  */
 
-const db = require('../config/db');
 const { Logger } = require('../utils');
-const { buildSearchCondition } = require('../utils/searchUtils');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq, and, isNull, isNotNull, sql, asc, desc } = require('drizzle-orm');
+const { getPlannedAt, mintDsr } = require('./stageUtils');
+
+const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
 
 class OrderApprovalService {
-  /**
-   * Get all fields for order approval
-   * @returns {string} Comma-separated field names
-   */
-  getApprovalFields() {
-    return `
-      id, timestamp_created, order_no, order_type_delivery_purpose,
-      start_date, end_date, delivery_date, order_type, customer_type,
-      party_so_date, customer_name, product_name, uom, order_quantity,
-      rate_of_material, alternate_uom, alternate_qty_kg, oil_type,
-      rate_per_15kg, rate_per_ltr, total_amount_with_gst,
-      type_of_transporting, customer_contact_person_name,
-      customer_contact_person_whatsapp_no, customer_address,
-      payment_terms, advance_payment_to_be_taken, advance_amount,
-      is_order_through_broker, broker_name, is_order_through, upload_copy AS upload_so, depo_name,
-      planned_1, actual_1, delay_1, sku_name, approval_qty,
-      take_required_rates_each_item, order_punch_remarks, final_rate,
-      planned_2, actual_2, delay_2,
-      rate_is_rightly_as_per_current_market_rate,
-      we_are_dealing_in_ordered_sku, party_credit_status,
-      dispatch_date_confirmed, overall_status_of_order,
-      order_confirmation_with_customer,
-      planned_3, actual_3, delay_3, created_at, order_category
-    `.replace(/\s+/g, ' ').trim();
-  }
-
-  /**
-   * Get pending approval orders
-   * Pending: planned_2 IS NOT NULL AND actual_2 IS NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} Pending orders
-   */
   async getPendingApprovals(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 10;
-      const offset = (page - 1) * limit;
-
-      let whereConditions = ['planned_2 IS NOT NULL', 'actual_2 IS NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Base DO Expression for grouping
-      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
-
-      // DO Number search only
-      if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no'], filters.search, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      }
-
-      if (filters.customer_name) {
-        whereConditions.push(`customer_name = $${paramIndex}`);
-        queryParams.push(filters.customer_name);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count unique Groups (Base DOs)
-      const countQuery = `SELECT COUNT(DISTINCT ${baseDoExp}) as count FROM order_dispatch ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get paginated Base DOs
-      const groupQuery = `
-        SELECT ${baseDoExp} as base_do, MIN(created_at) as sort_date
-        FROM order_dispatch
-        ${whereClause}
-        GROUP BY base_do
-        ORDER BY sort_date DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
-      const baseDos = groupResult.rows.map(r => r.base_do);
-
-      if (baseDos.length === 0) {
-        return {
-          success: true,
-          data: [],
-          pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
-        };
-      }
-
-      // Fetch all rows for these Base DOs
-      // Re-create where conditions with shifted indices because $1 is now reserved for baseDos.
-      // Mirror the search clause exactly (same columns/order) so param positions line up with
-      // the values already bound in queryParams below — otherwise a base DO that only matches
-      // via the space-stripped search would be counted/paginated but its rows silently dropped here.
-      let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
-      let dataParamIndex = 2;
-
-      if (filters.search) {
-        const { clause: dsClause, newIndex: dsIdx } = buildSearchCondition(['order_no'], filters.search, dataParamIndex);
-        dataWhereConditions.push(dsClause);
-        dataParamIndex = dsIdx;
-      }
-      if (filters.customer_name) {
-        dataWhereConditions.push(`customer_name = $${dataParamIndex}`);
-        dataParamIndex++;
-      }
-
-      const fields = this.getApprovalFields();
-      const dataQuery = `
-        SELECT ${fields}
-        FROM order_dispatch
-        WHERE ${dataWhereConditions.join(' AND ')}
-        AND planned_2 IS NOT NULL AND actual_2 IS NULL
-        ORDER BY created_at DESC, order_no ASC
-      `;
-
-      const dataResult = await db.query(dataQuery, [baseDos, ...queryParams]);
-
-      Logger.info(`Fetched ${dataResult.rows.length} rows for ${baseDos.length} pending approval base DOs`);
-
-      return {
-        success: true,
-        data: dataResult.rows,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching pending approvals', error);
-      throw new Error('Failed to fetch pending approvals');
-    }
+    return this._listApproval({ ...filters, ...pagination, open: true });
   }
 
-  /**
-   * Get approval history
-   * History: planned_2 IS NOT NULL AND actual_2 IS NOT NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} History orders
-   */
   async getApprovalHistory(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 10;
-      const offset = (page - 1) * limit;
-
-      let whereConditions = ['planned_2 IS NOT NULL', 'actual_2 IS NOT NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Base DO Expression for grouping
-      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
-
-      // DO Number search only
-      if (filters.search) {
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no'], filters.search, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      }
-
-      if (filters.customer_name) {
-        whereConditions.push(`customer_name = $${paramIndex}`);
-        queryParams.push(filters.customer_name);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count unique Groups
-      const countQuery = `SELECT COUNT(DISTINCT ${baseDoExp}) as count FROM order_dispatch ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get paginated Base DOs
-      const groupQuery = `
-        SELECT ${baseDoExp} as base_do, MAX(actual_2) as last_action_date
-        FROM order_dispatch
-        ${whereClause}
-        GROUP BY base_do
-        ORDER BY last_action_date DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
-      const baseDos = groupResult.rows.map(r => r.base_do);
-
-      if (baseDos.length === 0) {
-        return {
-          success: true,
-          data: [],
-          pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
-        };
-      }
-
-      // Fetch all rows for these Base DOs
-      // Re-create where conditions with shifted indices. Mirror the search clause exactly
-      // (same columns/order) so param positions line up with the values already bound in
-      // queryParams below — otherwise a base DO that only matches via the space-stripped
-      // search would be counted/paginated but its rows silently dropped here.
-      let dataWhereConditions = [`${baseDoExp} = ANY($1)`];
-      let dataParamIndex = 2;
-
-      if (filters.search) {
-        const { clause: dsClause, newIndex: dsIdx } = buildSearchCondition(['order_no'], filters.search, dataParamIndex);
-        dataWhereConditions.push(dsClause);
-        dataParamIndex = dsIdx;
-      }
-      if (filters.customer_name) {
-        dataWhereConditions.push(`customer_name = $${dataParamIndex}`);
-        dataParamIndex++;
-      }
-
-      const fields = this.getApprovalFields();
-      const dataQuery = `
-        SELECT ${fields}
-        FROM order_dispatch
-        WHERE ${dataWhereConditions.join(' AND ')}
-        AND planned_2 IS NOT NULL AND actual_2 IS NOT NULL
-        ORDER BY actual_2 DESC, order_no ASC
-      `;
-
-      const dataResult = await db.query(dataQuery, [baseDos, ...queryParams]);
-
-      Logger.info(`Fetched ${dataResult.rows.length} rows for ${baseDos.length} approval history base DOs`);
-
-      return {
-        success: true,
-        data: dataResult.rows,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching approval history', error);
-      throw new Error('Failed to fetch approval history');
-    }
+    return this._listApproval({ ...filters, ...pagination, open: false });
   }
 
-  /**
-   * Submit approval (set actual_2 to current timestamp)
-   * @param {number} id - Order ID
-   * @param {Object} data - Optional additional data to update
-   * @returns {Promise<Object>} Updated order
-   */
-  async submitApproval(id, data = {}) {
-    const client = await db.getClient();
+  async _listApproval({ open, page = 1, limit = 25, order_no, customer_name, start_date, end_date }) {
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 25;
 
-    try {
-      await client.query('BEGIN');
-      Logger.info(`submitApproval called for ID: ${id}`, { data });
-
-      // Concurrency guard: lock the order row so simultaneous approval
-      // submissions serialize instead of both running. If the order was
-      // already approved/rejected (actual_2 set), abort — otherwise the
-      // second run re-stamps the stage flags and, for Stock Transfer orders,
-      // inserts a duplicate DSR row into lift_receiving_confirmation
-      // (the "shows 2x in actual dispatch" bug).
-      const lockRes = await client.query(
-        'SELECT planned_2, actual_2 FROM order_dispatch WHERE id = $1 FOR UPDATE',
-        [id]
-      );
-      if (lockRes.rows.length === 0) {
-        throw new Error('Order not found');
-      }
-      if (lockRes.rows[0].actual_2 !== null) {
-        await client.query('ROLLBACK');
-        Logger.warn(`[DUPLICATE APPROVAL] Order ID ${id} already approved (actual_2 set) — ignoring duplicate submission`);
-        return {
-          success: false,
-          alreadyProcessed: true,
-          message: 'Order has already been approved',
-        };
-      }
-      // Stale-write guard: the row must STILL be pending at Approval of Order
-      // (planned_2 set, actual_2 null). planned_2 is cleared when an order is reverted
-      // back to Pre-Approval from a later stage, so a stale Approval screen could
-      // otherwise re-approve an order that has already moved backwards. Reject it.
-      if (lockRes.rows[0].planned_2 === null) {
-        // Throw only — the catch below owns the ROLLBACK. (The alreadyProcessed branch
-        // above rolls back explicitly because it RETURNS instead of throwing.)
-        Logger.warn(`[STALE APPROVAL] Order ID ${id} is no longer awaiting Approval (planned_2 null) — rejecting stale submission`);
-        const conflict = new Error('This order is no longer awaiting Approval of Order — it was already processed or moved by another user. Please refresh and try again.');
-        conflict.statusCode = 409;
-        conflict.code = 'STALE_WRITE';
-        throw conflict;
-      }
-
-      await this.disablePlanned3Trigger(client);
-      const planned3 = await this.getPlannedTimestamp(client, 'Dispatch Planning');
-
-      const updateData = {
-        ...data,
-        actual_2: new Date().toISOString(),
-        planned_3: planned3,
-        order_approval_user: data.user_id || null,
-      };
-
-      // Remove username/user_id/remark from data to avoid column errors
-      if (updateData.username) delete updateData.username;
-      if (updateData.user_id !== undefined) delete updateData.user_id;
-      if (updateData.remark !== undefined) delete updateData.remark;
-
-      const fields = Object.keys(updateData);
-      const values = Object.values(updateData);
-      const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-
-      const approvalFields = this.getApprovalFields();
-      const updateQuery = `
-        UPDATE order_dispatch 
-        SET ${setClause}
-        WHERE id = $${fields.length + 1}
-        RETURNING ${approvalFields}
-      `;
-
-      const updateResult = await client.query(updateQuery, [...values, id]);
-
-      if (updateResult.rows.length === 0) {
-        throw new Error('Order not found');
-      }
-
-      let updatedOrder = updateResult.rows[0];
-
-      // REJECTION REVERSAL LOGIC:
-      // If order is rejected and customer is "Reliance", remove the deduction from commitment_details
-      const isRejected = updatedOrder.overall_status_of_order === false || updatedOrder.overall_status_of_order === 'false';
-      const isReliance = updatedOrder.customer_name && updatedOrder.customer_name.toLowerCase().includes('reliance');
-
-      if (isRejected && isReliance) {
-        Logger.info(`[REJECTION REVERSAL] Order ${updatedOrder.order_no} for Reliance rejected. Reverting commitment quantity.`);
-        
-        // Deleting from commitment_details reverts PO Raised (MT) and Remaining Balance (MT)
-        const deleteCdQuery = `DELETE FROM commitment_details WHERE order_no = $1`;
-        await client.query(deleteCdQuery, [updatedOrder.order_no]);
-        
-        Logger.info(`[REJECTION REVERSAL] Successfully deleted commitment_details record for order: ${updatedOrder.order_no}`);
-      }
-
-      // SKIP STAGE 4 logic:
-      // Only skip Dispatch Planning (Stage 4) if order_category is 'Stock Transfer'
-      // All other categories (Sales, null, etc.) follow the normal process
-      const isStockTransfer = updatedOrder.order_category &&
-        updatedOrder.order_category.toLowerCase().trim() === 'stock transfer';
-
-      if (
-        (updatedOrder.overall_status_of_order === true || updatedOrder.overall_status_of_order === 'true') &&
-        isStockTransfer
-      ) {
-        Logger.info(`[SKIP STAGE 4] Stock Transfer order approved. Moving directly to Actual Dispatch for ID: ${id}`);
-
-        const qtyToDispatch = updatedOrder.remaining_dispatch_qty || updatedOrder.approval_qty || updatedOrder.order_quantity || 0;
-
-        // 1. Mark Stage 4 as completed and keep planned_3 NULL manually as requested by USER
-        // And set remaining_dispatch_qty to 0 as requested by USER
-        const stage4SkipQuery = `
-          UPDATE order_dispatch 
-          SET 
-            planned_3 = NULL,
-            actual_3 = NOW(),
-            remaining_dispatch_qty = 0
-          WHERE id = $1
-          RETURNING *
-        `;
-        const skipResult = await client.query(stage4SkipQuery, [id]);
-        const finalOrder = skipResult.rows[0];
-
-        // 2. Insert into lift_receiving_confirmation (Stage 5 trigger)
-        // Generate DSR number
-        const seqQuery = "SELECT nextval('dsr_number_seq') as val";
-        const seqResult = await client.query(seqQuery);
-        const dsrCount = seqResult.rows[0].val;
-        const dsrNumber = `DSR-${String(dsrCount).padStart(3, '0')}`;
-
-        const insertLrcQuery = `
-          INSERT INTO lift_receiving_confirmation (
-            timestamp, d_sr_number, so_no, party_name, 
-            product_name, qty_to_be_dispatched, 
-            type_of_transporting, dispatch_from, processid
-          ) VALUES (
-            NOW(), $1, $2, $3, $4, $5, $6, $7, $8
-          ) RETURNING *
-        `;
-
-        const insertParams = [
-          dsrNumber,
-          finalOrder.order_no,
-          finalOrder.customer_name,
-          finalOrder.product_name,
-          qtyToDispatch,
-          finalOrder.type_of_transporting,
-          data.dispatch_from || null,
-          finalOrder.processid || data.processid || null
-        ];
-
-        await client.query(insertLrcQuery, insertParams);
-
-        Logger.info(`[SKIP STAGE 4] Successfully mapped to Actual Dispatch (LRC) with DSR: ${dsrNumber}`);
-
-        await client.query('COMMIT');
-
-        return {
-          success: true,
-          message: 'Approval submitted and moved to Actual Dispatch (Stage 4 skipped - Stock Transfer)',
-          data: finalOrder
-        };
-      }
-
-      const isApproved = updatedOrder.overall_status_of_order === true ||
-        String(updatedOrder.overall_status_of_order).toLowerCase().trim() === 'true' ||
-        String(updatedOrder.overall_status_of_order).toLowerCase().trim() === 'approved' ||
-        String(updatedOrder.overall_status_of_order).toLowerCase().trim() === 'approve';
-      const planned3Result = await client.query(
-        `UPDATE order_dispatch SET planned_3 = $1 WHERE id = $2 RETURNING ${approvalFields}`,
-        [isApproved ? planned3 : null, id]
-      );
-      updatedOrder = planned3Result.rows[0] || updatedOrder;
-
-      // Normal process: commit Stage 3 update, order goes to Dispatch Planning (Stage 4)
-      await client.query('COMMIT');
-
-      return {
-        success: true,
-        message: 'Approval submitted successfully',
-        data: updatedOrder
-      };
-
-    } catch (error) {
-      await client.query('ROLLBACK');
-      Logger.error('Error in submitApproval', error);
-      throw error;
-    } finally {
-      client.release();
+    const conditions = [
+      isNotNull(schema.orderApprovals.plannedAt),
+      open ? isNull(schema.orderApprovals.actualAt) : isNotNull(schema.orderApprovals.actualAt),
+    ];
+    // DO-number box also matches customer name (mirrors Pre-Approval's search).
+    if (order_no) {
+      conditions.push(sql`(${schema.orders.orderNo} ILIKE ${'%' + order_no + '%'} OR ${schema.customers.customerName} ILIKE ${'%' + order_no + '%'})`);
+    } else if (customer_name) {
+      conditions.push(sql`${schema.customers.customerName} ILIKE ${'%' + customer_name + '%'}`);
     }
-  }
+    if (start_date && end_date) {
+      conditions.push(sql`${schema.orders.deliveryDate} BETWEEN ${start_date} AND ${end_date}`);
+    }
+    const where = and(...conditions);
 
-  async getPlannedTimestamp(client, stageName) {
-    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const normalizedStageName = normalizeStageName(stageName);
-    const stageAliases = {
-      dispatchplanning: ['dispatchplanning', 'dispatchplaning'],
+    const [{ count }] = await dbV2
+      .select({ count: sql`count(*)::int` })
+      .from(schema.orderApprovals)
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.orderApprovals.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .where(where);
+
+    const rows = await dbV2
+      .select({
+        orderApprovalId: schema.orderApprovals.id,
+        plannedAt: schema.orderApprovals.plannedAt,
+        actualAt: schema.orderApprovals.actualAt,
+        overallStatus: schema.orderApprovals.overallStatus,
+        rateIsRightlyAsPerCurrentMarketRate: schema.orderApprovals.rateIsRightlyAsPerCurrentMarketRate,
+        weAreDealingInOrderedSku: schema.orderApprovals.weAreDealingInOrderedSku,
+        partyCreditStatus: schema.orderApprovals.partyCreditStatus,
+        dispatchDateConfirmed: schema.orderApprovals.dispatchDateConfirmed,
+        orderConfirmationWithCustomer: schema.orderApprovals.orderConfirmationWithCustomer,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+      })
+      .from(schema.orderApprovals)
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.orderApprovals.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .where(where)
+      .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.orderApprovals.actualAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    return {
+      success: true,
+      data: rows,
+      pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) },
     };
-    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
-
-    const result = await client.query(
-      `
-        SELECT (
-          CURRENT_TIMESTAMP + COALESCE(
-            (
-              SELECT stage_time
-              FROM process_stages
-              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
-              ORDER BY submitted_at DESC, id DESC
-              LIMIT 1
-            ),
-            INTERVAL '0'
-          )
-        ) AS planned_at
-      `,
-      [normalizedStageNames]
-    );
-
-    const plannedAt = result.rows[0]?.planned_at;
-    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
-  }
-
-  async disablePlanned3Trigger(client) {
-    await client.query(`DROP TRIGGER IF EXISTS trg_set_planned_3 ON order_dispatch`);
   }
 
   /**
-   * Get approval by order ID
-   * @param {number} id - Order ID
-   * @returns {Promise<Object>} Order details
+   * Fetch one pending/closed order-approval row by its order_item id.
    */
-  async getApprovalById(id) {
-    try {
-      const fields = this.getApprovalFields();
-      const query = `
-        SELECT ${fields}
-        FROM order_dispatch 
-        WHERE id = $1
-      `;
+  async getApprovalById(orderItemId) {
+    const [row] = await dbV2
+      .select({
+        orderApprovalId: schema.orderApprovals.id,
+        plannedAt: schema.orderApprovals.plannedAt,
+        actualAt: schema.orderApprovals.actualAt,
+        overallStatus: schema.orderApprovals.overallStatus,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+      })
+      .from(schema.orderApprovals)
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.orderApprovals.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .where(eq(schema.orderApprovals.orderItemId, orderItemId));
 
-      const result = await db.query(query, [id]);
+    if (!row) throw new Error('Order approval not found');
+    return { success: true, data: row };
+  }
 
-      if (result.rows.length === 0) {
-        throw new Error('Order not found');
+  /**
+   * Submit Order Approval (gate 2) for one order_item.
+   *
+   * @param {number} orderItemId
+   * @param {Object} data
+   *   - overallStatus:  boolean|string  approve/reject decision (frontend already
+   *                     folds "any checklist item rejected" into this).
+   *   - rateIsRightlyAsPerCurrentMarketRate, weAreDealingInOrderedSku,
+   *     dispatchDateConfirmed, orderConfirmationWithCustomer: booleans
+   *   - partyCreditStatus: boolean|string (stored as text)
+   *   - processId: string|null  Manual Sauda No. -> orders.process_id
+   *   - userId: number|null      -> order_approvals.approved_by_user_id
+   */
+  async submitApproval(orderItemId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ item: schema.orderItems, order: schema.orders, customerName: schema.customers.customerName })
+        .from(schema.orderItems)
+        .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+        .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+        .where(eq(schema.orderItems.id, orderItemId));
+
+      if (!current) throw new Error('Order item not found');
+
+      // Same truthiness normalization as the reference: the real values seen in
+      // data are 'true'/'false'/'Approved'/'Cancelled'.
+      const norm = String(data.overallStatus ?? '').toLowerCase().trim();
+      const isApproved =
+        data.overallStatus === true || norm === 'true' || norm === 'approved' || norm === 'approve';
+
+      const toBool = (v) => v === true || String(v).toLowerCase().trim() === 'true';
+
+      // Stale-write guard: only close a gate still open (planned_at set,
+      // actual_at null). No-op on the happy path; fires on a stale/duplicate
+      // submit or one reverted to an earlier stage. Storing overallStatus as
+      // 'true'/'false' matches the backfilled values.
+      const closedGate = await tx
+        .update(schema.orderApprovals)
+        .set({
+          actualAt: new Date(),
+          overallStatus: data.overallStatus != null ? String(data.overallStatus) : (isApproved ? 'true' : 'false'),
+          rateIsRightlyAsPerCurrentMarketRate: toBool(data.rateIsRightlyAsPerCurrentMarketRate),
+          weAreDealingInOrderedSku: toBool(data.weAreDealingInOrderedSku),
+          partyCreditStatus: data.partyCreditStatus != null ? String(data.partyCreditStatus) : null,
+          dispatchDateConfirmed: toBool(data.dispatchDateConfirmed),
+          orderConfirmationWithCustomer: toBool(data.orderConfirmationWithCustomer),
+          approvedByUserId: data.userId ?? null,
+        })
+        .where(and(
+          eq(schema.orderApprovals.orderItemId, orderItemId),
+          isNotNull(schema.orderApprovals.plannedAt),
+          isNull(schema.orderApprovals.actualAt),
+        ))
+        .returning();
+      assertStageOpen({ rowCount: closedGate.length }, 'Approval of Order');
+
+      // Manual Sauda No. is captured at this gate; it lives on the order header.
+      if (data.processId != null && data.processId !== '') {
+        await tx.update(schema.orders).set({ processId: String(data.processId) }).where(eq(schema.orders.id, current.item.orderId));
       }
 
+      // Honor the schema's "approved_qty set at order-approval" intent for
+      // regular orders that skipped Pre-Approval (approved_qty still null there).
+      // Only-if-null keeps it a no-op for pre-approval orders, which set it earlier.
+      const itemPatch = {};
+      if (current.item.approvedQty == null && current.item.orderQuantity != null) {
+        itemPatch.approvedQty = current.item.orderQuantity;
+        if (current.item.remainingQty == null) itemPatch.remainingQty = current.item.orderQuantity;
+      }
+      if (Object.keys(itemPatch).length > 0) {
+        await tx.update(schema.orderItems).set(itemPatch).where(eq(schema.orderItems.id, orderItemId));
+      }
+
+      // Reliance rejection → revert the commitment raise: deleting the
+      // commitment_details row restores the drawn MT to the commitment balance
+      // (a commitment-sourced order; a plain punched order has no such row → no-op).
+      if (!isApproved && (current.customerName || '').toLowerCase().includes('reliance')) {
+        const del = await tx.delete(schema.commitmentDetails).where(eq(schema.commitmentDetails.orderItemId, orderItemId)).returning();
+        if (del.length) Logger.info(`[REJECTION REVERSAL] Reliance order_item ${orderItemId} rejected — reverted ${del.length} commitment raise(s)`);
+      }
+
+      // Advance only on approval. A rejection closes the gate and stops here.
+      let advanced = false;
+      if (isApproved) {
+        const isStockTransfer = (current.order.orderCategory || '').toLowerCase().trim() === 'stock transfer';
+        if (isStockTransfer) {
+          // Stock Transfer skips Dispatch Planning: the whole approved qty ships
+          // in one go. Record a CLOSED dispatch_plannings row (shows in DP history,
+          // not pending), zero the remaining, and mint the shipment straight into
+          // Actual Dispatch.
+          const now = new Date();
+          const dpPlannedAt = await getPlannedAt(tx, 'Dispatch Planning');
+          await tx.insert(schema.dispatchPlannings).values({
+            orderItemId, plannedAt: dpPlannedAt, actualAt: now, performedByUserId: data.userId ?? null,
+          });
+
+          const shipQty = toNum(current.item.remainingQty) ?? toNum(current.item.approvedQty) ?? toNum(current.item.orderQuantity) ?? 0;
+          const dsrNumber = await mintDsr(tx);
+          const shipmentPlannedAt = await getPlannedAt(tx, 'Actual Dispatch');
+          await tx.insert(schema.dispatches).values({
+            orderItemId, dsrNumber, plannedAt: shipmentPlannedAt, qtyToBeDispatched: shipQty, isTransfer: true,
+          });
+          await tx.update(schema.orderItems).set({ remainingQty: 0 }).where(eq(schema.orderItems.id, orderItemId));
+          Logger.info(`[STOCK TRANSFER] order_item ${orderItemId} skipped Dispatch Planning -> shipment ${dsrNumber} (qty ${shipQty})`);
+        } else {
+          const nextPlannedAt = await getPlannedAt(tx, 'Dispatch Planning');
+          await tx.insert(schema.dispatchPlannings).values({ orderItemId, plannedAt: nextPlannedAt });
+        }
+        advanced = true;
+      }
+
+      const [refreshedItem] = await tx
+        .select()
+        .from(schema.orderItems)
+        .where(eq(schema.orderItems.id, orderItemId));
+
+      Logger.info(
+        `Order approval submitted for order_item ${orderItemId} — ${isApproved ? 'approved (queued Dispatch Planning)' : 'rejected'}`
+      );
       return {
         success: true,
-        data: result.rows[0]
+        message: isApproved ? 'Approval submitted successfully' : 'Order rejected',
+        data: { orderItem: refreshedItem, orderApproval: closedGate[0], advanced },
       };
-    } catch (error) {
-      Logger.error('Error fetching approval by ID', error);
-      throw error;
-    }
+    });
   }
 
   /**
-   * Get dynamic filter options for Approval stage
-   * @returns {Promise<Object>} Unique filter values
+   * Distinct customer names among pending approvals (filter dropdown).
    */
   async getFilterOptions() {
-    try {
-      // Get unique customer names from pending approvals
-      const query = `
-        SELECT DISTINCT customer_name 
-        FROM order_dispatch 
-        WHERE planned_2 IS NOT NULL AND actual_2 IS NULL
-        ORDER BY customer_name ASC
-      `;
-      const result = await db.query(query);
-      
-      return {
-        success: true,
-        data: {
-          customerNames: result.rows.map(r => r.customer_name).filter(Boolean)
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching filter options for approval', error);
-      throw new Error('Failed to fetch filter options');
-    }
+    const rows = await dbV2
+      .selectDistinct({ customerName: schema.customers.customerName })
+      .from(schema.orderApprovals)
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.orderApprovals.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .innerJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .where(and(
+        isNotNull(schema.orderApprovals.plannedAt),
+        isNull(schema.orderApprovals.actualAt),
+      ))
+      .orderBy(asc(schema.customers.customerName));
+
+    return {
+      success: true,
+      data: { customerNames: rows.map((r) => r.customerName).filter(Boolean) },
+    };
   }
 }
 

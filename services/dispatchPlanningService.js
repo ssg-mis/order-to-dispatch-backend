@@ -1,867 +1,450 @@
 /**
- * Dispatch Planning Service
- * Business logic for dispatch planning management (Stage 4: Dispatch Planning)
- * Conditions:
- * - Pending: planned_3 IS NOT NULL AND actual_3 IS NULL
- * - History: planned_3 IS NOT NULL AND actual_3 IS NOT NULL
+ * Dispatch Planning Service (Gate 3: Dispatch Planning) — v2 schema.
+ *
+ * Per ORDER ITEM, keyed off the `dispatch_plannings` gate (seeded when the item
+ * is approved at Order Approval).
+ *   - Pending : dispatch_plannings.planned_at IS NOT NULL AND actual_at IS NULL
+ *   - History : dispatch_plannings.planned_at IS NOT NULL AND actual_at IS NOT NULL
+ *
+ * Planning a dispatch mints a DSR and creates a `dispatches` row (the physical
+ * shipment, born pending at Actual Dispatch) and draws the qty down from
+ * order_items.remaining_qty. An item can be planned across MANY shipments; the
+ * gate stays open until remaining_qty hits 0, then it closes (actual_at set).
+ *
+ * Every mutating op locks the order_item row FOR UPDATE first, so concurrent
+ * submit / revert / cancel / preclose on the same item serialize (no double
+ * draw-down, no shipment-created-after-cancel races).
  */
 
-const db = require('../config/db');
-const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
-const { deriveRatesForRegularOrder, deriveConsolidatedRatesForGroup, detectOilType } = require('../utils/rateDerivation');
-const { buildSearchCondition } = require('../utils/searchUtils');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { getPlannedAt, mintDsr } = require('./stageUtils');
+const { deriveConsolidatedRatesForGroup, deriveRatesForRegularOrder, detectOilType } = require('../utils/rateDerivation');
+
+const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
+
+function staleWrite() {
+  const err = new Error('This item is no longer in Dispatch Planning — it was already processed or moved by another user. Please refresh and try again.');
+  err.statusCode = 409;
+  err.code = 'STALE_WRITE';
+  return err;
+}
 
 class DispatchPlanningService {
-  /**
-   * Get pending dispatch planning orders from order_dispatch table
-   * Pending: planned_3 IS NOT NULL AND actual_3 IS NULL
-   * @param {Object} filters - Filteinr parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} Pending orders
-   */
   async getPendingDispatches(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 10;
-      const offset = (page - 1) * limit;
-
-      let whereConditions = ['planned_3 IS NOT NULL', 'actual_3 IS NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Add optional filters
-      if (filters.order_no) {
-        // DO Number search only
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no'], filters.order_no, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      } else if (filters.customer_name) {
-        whereConditions.push(`customer_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.customer_name}%`);
-        paramIndex++;
-      }
-
-      if (filters.start_date && filters.end_date) {
-        whereConditions.push(`delivery_date BETWEEN $${paramIndex} AND $${paramIndex + 1}`);
-        queryParams.push(filters.start_date, filters.end_date);
-        paramIndex += 2;
-      }
-
-      if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        if (filters.depo_names.length === 0) {
-          whereConditions.push('1=0');
-        } else {
-          whereConditions.push(`depo_name = ANY($${paramIndex})`);
-          queryParams.push(filters.depo_names);
-          paramIndex++;
-        }
-      }
-
-      if (filters.manual_sauda_no) {
-        whereConditions.push(`processid ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.manual_sauda_no}%`);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Unified Base DO Expression for grouping (e.g. extracts DO-657 from DO-657D)
-      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
-
-      // Count total (Unique Base Order Numbers)
-      const countQuery = `SELECT COUNT(DISTINCT ${baseDoExp}) FROM order_dispatch ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data (Paginated by Base Order Groups)
-      const dataQuery = `
-        WITH paginated_dos AS (
-          SELECT 
-            ${baseDoExp} as base_do, 
-            MIN(created_at) as sort_date
-          FROM order_dispatch
-          ${whereClause}
-          GROUP BY base_do
-          ORDER BY sort_date DESC
-          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-        )
-        SELECT *,
-          -- Slip Status: has any OTHER line item under this base DO already been dispatch-planned (qty already drawn down)?
-          EXISTS(
-            SELECT 1 FROM order_dispatch sib
-            WHERE COALESCE(substring(sib.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), sib.order_no)
-                = COALESCE(substring(order_dispatch.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_dispatch.order_no)
-              AND sib.id <> order_dispatch.id
-              AND sib.remaining_dispatch_qty IS DISTINCT FROM sib.order_quantity
-          ) as has_prior_dispatch
-        FROM order_dispatch
-        WHERE ${baseDoExp} IN (SELECT base_do FROM paginated_dos)
-        AND id IN (
-          SELECT id 
-          FROM order_dispatch 
-          ${whereClause}
-        )
-        ORDER BY created_at DESC, order_no ASC
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} pending dispatch planning orders`);
-
-      return {
-        success: true,
-        data: dataResult.rows,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching pending dispatches', error);
-      throw new Error('Failed to fetch pending dispatches');
-    }
+    return this._listDispatchPlanning({ ...filters, ...pagination, open: true });
   }
 
-  /**
-   * Get dispatch planning history
-   * History: planned_3 IS NOT NULL AND actual_3 IS NOT NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} History orders
-   */
   async getDispatchHistory(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 10;
-      const offset = (page - 1) * limit;
+    return this._listDispatchPlanning({ ...filters, ...pagination, open: false });
+  }
 
-      let whereConditions = ['planned_3 IS NOT NULL', 'actual_3 IS NOT NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
+  async _listDispatchPlanning({ open, page = 1, limit = 25, order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no }) {
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 25;
 
-      // Add optional filters
-      if (filters.order_no) {
-        // DO Number search only
-        const { clause: sClause, params: sParams, newIndex: sIdx } = buildSearchCondition(['order_no'], filters.order_no, paramIndex);
-        whereConditions.push(sClause);
-        queryParams.push(...sParams);
-        paramIndex = sIdx;
-      } else if (filters.customer_name) {
-        whereConditions.push(`customer_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.customer_name}%`);
-        paramIndex++;
-      }
-
-      if (filters.start_date && filters.end_date) {
-        whereConditions.push(`delivery_date BETWEEN $${paramIndex} AND $${paramIndex + 1}`);
-        queryParams.push(filters.start_date, filters.end_date);
-        paramIndex += 2;
-      }
-
-      if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        if (filters.depo_names.length === 0) {
-          whereConditions.push('1=0');
-        } else {
-          whereConditions.push(`depo_name = ANY($${paramIndex})`);
-          queryParams.push(filters.depo_names);
-          paramIndex++;
-        }
-      }
-
-      if (filters.manual_sauda_no) {
-        whereConditions.push(`processid ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.manual_sauda_no}%`);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Unified Base DO Expression for grouping (e.g. extracts DO-657 from DO-657D)
-      const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
-
-      // Count total (Unique Base Order Numbers)
-      const countQuery = `SELECT COUNT(DISTINCT ${baseDoExp}) FROM order_dispatch ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data (Paginated by Base Order Groups)
-      const dataQuery = `
-        WITH paginated_dos AS (
-          SELECT 
-            ${baseDoExp} as base_do, 
-            MIN(created_at) as sort_date
-          FROM order_dispatch
-          ${whereClause}
-          GROUP BY base_do
-          ORDER BY sort_date DESC
-          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-        )
-        SELECT *,
-          -- Slip Status: has any OTHER line item under this base DO already been dispatch-planned (qty already drawn down)?
-          EXISTS(
-            SELECT 1 FROM order_dispatch sib
-            WHERE COALESCE(substring(sib.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), sib.order_no)
-                = COALESCE(substring(order_dispatch.order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_dispatch.order_no)
-              AND sib.id <> order_dispatch.id
-              AND sib.remaining_dispatch_qty IS DISTINCT FROM sib.order_quantity
-          ) as has_prior_dispatch
-        FROM order_dispatch
-        WHERE ${baseDoExp} IN (SELECT base_do FROM paginated_dos)
-        AND id IN (
-          SELECT id 
-          FROM order_dispatch 
-          ${whereClause}
-        )
-        ORDER BY created_at DESC, order_no ASC
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} dispatch history records`);
-
-      return {
-        success: true,
-        data: dataResult.rows,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching dispatch history', error);
-      throw new Error('Failed to fetch dispatch history');
+    const conditions = [
+      isNotNull(schema.dispatchPlannings.plannedAt),
+      open ? isNull(schema.dispatchPlannings.actualAt) : isNotNull(schema.dispatchPlannings.actualAt),
+    ];
+    if (order_no) {
+      conditions.push(sql`(${schema.orders.orderNo} ILIKE ${'%' + order_no + '%'} OR ${schema.customers.customerName} ILIKE ${'%' + order_no + '%'})`);
+    } else if (customer_name) {
+      conditions.push(sql`${schema.customers.customerName} ILIKE ${'%' + customer_name + '%'}`);
     }
+    if (start_date && end_date) {
+      conditions.push(sql`${schema.orders.deliveryDate} BETWEEN ${start_date} AND ${end_date}`);
+    }
+    if (Array.isArray(depo_names)) {
+      conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
+    }
+    if (manual_sauda_no) {
+      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+    }
+    const where = and(...conditions);
+
+    const [{ count }] = await dbV2
+      .select({ count: sql`count(*)::int` })
+      .from(schema.dispatchPlannings)
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatchPlannings.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .where(where);
+
+    const rows = await dbV2
+      .select({
+        dispatchPlanningId: schema.dispatchPlannings.id,
+        plannedAt: schema.dispatchPlannings.plannedAt,
+        actualAt: schema.dispatchPlannings.actualAt,
+        revertRemarks: schema.dispatchPlannings.revertRemarks,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+        // "Slip status": has any OTHER line item under this order already spawned
+        // a shipment? (drives the frontend's already-planned indicator).
+        hasPriorDispatch: sql`EXISTS (
+          SELECT 1 FROM dispatches d
+          JOIN order_items oi2 ON oi2.id = d.order_item_id
+          WHERE oi2.order_id = ${schema.orders.id} AND oi2.id <> ${schema.orderItems.id}
+        )`,
+      })
+      .from(schema.dispatchPlannings)
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatchPlannings.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .where(where)
+      .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.dispatchPlannings.actualAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    return {
+      success: true,
+      data: rows,
+      pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) },
+    };
   }
 
   /**
-   * Submit dispatch planning
-   * 1. Insert into lift_receiving_confirmation table
-   * 2. Update actual_3 in order_dispatch table
-   * @param {number} orderId - Order ID from order_dispatch table
-   * @param {Object} data - Dispatch data
-   * @returns {Promise<Object>} Created dispatch record
+   * Submit a dispatch plan for one order_item: mint a DSR, create the shipment
+   * (dispatches row, pending Actual Dispatch), draw the qty down from
+   * remaining_qty, and close the gate once nothing remains.
+   *
+   * @param {number} orderItemId
+   * @param {Object} data
+   *   - dispatchQty: number (defaults to all remaining)
+   *   - transfer: 'yes'|'no'|boolean  -> dispatches.is_transfer
+   *   - dispatchFrom: string          -> dispatches.dispatch_from
+   *   - billCompanyName/billAddress/shipCompanyName/shipAddress: order header
+   *   - freightRate: number           -> orders.freight_rate
+   *   - userId: number                -> dispatch_plannings.performed_by_user_id
    */
-  async submitDispatchPlanning(orderId, data = {}) {
-    const client = await db.pool.connect();
+  async submitDispatchPlanning(orderItemId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const locked = await tx.select().from(schema.orderItems).where(eq(schema.orderItems.id, orderItemId)).for('update');
+      if (locked.length === 0) throw new Error('Order item not found');
+      const item = locked[0];
 
-    try {
-      await client.query('BEGIN');
+      const [gate] = await tx
+        .select()
+        .from(schema.dispatchPlannings)
+        .where(and(
+          eq(schema.dispatchPlannings.orderItemId, orderItemId),
+          isNotNull(schema.dispatchPlannings.plannedAt),
+          isNull(schema.dispatchPlannings.actualAt),
+        ));
+      if (!gate) throw staleWrite();
 
-      Logger.info(`Submitting dispatch planning for order ID: ${orderId}`, { data });
+      const [orderRow] = await tx
+        .select({ orderNo: schema.orders.orderNo })
+        .from(schema.orders)
+        .where(eq(schema.orders.id, item.orderId));
 
-      // First, get the order details from order_dispatch.
-      // FOR UPDATE locks the row so simultaneous dispatch submissions
-      // serialize; the second one then sees the depleted remaining qty
-      // and is rejected below (prevents duplicate DSR / lift_receiving rows).
-      const orderQuery = `
-        SELECT
-          order_no, customer_name, product_name,
-          order_quantity, type_of_transporting,
-          approval_qty, remaining_dispatch_qty, processid,
-          planned_3, actual_3
-        FROM order_dispatch
-        WHERE id = $1
-        FOR UPDATE
-      `;
-      const orderResult = await client.query(orderQuery, [orderId]);
-
-      if (orderResult.rows.length === 0) {
-        throw new Error('Order not found');
-      }
-
-      const order = orderResult.rows[0];
-
-      // Stale-write guard: the row must STILL be pending in Dispatch Planning
-      // (planned_3 set, actual_3 null). A revert back to Pre-Approval clears planned_3
-      // WITHOUT restoring remaining_dispatch_qty, so the remaining-qty check below would
-      // not catch that case — a stale Dispatch Planning screen could otherwise create a
-      // DSR row and advance an order that has already moved backwards. Reject it here,
-      // under the FOR UPDATE lock, before any DSR/lift_receiving row is inserted.
-      if (order.planned_3 === null || order.actual_3 !== null) {
-        Logger.warn(`[STALE PLANNING] Order ID ${orderId} is no longer pending in Dispatch Planning (planned_3=${order.planned_3}, actual_3=${order.actual_3}) — rejecting stale submission`);
-        const conflict = new Error('This order is no longer in Dispatch Planning — it was already processed or moved by another user. Please refresh and try again.');
-        conflict.statusCode = 409;
-        conflict.code = 'STALE_WRITE';
-        throw conflict;
-      }
-
-      // Calculate remaining quantity logic
-      // If remaining_dispatch_qty is null, use approval_qty (or order_quantity if approval_qty is missing)
-      const currentAvailable = order.remaining_dispatch_qty !== null
-        ? parseFloat(order.remaining_dispatch_qty)
-        : parseFloat(order.approval_qty || order.order_quantity || 0);
-
-      // Nothing left to dispatch → reject. Combined with the FOR UPDATE lock
-      // above, this makes concurrent/duplicate submissions safe: the first
-      // commit sets remaining to 0, so the second read sees 0 and bails out
-      // instead of inserting another DSR row.
+      const currentAvailable = toNum(item.remainingQty) ?? toNum(item.approvedQty) ?? toNum(item.orderQuantity) ?? 0;
       if (!(currentAvailable > 0)) {
-        throw new Error('No remaining quantity to dispatch — order already fully dispatched');
+        throw new Error('No remaining quantity to dispatch — order item already fully dispatched');
+      }
+      const dispatchQty = data.dispatchQty != null ? parseFloat(data.dispatchQty) : currentAvailable;
+      if (!(dispatchQty > 0)) throw new Error('Dispatch quantity must be greater than 0');
+
+      const rawRemaining = currentAvailable - dispatchQty;
+      const complete = rawRemaining <= 0.0001; // full or over-dispatch → item done
+      const newRemaining = complete ? 0 : rawRemaining;
+
+      const dsrNumber = await mintDsr(tx);
+      const shipmentPlannedAt = await getPlannedAt(tx, 'Actual Dispatch');
+      const isTransfer = data.transfer === true || String(data.transfer ?? '').toLowerCase() === 'yes';
+
+      const [dispatch] = await tx
+        .insert(schema.dispatches)
+        .values({
+          orderItemId,
+          dsrNumber,
+          plannedAt: shipmentPlannedAt,
+          qtyToBeDispatched: dispatchQty,
+          dispatchFrom: data.dispatchFrom ?? null,
+          isTransfer,
+        })
+        .returning();
+
+      await tx.update(schema.orderItems).set({ remainingQty: newRemaining }).where(eq(schema.orderItems.id, orderItemId));
+
+      // Transfer / freight details live on the order header in v2.
+      const orderPatch = {};
+      if (data.billCompanyName !== undefined) orderPatch.billCompanyName = data.billCompanyName || null;
+      if (data.billAddress !== undefined) orderPatch.billAddress = data.billAddress || null;
+      if (data.shipCompanyName !== undefined) orderPatch.shipCompanyName = data.shipCompanyName || null;
+      if (data.shipAddress !== undefined) orderPatch.shipAddress = data.shipAddress || null;
+      if (data.freightRate !== undefined && data.freightRate !== null) orderPatch.freightRate = data.freightRate;
+      if (Object.keys(orderPatch).length) {
+        await tx.update(schema.orders).set(orderPatch).where(eq(schema.orders.id, item.orderId));
       }
 
-      const dispatchQty = parseFloat(data.dispatch_qty || order.order_quantity || 0);
-
-      // New remaining quantity
-      const newRemainingQty = currentAvailable - dispatchQty;
-
-      Logger.info(`Partial dispatch calc: Order ${order.order_no} - Available: ${currentAvailable}, Dispatched: ${dispatchQty}, New Rem: ${newRemainingQty}`);
-
-      // Generate DSR number (dispatch serial number) using atomic sequence
-      // Format: DSR-001, DSR-002, etc.
-      const seqQuery = "SELECT nextval('dsr_number_seq') as val";
-      const seqResult = await client.query(seqQuery);
-      const dsrCount = seqResult.rows[0].val;
-      const dsrNumber = `DSR-${String(dsrCount).padStart(3, '0')}`;
-      const planned1 = await this.getPlannedTimestamp(client, 'Actual Dispatch');
-
-      // Insert into lift_receiving_confirmation
-      const insertQuery = `
-        INSERT INTO lift_receiving_confirmation (
-          timestamp, d_sr_number, so_no, party_name, 
-          product_name, qty_to_be_dispatched, 
-          type_of_transporting, dispatch_from, processid, planned_1
-        ) VALUES (
-          NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9
-        ) RETURNING *
-      `;
-
-      const partyName = (data.transfer === 'yes' && data.bill_company_name)
-        ? data.bill_company_name
-        : order.customer_name;
-
-      const insertParams = [
-        dsrNumber,
-        order.order_no,
-        partyName,
-        order.product_name,
-        dispatchQty,
-        order.type_of_transporting,
-        data.dispatch_from || null,
-        order.processid || null,
-        planned1
-      ];
-
-      const insertResult = await client.query(insertQuery, insertParams);
-
-      // Update order_dispatch
-      // 1. Update remaining_dispatch_qty
-      // 2. Update actual_3 IF newRemainingQty <= 0 (Completed)
-      let updateQuery;
-      let updateParams;
-
-      Logger.info(`[DEBUG-TRACKING] Raw data received in submitDispatchPlanning:`, { data });
-
-      if (newRemainingQty <= 0) {
-        // Full Dispatch or Over Dispatch -> Mark as Completed (actual_3 = NOW())
-        updateQuery = `
-          UPDATE order_dispatch 
-          SET 
-            remaining_dispatch_qty = $1, 
-            actual_3 = NOW(), 
-            dispatch_planning_user = $3,
-            transfer = $4,
-            bill_company_name = $5,
-            bill_address = $6,
-            ship_company_name = $7,
-            ship_address = $8,
-            freight_rate = $9
-          WHERE id = $2
-          RETURNING *
-        `;
-        updateParams = [
-          0,
-          orderId,
-          data.user_id || null,
-          data.transfer || 'no',
-          data.bill_company_name || null,
-          data.bill_address || null,
-          data.ship_company_name || null,
-          data.ship_address || null,
-          data.freight_rate || 0
-        ]; // Cap at 0
+      if (complete) {
+        const closed = await tx
+          .update(schema.dispatchPlannings)
+          .set({ actualAt: new Date(), performedByUserId: data.userId ?? null })
+          .where(and(
+            eq(schema.dispatchPlannings.orderItemId, orderItemId),
+            isNotNull(schema.dispatchPlannings.plannedAt),
+            isNull(schema.dispatchPlannings.actualAt),
+          ))
+          .returning();
+        assertStageOpen({ rowCount: closed.length }, 'Dispatch Planning');
       } else {
-        // Partial Dispatch -> Keep Pending (actual_3 stays NULL)
-        updateQuery = `
-          UPDATE order_dispatch 
-          SET 
-            remaining_dispatch_qty = $1, 
-            dispatch_planning_user = $3,
-            transfer = $4,
-            bill_company_name = $5,
-            bill_address = $6,
-            ship_company_name = $7,
-            ship_address = $8,
-            freight_rate = $9
-          WHERE id = $2
-          RETURNING *
-        `;
-        updateParams = [
-          newRemainingQty,
-          orderId,
-          data.user_id || null,
-          data.transfer || 'no',
-          data.bill_company_name || null,
-          data.bill_address || null,
-          data.ship_company_name || null,
-          data.ship_address || null,
-          data.freight_rate || 0
-        ];
+        // Partial: record the planner but leave the gate open for the next shipment.
+        await tx
+          .update(schema.dispatchPlannings)
+          .set({ performedByUserId: data.userId ?? null })
+          .where(and(eq(schema.dispatchPlannings.orderItemId, orderItemId), isNull(schema.dispatchPlannings.actualAt)));
       }
 
-      Logger.info(`[DEBUG-TRACKING] Prepared updateParams for order_dispatch (Planning):`, {
-        dispatch_planning_user: updateParams[2]
-      });
-
-      await client.query(updateQuery, updateParams);
-
-      await client.query('COMMIT');
-
-      Logger.info(`Dispatch planning submitted successfully for order ID: ${orderId}`, {
-        dsrNumber,
-        orderNo: order.order_no
-      });
-
+      Logger.info(`Dispatch planned for order_item ${orderItemId}: ${dsrNumber} qty=${dispatchQty}, remaining=${newRemaining}${complete ? ' (item complete)' : ''}`);
       return {
         success: true,
         message: 'Dispatch planning submitted successfully',
-        data: {
-          dispatchRecord: insertResult.rows[0],
-          dsrNumber,
-          orderNo: order.order_no
-        }
+        data: { dsrNumber, orderNo: orderRow?.orderNo, dispatch, remainingQty: newRemaining, complete },
       };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      Logger.error('Error submitting dispatch planning', error);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async getPlannedTimestamp(client, stageName) {
-    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const normalizedStageName = normalizeStageName(stageName);
-    const stageAliases = {
-      actualdispatch: ['actualdispatch'],
-    };
-    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
-
-    const result = await client.query(
-      `
-        SELECT (
-          CURRENT_TIMESTAMP + COALESCE(
-            (
-              SELECT stage_time
-              FROM process_stages
-              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
-              ORDER BY submitted_at DESC, id DESC
-              LIMIT 1
-            ),
-            INTERVAL '0'
-          )
-        ) AS planned_at
-      `,
-      [normalizedStageNames]
-    );
-
-    const plannedAt = result.rows[0]?.planned_at;
-    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
+    });
   }
 
   /**
-   * Revert dispatch planning back to pre-approval
-   * 1. Null actual_3, planned_3, actual_2, planned_2, actual_1 in order_dispatch
-   * 2. Keep remaining_dispatch_qty as-is (do NOT restore to approval_qty)
-   * 3. Do NOT delete lift_receiving_confirmation records (only actual dispatch revert should do that)
-   * @param {number} orderId - Order ID from order_dispatch table
-   * @param {string} username - User who is reverting
-   * @returns {Promise<Object>} Status of reversion
+   * Revert an item from Dispatch Planning all the way back to Pre-Approval.
+   * Deactivates the dispatch-planning and order-approval gates (planned/actual →
+   * null, keeping the rows for audit + the revert remark) and re-opens the
+   * pre-approval gate. remaining_qty is NEVER touched — it is the source of truth,
+   * and any qty already shipped stays shipped. For regular orders, rates are
+   * re-derived for the whole order group (mirrors the reference).
+   *
+   * @param {number} orderItemId
+   * @param {Object} data - { userId, remarks }
    */
-  async revertDispatchPlanning(orderId, username, remarks) {
-    const client = await db.pool.connect();
+  async revertDispatchPlanning(orderItemId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const locked = await tx.select().from(schema.orderItems).where(eq(schema.orderItems.id, orderItemId)).for('update');
+      if (locked.length === 0) throw new Error('Order item not found');
 
-    try {
-      await client.query('BEGIN');
+      const [order] = await tx.select().from(schema.orders).where(eq(schema.orders.id, locked[0].orderId));
 
-      Logger.info(`[DISPATCH PLANNING] Reverting order ID: ${orderId} by user: ${username}`, { remarks });
+      // Deactivate the (open) dispatch-planning gate and stash the revert remark.
+      const reverted = await tx
+        .update(schema.dispatchPlannings)
+        .set({ plannedAt: null, actualAt: null, revertRemarks: data.remarks ?? null, performedByUserId: data.userId ?? null })
+        .where(and(
+          eq(schema.dispatchPlannings.orderItemId, orderItemId),
+          isNotNull(schema.dispatchPlannings.plannedAt),
+          isNull(schema.dispatchPlannings.actualAt),
+        ))
+        .returning();
+      if (reverted.length === 0) throw staleWrite();
 
-      // Step 1: Get order details
-      const orderQuery = `SELECT order_no, approval_qty, order_quantity, remaining_dispatch_qty, order_type, product_name, rate_of_material FROM order_dispatch WHERE id = $1`;
-      const orderResult = await client.query(orderQuery, [orderId]);
+      // Deactivate the order-approval gate (only the active one).
+      await tx
+        .update(schema.orderApprovals)
+        .set({ plannedAt: null, actualAt: null })
+        .where(and(eq(schema.orderApprovals.orderItemId, orderItemId), isNotNull(schema.orderApprovals.plannedAt)));
 
-      if (orderResult.rows.length === 0) {
-        throw new Error('Order not found');
+      // Re-open pre-approval: reset the existing row, or create one for a regular
+      // order that never had a pre-approval gate.
+      const reopened = await tx
+        .update(schema.preApprovals)
+        .set({ plannedAt: new Date(), actualAt: null, approvedByUserId: null })
+        .where(eq(schema.preApprovals.orderItemId, orderItemId))
+        .returning();
+      if (reopened.length === 0) {
+        await tx.insert(schema.preApprovals).values({ orderItemId, plannedAt: new Date() });
       }
 
-      const order = orderResult.rows[0];
-      // NEVER touch remaining_dispatch_qty on revert — it is the source of truth.
-      // Any quantity already consumed by actual dispatch stays consumed; restoring
-      // the full chunk here would double-count (e.g. 100 punched, 50 dispatched →
-      // remaining is 50; resetting to 100 resurrects the 50 stuck downstream).
-      // Step 2 (SKIPPED): Do NOT delete lift_receiving_confirmation records here.
-      // Those records were created by actual dispatch (actualDispatchService) and should
-      // only be removed when actual dispatch is reverted, not dispatch planning.
-      Logger.info(`[REVERT] Dispatch planning revert — keeping lift_receiving_confirmation records intact for SO: ${order.order_no}`);
-
-      // Step 3: Update order_dispatch - null all stage columns and save remarks.
-      // remaining_dispatch_qty is intentionally left untouched (see note above).
-      let updateQuery;
-
-      // Guard: only revert if the row is STILL in dispatch planning
-      // (planned_3 set, actual_3 not yet set). This makes the write conditional
-      // so a stale client cannot overwrite a row another user already reverted or
-      // that has since moved forward to actual dispatch (lost-update / stale-write race).
-      const stageGuard = `planned_3 IS NOT NULL AND actual_3 IS NULL`;
-
-      if (order.order_type && order.order_type.toLowerCase() === 'regular') {
-        // For regular orders: set planned_1 to current date
-        updateQuery = `
-          UPDATE order_dispatch
-          SET
-            actual_3 = NULL,
-            planned_3 = NULL,
-            actual_2 = NULL,
-            planned_2 = NULL,
-            actual_1 = NULL,
-            planned_1 = NOW(),
-            order_type = 'pre-approval',
-            revert_planning_remarks = $2
-          WHERE id = $1 AND ${stageGuard}
-          RETURNING *
-        `;
-      } else {
-        // For non-regular orders: keep existing behavior (don't touch planned_1)
-        updateQuery = `
-          UPDATE order_dispatch
-          SET
-            actual_3 = NULL,
-            planned_3 = NULL,
-            actual_2 = NULL,
-            planned_2 = NULL,
-            actual_1 = NULL,
-            revert_planning_remarks = $2
-          WHERE id = $1 AND ${stageGuard}
-          RETURNING *
-        `;
-      }
-
-      const updateResult = await client.query(updateQuery, [orderId, remarks || null]);
-
-      // 0 rows updated → the row was NOT in dispatch planning when we wrote.
-      // Someone else already reverted it, or it advanced to actual dispatch.
-      if (updateResult.rowCount === 0) {
-        Logger.warn(`[REVERT] Stale revert rejected for order ID: ${orderId} — row is no longer in Dispatch Planning.`);
-        const conflict = new Error('This order is no longer in Dispatch Planning — it was already reverted or moved by another user. Please refresh and try again.');
-        conflict.statusCode = 409;
-        throw conflict;
-      }
-
-      Logger.info(`[REVERT] Reset order ID: ${orderId} back to pre-approval. (order_type: ${order.order_type || 'unknown'}, remarks: ${remarks || 'none'})`);
-
-      // Step 4: For regular orders, map oil_type and derive rates FOR THE ENTIRE GROUP
-      if (order.order_type && order.order_type.toLowerCase() === 'regular' && order.product_name) {
+      // Regular orders: re-derive rate_per_15kg / rate_per_ltr / oil_type across the
+      // whole order group from each line's rate_of_material (non-fatal on failure).
+      if ((order?.orderType || '').toLowerCase() === 'regular') {
         try {
-          // 1. Fetch all products in this DO group to consolidate rates
-          // Use base DO (strip suffixes like A, B, /1) to catch sister rows like DO-698A, DO-698B
-          const baseDo = order.order_no.replace(/[a-zA-Z/]+$/, '');
-          const groupQuery = `SELECT id, product_name, rate_of_material FROM order_dispatch WHERE order_no LIKE $1`;
-          const groupResult = await client.query(groupQuery, [`${baseDo}%`]);
-          const groupProducts = groupResult.rows;
-
-          // 2. Derive consolidated rates for the whole group
-          const consolidatedRatesMap = await deriveConsolidatedRatesForGroup(groupProducts);
-
-          if (consolidatedRatesMap) {
-            // 3. Update products in the group with their specific oil-type rates
-            for (const p of groupProducts) {
+          const items = await tx
+            .select({ id: schema.orderItems.id, productName: schema.skus.skuName, rateOfMaterial: schema.orderItems.rateOfMaterial })
+            .from(schema.orderItems)
+            .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+            .where(eq(schema.orderItems.orderId, order.id));
+          const products = items
+            .filter((p) => p.productName)
+            .map((p) => ({ id: p.id, product_name: p.productName, rate_of_material: p.rateOfMaterial }));
+          const ratesByOil = await deriveConsolidatedRatesForGroup(products);
+          if (ratesByOil) {
+            for (const p of products) {
               const oilType = detectOilType(p.product_name);
-              const rates = consolidatedRatesMap[oilType];
-
+              const rates = ratesByOil[oilType] || (await deriveRatesForRegularOrder(p.product_name, parseFloat(p.rate_of_material)));
               if (rates) {
-                const updateRatesQuery = `
-                  UPDATE order_dispatch 
-                  SET rate_per_15kg = $1, rate_per_ltr = $2, oil_type = $3
-                  WHERE id = $4
-                `;
-                await client.query(updateRatesQuery, [rates.rate_per_15kg, rates.rate_per_ltr, oilType, p.id]);
-              } else {
-                // Individual derivation fallback if oil type not in consolidation map for some reason
-                const derivedRes = await deriveRatesForRegularOrder(p.product_name, parseFloat(p.rate_of_material));
-                if (derivedRes) {
-                  await client.query(`UPDATE order_dispatch SET rate_per_15kg = $1, rate_per_ltr = $2, oil_type = $3 WHERE id = $4`,
-                    [derivedRes.rate_per_15kg, derivedRes.rate_per_ltr, oilType, p.id]);
-                }
+                await tx
+                  .update(schema.orderItems)
+                  .set({ ratePer15kg: rates.rate_per_15kg, ratePerLtr: rates.rate_per_ltr, oilType })
+                  .where(eq(schema.orderItems.id, p.id));
               }
             }
-            Logger.info(`[REVERT] Consolidated rates applied by oil type for group ${baseDo}%`);
+            Logger.info(`[REVERT] Re-derived rates by oil type for order ${order.orderNo}`);
           }
-        } catch (error) {
-          Logger.warn(`[REVERT] Post-revert group updates failed for order NO ${order.order_no}: ${error.message}`);
+        } catch (e) {
+          Logger.warn(`[REVERT] rate re-derivation failed for order ${order?.orderNo}: ${e.message}`);
         }
       }
 
-      await client.query('COMMIT');
-      return { success: true, message: 'Dispatch planning reverted to pre-approval successfully' };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      Logger.error('Error reverting dispatch planning', error);
-      throw error;
-    } finally {
-      client.release();
-    }
+      Logger.info(`[REVERT] order_item ${orderItemId} reverted to Pre-Approval (remarks: ${data.remarks || 'none'})`);
+      return { success: true, message: 'Dispatch planning reverted to Pre-Approval successfully' };
+    });
   }
 
   /**
-   * Cancel an order from Dispatch Planning (Super Admin only — enforced in controller).
-   * Terminates the order permanently: it never proceeds to Actual Dispatch or any
-   * later stage (no lift_receiving_confirmation row is created), it drops out of
-   * every stage's pending list, and it is flagged so the dashboard counts it under
-   * Rejected Orders. It still shows up in Dispatch Planning's own History with the
-   * cancellation remarks.
-   * 1. Guard: only cancel if the row is still pending in Dispatch Planning
-   *    (planned_3 set, actual_3 not yet set) — prevents cancelling a stale/already-moved row.
-   * 2. Set actual_3 = NOW() so it leaves the pending list and appears in History.
-   * 3. Zero out remaining_dispatch_qty — nothing left to dispatch.
-   * 4. Mark overall_status_of_order = 'Cancelled' — the dashboard's Rejected Orders
-   *    KPI and detail list already recognize this exact value.
-   * @param {number} orderId - Order ID from order_dispatch table
-   * @param {string} username - User who is cancelling
-   * @param {string} remarks - Reason for cancelling
-   * @returns {Promise<Object>} Status of cancellation
+   * Cancel an item from Dispatch Planning (Super Admin only — enforced in the
+   * controller). Terminates it: closes the gate (leaves History), zeroes
+   * remaining_qty, and flags the order-approval gate's overall_status =
+   * 'Cancelled' (the dashboard's Rejected/Cancelled signal).
+   *
+   * @param {number} orderItemId
+   * @param {Object} data - { userId, remarks }
    */
-  async cancelDispatchPlanning(orderId, username, remarks) {
-    const client = await db.pool.connect();
+  async cancelDispatchPlanning(orderItemId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const locked = await tx.select().from(schema.orderItems).where(eq(schema.orderItems.id, orderItemId)).for('update');
+      if (locked.length === 0) throw new Error('Order item not found');
 
-    try {
-      await client.query('BEGIN');
+      const closed = await tx
+        .update(schema.dispatchPlannings)
+        .set({ actualAt: new Date(), cancelRemarks: data.remarks ?? null, cancelledByUserId: data.userId ?? null })
+        .where(and(
+          eq(schema.dispatchPlannings.orderItemId, orderItemId),
+          isNotNull(schema.dispatchPlannings.plannedAt),
+          isNull(schema.dispatchPlannings.actualAt),
+        ))
+        .returning();
+      if (closed.length === 0) throw staleWrite();
 
-      Logger.info(`[DISPATCH PLANNING] Cancelling order ID: ${orderId} by user: ${username}`, { remarks });
+      await tx.update(schema.orderItems).set({ remainingQty: 0 }).where(eq(schema.orderItems.id, orderItemId));
+      await tx
+        .update(schema.orderApprovals)
+        .set({ overallStatus: 'Cancelled' })
+        .where(and(eq(schema.orderApprovals.orderItemId, orderItemId), isNotNull(schema.orderApprovals.plannedAt)));
 
-      // Self-healing: ensure the cancel audit columns exist without a separate migration
-      await client.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS cancel_remarks TEXT`);
-      await client.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS cancel_user TEXT`);
-
-      const stageGuard = `planned_3 IS NOT NULL AND actual_3 IS NULL`;
-
-      const updateQuery = `
-        UPDATE order_dispatch
-        SET
-          actual_3 = NOW(),
-          remaining_dispatch_qty = 0,
-          overall_status_of_order = 'Cancelled',
-          cancel_remarks = $2,
-          cancel_user = $3
-        WHERE id = $1 AND ${stageGuard}
-        RETURNING order_no
-      `;
-      const updateResult = await client.query(updateQuery, [orderId, remarks || null, username || null]);
-
-      if (updateResult.rowCount === 0) {
-        Logger.warn(`[CANCEL] Stale cancel rejected for order ID: ${orderId} — row is no longer pending in Dispatch Planning.`);
-        const conflict = new Error('This order is no longer in Dispatch Planning — it was already processed or moved by another user. Please refresh and try again.');
-        conflict.statusCode = 409;
-        throw conflict;
-      }
-
-      Logger.info(`[CANCEL] Order ${updateResult.rows[0].order_no} (id: ${orderId}) cancelled by ${username || 'unknown'}. Remarks: ${remarks || 'none'}`);
-
-      await client.query('COMMIT');
+      Logger.info(`[CANCEL] order_item ${orderItemId} cancelled (remarks: ${data.remarks || 'none'})`);
       return { success: true, message: 'Order cancelled successfully' };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      Logger.error('Error cancelling dispatch planning order', error);
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   /**
-   * Update transfer details for an order
-   * @param {number} orderId - Order ID from order_dispatch table
-   * @param {Object} data - Transfer data
-   * @returns {Promise<Object>} Status of update
+   * Pre-close remaining quantity without dispatching it. Draws the qty down and
+   * records it on order_items.preclose_qty; closes the gate when nothing remains.
+   *
+   * @param {number} orderItemId
+   * @param {Object} data - { precloseQty, userId, action: 'close'|'commitment', precloseRemarks }
    */
-  async updateTransferDetails(orderId, data = {}) {
-    try {
-      const updateQuery = `
-        UPDATE order_dispatch 
-        SET 
-          transfer = $1,
-          bill_company_name = $2,
-          bill_address = $3,
-          ship_company_name = $4,
-          ship_address = $5,
-          freight_rate = $6
-        WHERE id = $7
-        RETURNING *
-      `;
+  async precloseDispatchPlanning(orderItemId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const precloseQty = parseFloat(data.precloseQty ?? 0);
+      if (!(precloseQty > 0)) throw new Error('Preclose quantity must be greater than 0');
+      const action = data.action || 'close';
 
-      const updateParams = [
-        data.transfer || 'yes',
-        data.bill_company_name || null,
-        data.bill_address || null,
-        data.ship_company_name || null,
-        data.ship_address || null,
-        data.freight_rate || 0,
-        orderId
-      ];
+      const locked = await tx.select().from(schema.orderItems).where(eq(schema.orderItems.id, orderItemId)).for('update');
+      if (locked.length === 0) throw new Error('Order item not found');
+      const item = locked[0];
 
-      const result = await db.query(updateQuery, updateParams);
+      const [gate] = await tx
+        .select()
+        .from(schema.dispatchPlannings)
+        .where(and(
+          eq(schema.dispatchPlannings.orderItemId, orderItemId),
+          isNotNull(schema.dispatchPlannings.plannedAt),
+          isNull(schema.dispatchPlannings.actualAt),
+        ));
+      if (!gate) throw staleWrite();
 
-      if (result.rows.length === 0) {
-        throw new Error('Order not found');
-      }
-
-      Logger.info(`Updated transfer details for order ID: ${orderId}`);
-
-      return {
-        success: true,
-        message: 'Transfer details updated successfully',
-        data: result.rows[0]
-      };
-    } catch (error) {
-      Logger.error(`Error updating transfer details for order ID: ${orderId}`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Pre-close quantity for an order
-   * @param {number} orderId - Order ID from order_dispatch table
-   * @param {Object} data - Pre-close data { preclose_qty, username }
-   * @returns {Promise<Object>} Status of pre-close
-   */
-  async precloseDispatchPlanning(orderId, data = {}) {
-    const client = await db.pool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      const precloseQty = parseFloat(data.preclose_qty || 0);
-      if (precloseQty <= 0) {
-        throw new Error('Preclose quantity must be greater than 0');
-      }
-
-      const action = data.action || 'close'; // 'commitment' or 'close'
-      const precloseRemarks = data.preclose_remarks || null;
-
-      // 1. Get order details
-      const orderQuery = `
-        SELECT
-          order_no, customer_name, product_name,
-          approval_qty, order_quantity, remaining_dispatch_qty,
-          type_of_transporting, processid
-        FROM order_dispatch
-        WHERE id = $1
-      `;
-      const orderResult = await client.query(orderQuery, [orderId]);
-
-      if (orderResult.rows.length === 0) {
-        throw new Error('Order not found');
-      }
-
-      const order = orderResult.rows[0];
-
-      // 2. Validate quantity
-      const currentAvailable = order.remaining_dispatch_qty !== null
-        ? parseFloat(order.remaining_dispatch_qty)
-        : parseFloat(order.approval_qty || order.order_quantity || 0);
-
+      const currentAvailable = toNum(item.remainingQty) ?? toNum(item.approvedQty) ?? toNum(item.orderQuantity) ?? 0;
       if (precloseQty > currentAvailable + 0.0001) {
         throw new Error(`Preclose quantity (${precloseQty}) cannot exceed remaining quantity (${currentAvailable})`);
       }
+      const rawRemaining = currentAvailable - precloseQty;
+      const complete = rawRemaining <= 0.0001;
+      const newRemaining = complete ? 0 : rawRemaining;
+      const newPreclose = (toNum(item.precloseQty) ?? 0) + precloseQty;
 
-      // 3. Update order_dispatch
-      const newRemainingQty = Math.max(0, currentAvailable - precloseQty);
+      await tx.update(schema.orderItems).set({ remainingQty: newRemaining, precloseQty: newPreclose }).where(eq(schema.orderItems.id, orderItemId));
 
-      let updateQuery;
-      let updateParams;
-
-      if (newRemainingQty <= 0) {
-        updateQuery = `
-          UPDATE order_dispatch
-          SET
-            remaining_dispatch_qty = 0,
-            actual_3 = NOW(),
-            preclose_user = $1,
-            preclose_qty = COALESCE(preclose_qty, 0) + $2,
-            preclose_remarks = $3
-          WHERE id = $4
-        `;
-        updateParams = [data.username || null, precloseQty, precloseRemarks, orderId];
+      if (complete) {
+        const closed = await tx
+          .update(schema.dispatchPlannings)
+          .set({ actualAt: new Date(), precloseRemarks: data.precloseRemarks ?? null, precloseByUserId: data.userId ?? null })
+          .where(and(
+            eq(schema.dispatchPlannings.orderItemId, orderItemId),
+            isNotNull(schema.dispatchPlannings.plannedAt),
+            isNull(schema.dispatchPlannings.actualAt),
+          ))
+          .returning();
+        assertStageOpen({ rowCount: closed.length }, 'Dispatch Planning');
       } else {
-        updateQuery = `
-          UPDATE order_dispatch
-          SET
-            remaining_dispatch_qty = $1,
-            preclose_user = $2,
-            preclose_qty = COALESCE(preclose_qty, 0) + $3,
-            preclose_remarks = $4
-          WHERE id = $5
-        `;
-        updateParams = [newRemainingQty, data.username || null, precloseQty, precloseRemarks, orderId];
+        await tx
+          .update(schema.dispatchPlannings)
+          .set({ precloseRemarks: data.precloseRemarks ?? null, precloseByUserId: data.userId ?? null })
+          .where(and(eq(schema.dispatchPlannings.orderItemId, orderItemId), isNull(schema.dispatchPlannings.actualAt)));
       }
 
-      await client.query(updateQuery, updateParams);
-
-      // 4. If action = 'commitment', transfer qty back to commitment_details
+      // action === 'commitment': return the pre-closed qty (boxes + its MT share)
+      // to the parent commitment's balance so it can be re-raised. Proportional
+      // MT = (skuWeightMt / skuQuantity) * precloseQty. Mirrors the reference; the
+      // qty draw-down above is identical for both actions, only this return differs.
       if (action === 'commitment') {
-        Logger.info(`[PRECLOSE] Transferring qty back to commitment for order ${order.order_no}, Qty: ${precloseQty}`);
-
-        const cdQuery = `SELECT id, sku_weight_mt, sku_quantity FROM commitment_details WHERE order_no = $1`;
-        const cdResult = await client.query(cdQuery, [order.order_no]);
-
-        if (cdResult.rows.length > 0) {
-          const cd = cdResult.rows[0];
-          const totalCdQty = parseFloat(cd.sku_quantity) || 1;
-          const totalCdMt = parseFloat(cd.sku_weight_mt) || 0;
-          const ratio = totalCdMt / totalCdQty;
-          const mtToReturn = ratio * precloseQty;
-
-          Logger.info(`[PRECLOSE] Reverting ${mtToReturn} MT and ${precloseQty} Boxes to commitment for order ${order.order_no}`);
-
-          const updateCdQuery = `
-            UPDATE commitment_details
-            SET
-              sku_weight_mt = GREATEST(0, sku_weight_mt - $1),
-              sku_quantity = GREATEST(0, sku_quantity - $2)
-            WHERE id = $3
-          `;
-          await client.query(updateCdQuery, [mtToReturn, precloseQty, cd.id]);
+        const [cd] = await tx
+          .select({ id: schema.commitmentDetails.id, skuWeightMt: schema.commitmentDetails.skuWeightMt, skuQuantity: schema.commitmentDetails.skuQuantity })
+          .from(schema.commitmentDetails)
+          .where(eq(schema.commitmentDetails.orderItemId, orderItemId));
+        if (cd) {
+          const totalQty = toNum(cd.skuQuantity) || 1;
+          const totalMt = toNum(cd.skuWeightMt) || 0;
+          const mtToReturn = (totalMt / totalQty) * precloseQty;
+          await tx
+            .update(schema.commitmentDetails)
+            .set({
+              skuWeightMt: sql`GREATEST(0, ${schema.commitmentDetails.skuWeightMt} - ${mtToReturn})`,
+              skuQuantity: sql`GREATEST(0, ${schema.commitmentDetails.skuQuantity} - ${precloseQty})`,
+            })
+            .where(eq(schema.commitmentDetails.id, cd.id));
+          Logger.info(`[PRECLOSE] Returned ${mtToReturn.toFixed(4)} MT / ${precloseQty} boxes to commitment for order_item ${orderItemId}`);
         } else {
-          Logger.warn(`[PRECLOSE] No commitment_details found for order ${order.order_no}. Reversal skipped.`);
+          Logger.warn(`[PRECLOSE] No commitment_details for order_item ${orderItemId} — commitment return skipped`);
         }
       }
 
-      await client.query('COMMIT');
-
+      Logger.info(`[PRECLOSE] order_item ${orderItemId} preclosed ${precloseQty}, remaining=${newRemaining}`);
       return {
         success: true,
         message: 'Quantity preclosed successfully',
-        data: {
-          orderNo: order.order_no,
-          preclosedQty: precloseQty,
-          newRemainingQty
-        }
+        data: { precloseQty, newRemainingQty: newRemaining, complete },
       };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      Logger.error('Error preclosing quantity in dispatch planning', error);
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
+  }
+
+  /**
+   * Persist transfer / freight details on the order header (pre-submit edit).
+   * @param {number} orderItemId
+   * @param {Object} data - { billCompanyName, billAddress, shipCompanyName, shipAddress, freightRate }
+   */
+  async updateTransferDetails(orderItemId, data = {}) {
+    const [item] = await dbV2.select({ orderId: schema.orderItems.orderId }).from(schema.orderItems).where(eq(schema.orderItems.id, orderItemId));
+    if (!item) throw new Error('Order item not found');
+
+    await dbV2
+      .update(schema.orders)
+      .set({
+        billCompanyName: data.billCompanyName ?? null,
+        billAddress: data.billAddress ?? null,
+        shipCompanyName: data.shipCompanyName ?? null,
+        shipAddress: data.shipAddress ?? null,
+        freightRate: data.freightRate != null ? data.freightRate : '0',
+      })
+      .where(eq(schema.orders.id, item.orderId));
+
+    return { success: true, message: 'Transfer details updated successfully' };
   }
 }
 

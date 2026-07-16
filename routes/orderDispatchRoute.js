@@ -7,7 +7,9 @@ const express = require('express');
 const router = express.Router();
 const orderDispatchController = require('../controllers/orderDispatchController');
 const orderDispatchValidator = require('../validators/orderDispatchValidator');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+// NOTE: pageAccess middleware (used only for WhatsApp next-stage notification
+// targeting) is intentionally not applied - it reads the legacy `login` table.
+// Re-add when the users/notification layer is migrated to the v2 schema.
 
 /**
  * @route   POST /api/v1/orders
@@ -23,7 +25,6 @@ const { pageAccess } = require('../middleware/pageAccessMiddleware');
 router.post(
   '/',
   orderDispatchValidator.validateCreate,
-  pageAccess,
   orderDispatchController.createOrder
 );
 

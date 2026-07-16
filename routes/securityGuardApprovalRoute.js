@@ -1,26 +1,33 @@
 /**
- * Security Guard Approval Routes
- * API routes for security guard approval management (Stage 8)
+ * Security Guard Approval Routes (Gate 5: Security Guard Approval) — v2 schema.
+ * Operates on `security_guard_checks` (per shipment). :id = security_guard_checks id.
+ *   - Pending: security_guard_checks.planned_at NOT NULL, actual_at NULL
+ *   - History: security_guard_checks.planned_at NOT NULL, actual_at NOT NULL
  */
 
 const express = require('express');
 const router = express.Router();
 const securityGuardApprovalController = require('../controllers/securityGuardApprovalController');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+const securityGuardApprovalValidator = require('../validators/securityGuardApprovalValidator');
+// pageAccess middleware (WhatsApp notification targeting, reads legacy `login`
+// table on prod RDS) intentionally not applied until the notification layer is migrated.
 
-// GET /api/v1/security-approval/pending - Get pending security guard approvals
+/** @route GET /api/v1/security-approval/pending */
 router.get('/pending', securityGuardApprovalController.getPendingApprovals);
 
-// GET /api/v1/security-approval/history - Get security guard approval history
+/** @route GET /api/v1/security-approval/history */
 router.get('/history', securityGuardApprovalController.getApprovalHistory);
 
-// GET /api/v1/security-approval/filters - Get filter options
+/** @route GET /api/v1/security-approval/filters */
 router.get('/filters', securityGuardApprovalController.getFilterOptions);
 
-// POST /api/v1/security-approval/submit/:id - Submit security guard approval
-router.post('/submit/:id', pageAccess, securityGuardApprovalController.submitApproval);
+/**
+ * @route POST /api/v1/security-approval/submit/:id   (:id = security_guard_checks id)
+ * @body  { verdictStatus: 'APPROVE'|'REJECT', biltyNo?, biltyImage?, vehicleImageAttachment?, remarks?, userId? }
+ */
+router.post('/submit/:id', securityGuardApprovalValidator.validateSubmit, securityGuardApprovalController.submitApproval);
 
-// GET /api/v1/security-approval/:id - Get security guard approval by ID
+/** @route GET /api/v1/security-approval/:id   (:id = security_guard_checks id) — keep last (matches any /:id) */
 router.get('/:id', securityGuardApprovalController.getApprovalById);
 
 module.exports = router;

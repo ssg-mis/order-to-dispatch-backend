@@ -1,15 +1,25 @@
+/**
+ * Confirm Material Receipt Routes (Gate 8) — v2 schema.
+ * Operates on `material_receipts` (per shipment). :id = material_receipts row id.
+ *   - Pending: material_receipts.planned_at NOT NULL, actual_at NULL
+ *   - History: material_receipts.planned_at NOT NULL, actual_at NOT NULL
+ */
+
 const express = require('express');
 const router = express.Router();
 const confirmMaterialReceiptController = require('../controllers/confirmMaterialReceiptController');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+// pageAccess middleware intentionally not applied until the notification layer is migrated.
 
-// Get pending records
+/** @route GET /api/v1/confirm-receipt/pending */
 router.get('/pending', confirmMaterialReceiptController.getPendingReceipts);
 
-// Get history
+/** @route GET /api/v1/confirm-receipt/history */
 router.get('/history', confirmMaterialReceiptController.getReceiptHistory);
 
-// Submit receipt
-router.post('/submit/:id', pageAccess, confirmMaterialReceiptController.submitReceipt);
+/**
+ * @route POST /api/v1/confirm-receipt/submit/:id   (:id = material_receipts row id)
+ * @body  { materialReceivedDate?, receivedImageProof?, damageStatus?, damageQty?, damageImage?, remarks?, billAmount?, userId? }
+ */
+router.post('/submit/:id', confirmMaterialReceiptController.submitReceipt);
 
 module.exports = router;

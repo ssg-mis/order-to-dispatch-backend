@@ -1,94 +1,50 @@
 /**
- * Actual Dispatch Routes  
- * API endpoints for Stage 5: Actual Dispatch workflow
- * Uses lift_receiving_confirmation table
- * Conditions:
- * - Pending: planned_1 IS NOT NULL AND actual_1 IS NULL
- * - History: planned_1 IS NOT NULL AND actual_1 IS NOT NULL
+ * Actual Dispatch Routes (Gate 4: Actual Dispatch) — v2 schema.
+ * Operates on `dispatches` (shipments). :id on the mutating routes is a dispatch id.
+ *   - Pending: dispatches.planned_at NOT NULL, actual_at NULL
+ *   - History: dispatches.planned_at NOT NULL, actual_at NOT NULL
  */
 
 const express = require('express');
 const router = express.Router();
 const actualDispatchController = require('../controllers/actualDispatchController');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+const actualDispatchValidator = require('../validators/actualDispatchValidator');
+// pageAccess middleware (WhatsApp notification targeting, reads legacy `login`
+// table on prod RDS) intentionally not applied until the notification layer is migrated.
+
+/** @route GET /api/v1/actual-dispatch/pending */
+router.get('/pending', actualDispatchController.getPendingDispatches);
+
+/** @route GET /api/v1/actual-dispatch/filters */
+router.get('/filters', actualDispatchController.getFilterOptions);
+
+/** @route GET /api/v1/actual-dispatch/history */
+router.get('/history', actualDispatchController.getDispatchHistory);
 
 /**
- * @route   GET /api/v1/actual-dispatch/pending
- * @desc    Get pending actual dispatches (planned_1 NOT NULL, actual_1 NULL)
- * @access  Public
- * @query   page, limit, d_sr_number, so_no, party_name
+ * @route POST /api/v1/actual-dispatch/submit/:id   (:id = dispatch id)
+ * @body  { actualDispatchDate?, actualQtyDispatch?, actualQty?, vehicleId?|registrationNo?,
+ *          driverId?|drivingLicenceNo?|driverName?, transporterId?|transporterName?,
+ *          <doc images + end dates>, <weights>, <freight/bhada>, checkStatus?, remarks?, userId? }
  */
-router.get(
-  '/pending',
-  actualDispatchController.getPendingDispatches
-);
+router.post('/submit/:id', actualDispatchValidator.validateSubmit, actualDispatchController.submitActualDispatch);
 
 /**
- * @route   GET /api/v1/actual-dispatch/filters
- * @desc    Get dynamic filter options (unique party names)
- * @access  Public
+ * @route POST /api/v1/actual-dispatch/revert/:id   (:id = dispatch id) — back to Pre-Approval
+ * @body  { remarks?, userId? }
  */
-router.get(
-  '/filters',
-  actualDispatchController.getFilterOptions
-);
+router.post('/revert/:id', actualDispatchController.revertActualDispatch);
 
 /**
- * @desc    Get actual dispatch history (planned_1 NOT NULL, actual_1 NOT NULL)
- * @access  Public
- * @query   page, limit, d_sr_number, so_no, party_name
+ * @route POST /api/v1/actual-dispatch/revert-to-planning/:id   (:id = dispatch id) — one stage back
+ * @body  { remarks?, userId? }
  */
-router.get(
-  '/history',
-  actualDispatchController.getDispatchHistory
-);
+router.post('/revert-to-planning/:id', actualDispatchController.revertToDispatchPlanning);
 
 /**
- * @route   POST /api/v1/actual-dispatch/submit/:dsrNumber
- * @desc    Submit actual dispatch (updates actual_1 and related fields)
- * @access  Public
- * @body    { product_name_1, actual_qty_dispatch, ... }
+ * @route POST /api/v1/actual-dispatch/cancel-unselected
+ * @body  { dispatchIds: number[] } — drops unselected Stock Transfer shipments
  */
-router.post(
-  '/submit/:dsrNumber',
-  pageAccess,
-  actualDispatchController.submitActualDispatch
-);
-
-/**
- * @route   POST /api/v1/actual-dispatch/revert/:dsrNumber
- * @desc    Revert actual dispatch (removes from list and restores quantity)
- * @access  Public
- * @body    { username }
- */
-router.post(
-  '/revert/:dsrNumber',
-  actualDispatchController.revertActualDispatch
-);
-
-/**
- * @route   POST /api/v1/actual-dispatch/revert-to-planning/:dsrNumber
- * @desc    Revert actual dispatch back to Dispatch Planning only (one stage back,
- *          not all the way to Pre-Approval). Removes from list, restores quantity,
- *          and nulls actual_3 on order_dispatch so it reappears in Dispatch Planning.
- * @access  Public
- * @body    { username, remarks }
- */
-router.post(
-  '/revert-to-planning/:dsrNumber',
-  actualDispatchController.revertToDispatchPlanning
-);
-
-/**
- * @route   POST /api/v1/actual-dispatch/cancel-unselected
- * @desc    Cancel Stock Transfer SKUs left unselected in an Actual Dispatch submission
- *          so they no longer sit in the pending list under the same DO
- * @access  Public
- * @body    { dsrNumbers: string[] }
- */
-router.post(
-  '/cancel-unselected',
-  actualDispatchController.cancelUnselectedDispatches
-);
+router.post('/cancel-unselected', actualDispatchController.cancelUnselectedDispatches);
 
 module.exports = router;

@@ -1,82 +1,57 @@
 const Validator = require('./commonValidator');
 const { ResponseUtil } = require('../utils');
+const { schema } = require('../config/db-v2.ts');
+
+const ORDER_TYPES = schema.orderTypeEnum.enumValues;
+const ORDER_CATEGORIES = schema.orderCategoryEnum.enumValues;
+const DELIVERY_PURPOSES = schema.deliveryPurposeEnum.enumValues;
+const ORDER_THROUGH = schema.orderThroughEnum.enumValues;
 
 /**
  * Order Dispatch Validator
  */
 class OrderDispatchValidator {
   /**
-   * Validate order creation
-   * @param {Object} req - Express request object
-   * @param {Object} res - Express response object
-   * @param {Function} next - Express next middleware function
+   * Validate order creation (Order Punch) - v2 schema payload.
+   * @body { customerId, orderType, items: [{ skuId, orderQuantity, ... }], ... }
    */
   static validateCreate(req, res, next) {
     const { body } = req;
     const errors = [];
 
-    // Required fields validation
-    const requiredFields = ['customer_name', 'order_type'];
-    const { isValid, errors: requiredErrors } = Validator.validateRequired(body, requiredFields);
-    
-    if (!isValid) {
-      return ResponseUtil.validationError(res, requiredErrors);
+    if (!body.customerId) {
+      errors.push({ field: 'customerId', message: 'customerId is required' });
     }
 
-    // Validate products array if multiple products
-    if (body.products && Array.isArray(body.products)) {
-      if (body.products.length === 0) {
-        errors.push({
-          field: 'products',
-          message: 'Products array cannot be empty'
-        });
-      }
-      
-      // Validate each product
-      body.products.forEach((product, index) => {
-        if (!product.product_name) {
-          errors.push({
-            field: `products[${index}].product_name`,
-            message: 'Product name is required'
-          });
+    if (!body.orderType) {
+      errors.push({ field: 'orderType', message: 'orderType is required' });
+    } else if (!ORDER_TYPES.includes(body.orderType)) {
+      errors.push({ field: 'orderType', message: `orderType must be one of: ${ORDER_TYPES.join(', ')}` });
+    }
+
+    if (body.orderCategory && !ORDER_CATEGORIES.includes(body.orderCategory)) {
+      errors.push({ field: 'orderCategory', message: `orderCategory must be one of: ${ORDER_CATEGORIES.join(', ')}` });
+    }
+    if (body.deliveryPurpose && !DELIVERY_PURPOSES.includes(body.deliveryPurpose)) {
+      errors.push({ field: 'deliveryPurpose', message: `deliveryPurpose must be one of: ${DELIVERY_PURPOSES.join(', ')}` });
+    }
+    if (body.orderThrough && !ORDER_THROUGH.includes(body.orderThrough)) {
+      errors.push({ field: 'orderThrough', message: `orderThrough must be one of: ${ORDER_THROUGH.join(', ')}` });
+    }
+
+    if (!Array.isArray(body.items) || body.items.length === 0) {
+      errors.push({ field: 'items', message: 'At least one line item is required' });
+    } else {
+      body.items.forEach((item, index) => {
+        if (!item.skuId) {
+          errors.push({ field: `items[${index}].skuId`, message: 'skuId is required' });
         }
-      });
-    }
-
-    // Validate numeric fields if present
-    if (body.order_quantity && isNaN(body.order_quantity)) {
-      errors.push({
-        field: 'order_quantity',
-        message: 'Order quantity must be a number'
-      });
-    }
-
-    if (body.rate_of_material && isNaN(body.rate_of_material)) {
-      errors.push({
-        field: 'rate_of_material',
-        message: 'Rate of material must be a number'
-      });
-    }
-
-    if (body.total_amount_with_gst && isNaN(body.total_amount_with_gst)) {
-      errors.push({
-        field: 'total_amount_with_gst',
-        message: 'Total amount must be a number'
-      });
-    }
-
-    // Validate dates if present
-    if (body.start_date && isNaN(Date.parse(body.start_date))) {
-      errors.push({
-        field: 'start_date',
-        message: 'Invalid start date format'
-      });
-    }
-
-    if (body.end_date && isNaN(Date.parse(body.end_date))) {
-      errors.push({
-        field: 'end_date',
-        message: 'Invalid end date format'
+        if (item.orderQuantity != null && isNaN(parseFloat(item.orderQuantity))) {
+          errors.push({ field: `items[${index}].orderQuantity`, message: 'orderQuantity must be a number' });
+        }
+        if (item.rateOfMaterial != null && isNaN(parseFloat(item.rateOfMaterial))) {
+          errors.push({ field: `items[${index}].rateOfMaterial`, message: 'rateOfMaterial must be a number' });
+        }
       });
     }
 

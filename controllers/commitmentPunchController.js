@@ -1,45 +1,59 @@
 /**
- * Commitment Punch Controller
+ * Commitment Punch Controller — v2 schema. Bodies are camelCase.
+ *   - /:id/process spawns a real order (orders + order_items) pending Order Approval.
  */
 
 const commitmentPunchService = require('../services/commitmentPunchService');
 const { ResponseUtil, Logger } = require('../utils');
-const { whatsappShareService } = require('../services/whatsappShareService');
+
+const handleError = (res, next, error, ctx) => {
+  if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
+    return ResponseUtil.error(res, error.message, 409);
+  }
+  if (error.message && error.message.includes('not found')) {
+    return ResponseUtil.notFound(res, error.message);
+  }
+  // Validation-style errors (qty <= 0, exceeds balance, missing sku) → 422.
+  if (error.message && (error.message.includes('must be') || error.message.includes('exceeds') || error.message.includes('required'))) {
+    return ResponseUtil.error(res, error.message, 422);
+  }
+  Logger.error(ctx, error);
+  next(error);
+};
 
 /**
- * POST /api/v1/commitment-punch
- * Create a new commitment (one or more product rows)
+ * @route POST /api/v1/commitment-punch
+ * @body  { rows?: [{oilType, quantity, unit, rate}], customerId, commitmentDate,
+ *          customerContactPersonName?, whatsappNo?, address?, oilType?, quantity?, unit?, rate? }
  */
 const createCommitment = async (req, res, next) => {
   try {
-    const { rows, ...data } = req.body;
-    Logger.info('Creating commitment punch', { party: data.party_name, rows: rows?.length || 1 });
+    const { rows, ...data } = req.body || {};
     const result = await commitmentPunchService.createCommitment(data, rows || []);
     return ResponseUtil.success(res, result.data, result.message, 201);
   } catch (error) {
-    Logger.error('Error creating commitment', error);
-    next(error);
+    handleError(res, next, error, '[COMMITMENT] Error in createCommitment controller');
   }
 };
 
 /**
- * GET /api/v1/commitment-punch
- * Fetch all commitments with optional filters
+ * @route GET /api/v1/commitment-punch
+ * @query page, limit, customer_name, search
  */
 const getAll = async (req, res, next) => {
   try {
-    const { page, limit, party_name, search } = req.query;
-    const result = await commitmentPunchService.getAll({ party_name, search }, { page, limit });
+    const { page, limit, customer_name, search } = req.query;
+    const result = await commitmentPunchService.getAll({ customer_name, search }, { page, limit });
     return ResponseUtil.success(res, { commitments: result.data, pagination: result.pagination }, 'Commitments fetched');
   } catch (error) {
-    Logger.error('Error fetching commitments', error);
+    Logger.error('Error in getAll commitments controller', error);
     next(error);
   }
 };
 
 /**
- * GET /api/v1/commitment-punch/pending
- * Fetch pending commitments (planned1 NOT NULL, actual1 IS NULL)
+ * @route GET /api/v1/commitment-punch/pending
+ * @query page, limit, search
  */
 const getPending = async (req, res, next) => {
   try {
@@ -47,69 +61,42 @@ const getPending = async (req, res, next) => {
     const result = await commitmentPunchService.getPending({ search }, { page, limit });
     return ResponseUtil.success(res, { commitments: result.data, pagination: result.pagination }, 'Pending commitments fetched');
   } catch (error) {
-    Logger.error('Error fetching pending commitments', error);
+    Logger.error('Error in getPending commitments controller', error);
     next(error);
   }
 };
 
 /**
- * GET /api/v1/commitment-punch/:id/details
- * Fetch all processed details (commitment_details rows) for a commitment
+ * @route GET /api/v1/commitment-punch/:id/details
  */
 const getDetails = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const result = await commitmentPunchService.getDetails(id);
+    const commitmentId = parseInt(req.params.id, 10);
+    const result = await commitmentPunchService.getDetails(commitmentId);
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
-    Logger.error('Error fetching commitment details', error);
-    next(error);
+    handleError(res, next, error, '[COMMITMENT] Error in getDetails controller');
   }
 };
 
 /**
- * PUT /api/v1/commitment-punch/:id/process
- * Process a commitment (set PO details, SKU details, mark actual1)
+ * @route PUT /api/v1/commitment-punch/:id/process
+ * @body  { skuId, skuQuantity, skuRate?, poNo?, poDate?, orderType?, orderCategory?,
+ *          depotId?, brokerId?, salespersonId?, deliveryPurpose?, orderThrough?,
+ *          paymentTerms?, advancePaymentToBeTaken?, advanceAmount?, typeOfTransporting?,
+ *          startDate?, endDate?, deliveryDate?, futurePeriodDate?, uploadCopy?, remarks?, userId? }
  */
 const processCommitment = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const result = await commitmentPunchService.processCommitment(id, req.body);
-
-    // Trigger WhatsApp notification
-    try {
-      const orderData = req.body;
-      const targetPage = 'Approval of Order'; // Commitment process always creates orders pending in this stage
-      
-      const docDetails = {
-        stage: `🆕 *New Order (from Commitment)*`,
-        order_type: orderData.order_type || 'Regular',
-        do_date: orderData.actual_delivery_date || orderData.end_date,
-        do_number: result.data.order_no,
-        customer_name: result.data.detail?.customer_name, 
-        oil_type: orderData.sku, 
-        order_punch_remarks: orderData.remarks
-      };
-
-      if (req.pageAccessDetails) {
-        Logger.info(`[WHATSAPP] Commitment process notification — targetPage: "${targetPage}", totalUsers: ${req.pageAccessDetails.length}, orderNo: ${result.data.order_no}`);
-        Logger.info(`[WHATSAPP] docDetails:`, JSON.stringify(docDetails));
-        whatsappShareService(docDetails, req.pageAccessDetails, targetPage)
-          .then(() => Logger.info(`[WHATSAPP] whatsappShareService call completed for order ${result.data.order_no}`))
-          .catch((err) => Logger.warn('Failed to send WhatsApp notification for commitment process', err));
-      } else {
-        Logger.warn(`[WHATSAPP] Skipping notification — req.pageAccessDetails is not set (pageAccess middleware may not have run)`);
-      }
-    } catch (notifyError) {
-      Logger.warn('Failed to send WhatsApp notification for commitment process', notifyError);
-    }
-
+    const commitmentId = parseInt(req.params.id, 10);
+    const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
+    Logger.info(`[COMMITMENT] Process commitment ${commitmentId}`);
+    const result = await commitmentPunchService.processCommitment(commitmentId, data);
+    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
-    Logger.error('Error processing commitment', error);
-    next(error);
+    handleError(res, next, error, '[COMMITMENT] Error in processCommitment controller');
   }
 };
 
 module.exports = { createCommitment, getAll, getPending, processCommitment, getDetails };
-

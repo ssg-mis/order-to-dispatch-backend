@@ -1,18 +1,29 @@
+/**
+ * Make Invoice Routes (Gate 6a: Make Invoice) — v2 schema.
+ * Operates on the Make sub-gate of `invoices`. :id = invoices row id.
+ *   - Pending: invoices.planned_made_at NOT NULL, made_at NULL
+ *   - History: invoices.planned_made_at NOT NULL, made_at NOT NULL
+ */
+
 const express = require('express');
 const router = express.Router();
 const makeInvoiceController = require('../controllers/makeInvoiceController');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+const makeInvoiceValidator = require('../validators/makeInvoiceValidator');
+// pageAccess middleware intentionally not applied until the notification layer is migrated.
 
-// Get pending invoices
+/** @route GET /api/v1/make-invoice/pending */
 router.get('/pending', makeInvoiceController.getPendingInvoices);
 
-// Get invoice history
+/** @route GET /api/v1/make-invoice/history */
 router.get('/history', makeInvoiceController.getInvoiceHistory);
 
-// Submit invoice (update actual_5 and invoice fields)
-router.post('/submit/:id', pageAccess, makeInvoiceController.submitInvoice);
+/**
+ * @route POST /api/v1/make-invoice/submit/:id   (:id = invoices row id)
+ * @body  { billType?, invoiceDate?, invoiceNo?, invoiceCopy?, qty?, billAmount?, cdAmount?, userId? }
+ */
+router.post('/submit/:id', makeInvoiceValidator.validateSubmit, makeInvoiceController.submitInvoice);
 
-// Get invoice details by ID
+/** @route GET /api/v1/make-invoice/:id   (:id = invoices row id) — keep last */
 router.get('/:id', makeInvoiceController.getInvoiceById);
 
 module.exports = router;

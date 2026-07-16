@@ -10,58 +10,19 @@ class CustomerService {
   /**
    * Get all active customers
    */
+  // v2 schema: delegate to the shared master-lookup helper (search columns are
+  // drizzle camelCase keys). Returns snake_case rows + a real `id` FK.
   async getAllCustomers(params = {}) {
     try {
-      const { all, page = 1, limit = 20, search = '' } = params;
-      const isAll = all === true || all === 'true';
-      // When `all` is requested without an explicit limit, return the full set
-      // (skip LIMIT/OFFSET). Callers that pass a limit still get pagination.
-      const noLimit = isAll && params.limit === undefined;
-      const offset = (page - 1) * limit;
-      const values = [];
-
-      const conditions = ["approval_status = 'approved'"];
-      if (!isAll) conditions.push("status = 'Active'");
-
-      if (search) {
-        const { buildSearchCondition } = require('../utils/searchUtils');
-        const { clause, params: searchParams } = buildSearchCondition(['customer_name', 'customer_id', 'gstin', 'contact_person', 'contact', 'email'], search, values.length + 1);
-        values.push(...searchParams);
-        conditions.push(clause);
-      }
-
-      const whereClause = " WHERE " + conditions.join(" AND ");
-
-      // Get total count
-      const countQuery = `SELECT COUNT(*) FROM customer_details ${whereClause}`;
-      const countResult = await pool.query(countQuery, values);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get paginated data
-      const query = `
-        SELECT
-          id, customer_id, customer_name, status, contact_person, contact,
-          email, address_line_1, address_line_2, state, pincode,
-          pan, gstin, gst_registered,
-          (pending_changes IS NOT NULL) AS has_pending_edit
-        FROM customer_details
-        ${whereClause}
-        ORDER BY customer_name ASC
-        ${noLimit ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
-      `;
-
-      if (!noLimit) values.push(limit, offset);
-      const result = await pool.query(query, values);
-
-      Logger.info(`Fetched ${result.rows.length} customers (total: ${total}, search: "${search}")`);
-      return {
-        customers: result.rows,
-        pagination: {
-          total,
-          page: parseInt(page),
-          limit: parseInt(limit)
-        }
-      };
+      const { masterLookup } = require('./masterLookupHelper');
+      const { schema } = require('../config/db-v2.ts');
+      const { rows, total } = await masterLookup(schema.customers, {
+        nameColumn: 'customerName',
+        searchColumns: ['customerName', 'customerCode', 'gstin', 'contactPerson', 'contact', 'email'],
+        ...params,
+      });
+      Logger.info(`Fetched ${rows.length} customers (total: ${total})`);
+      return { customers: rows, pagination: { total, page: parseInt(params.page) || 1, limit: parseInt(params.limit) || total } };
     } catch (error) {
       Logger.error('Error fetching customers:', error);
       throw error;

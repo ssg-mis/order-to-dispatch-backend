@@ -1,95 +1,52 @@
 /**
- * Dispatch Planning Routes  
- * API endpoints for Stage 4: Dispatch Planning workflow
- * Conditions:
- * - Pending: planned_3 IS NOT NULL AND actual_3 IS NULL
- * - History: planned_3 IS NOT NULL AND actual_3 IS NOT NULL
+ * Dispatch Planning Routes (Gate 3: Dispatch Planning) — v2 schema.
+ * :id on the mutating routes is an order_item id.
+ *   - Pending: dispatch_plannings.planned_at NOT NULL, actual_at NULL
+ *   - History: dispatch_plannings.planned_at NOT NULL, actual_at NOT NULL
  */
 
 const express = require('express');
 const router = express.Router();
 const dispatchPlanningController = require('../controllers/dispatchPlanningController');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+const dispatchPlanningValidator = require('../validators/dispatchPlanningValidator');
+// pageAccess middleware (WhatsApp notification targeting, reads legacy `login`
+// table on prod RDS) intentionally not applied until the notification layer is migrated.
+
+/** @route GET /api/v1/dispatch-planning/pending */
+router.get('/pending', dispatchPlanningController.getPendingDispatches);
+
+/** @route GET /api/v1/dispatch-planning/history */
+router.get('/history', dispatchPlanningController.getDispatchHistory);
 
 /**
- * @route   GET /api/v1/dispatch-planning/pending
- * @desc    Get pending dispatch planning orders (planned_3 NOT NULL, actual_3 NULL)
- * @access  Public
- * @query   page, limit, order_no, customer_name, start_date, end_date
+ * @route POST /api/v1/dispatch-planning/submit/:id   (:id = order_item id)
+ * @body  { dispatchQty?, transfer?, dispatchFrom?, billCompanyName?, billAddress?,
+ *          shipCompanyName?, shipAddress?, freightRate?, userId? }
  */
-router.get(
-  '/pending',
-  dispatchPlanningController.getPendingDispatches
-);
+router.post('/submit/:id', dispatchPlanningValidator.validateSubmit, dispatchPlanningController.submitDispatchPlanning);
 
 /**
- * @route   GET /api/v1/dispatch-planning/history
- * @desc    Get dispatch planning history (planned_3 NOT NULL, actual_3 NOT NULL)
- * @access  Public
- * @query   page, limit, order_no, customer_name, start_date, end_date
+ * @route POST /api/v1/dispatch-planning/revert/:id   (:id = order_item id)
+ * @body  { remarks?, userId? }
  */
-router.get(
-  '/history',
-  dispatchPlanningController.getDispatchHistory
-);
+router.post('/revert/:id', dispatchPlanningController.revertDispatchPlanning);
 
 /**
- * @route   POST /api/v1/dispatch-planning/submit/:id
- * @desc    Submit dispatch planning (inserts into lift_receiving_confirmation, sets actual_3)
- * @access  Public
- * @body    { dispatch_from: string }
+ * @route POST /api/v1/dispatch-planning/cancel/:id   (:id = order_item id) — Super Admin only
+ * @body  { remarks, userId? }
  */
-router.post(
-  '/submit/:id',
-  pageAccess,
-  dispatchPlanningController.submitDispatchPlanning
-);
+router.post('/cancel/:id', dispatchPlanningController.cancelDispatchPlanning);
 
 /**
- * @route   POST /api/v1/dispatch-planning/revert/:id
- * @desc    Revert dispatch planning to pre-approval (nulls actual_3, planned_3, actual_2, planned_2, actual_1)
- * @access  Public
- * @body    { username: string }
+ * @route POST /api/v1/dispatch-planning/update-transfer/:id   (:id = order_item id)
+ * @body  { billCompanyName?, billAddress?, shipCompanyName?, shipAddress?, freightRate? }
  */
-router.post(
-  '/revert/:id',
-  dispatchPlanningController.revertDispatchPlanning
-);
+router.post('/update-transfer/:id', dispatchPlanningController.updateTransferDetails);
 
 /**
- * @route   POST /api/v1/dispatch-planning/cancel/:id
- * @desc    Cancel an order from Dispatch Planning — Super Admin only. Terminates the
- *          order (never proceeds further), zeroes remaining qty, flags
- *          overall_status_of_order = 'Cancelled' (counted under dashboard Rejected
- *          Orders), and keeps it visible only in Dispatch Planning's History with remarks.
- * @access  Super Admin
- * @body    { username: string, remarks: string }
+ * @route POST /api/v1/dispatch-planning/preclose/:id   (:id = order_item id)
+ * @body  { precloseQty, action?, precloseRemarks?, userId? }
  */
-router.post(
-  '/cancel/:id',
-  dispatchPlanningController.cancelDispatchPlanning
-);
-
-/**
- * @route   POST /api/v1/dispatch-planning/update-transfer/:id
- * @desc    Update transfer details for an order
- * @access  Public
- * @body    { transfer: string, bill_company_name: string, ... }
- */
-router.post(
-  '/update-transfer/:id',
-  dispatchPlanningController.updateTransferDetails
-);
-
-/**
- * @route   POST /api/v1/dispatch-planning/preclose/:id
- * @desc    Pre-close quantity for an order
- * @access  Public
- * @body    { preclose_qty: number, username: string }
- */
-router.post(
-  '/preclose/:id',
-  dispatchPlanningController.precloseDispatchPlanning
-);
+router.post('/preclose/:id', dispatchPlanningValidator.validatePreclose, dispatchPlanningController.precloseDispatchPlanning);
 
 module.exports = router;

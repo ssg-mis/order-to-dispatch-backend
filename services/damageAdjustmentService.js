@@ -1,272 +1,128 @@
 /**
- * Damage Adjustment Service
- * Business logic for damage adjustment (Stage 13: Damage Adjustment)
- * Uses lift_receiving_confirmation table
- * Conditions:
- * - Pending: planned_9 IS NOT NULL AND actual_9 IS NULL
- * - History: planned_9 IS NOT NULL AND actual_9 IS NOT NULL
+ * Damage Adjustment Service (Gate 9: Damage Adjustment — final gate) — v2 schema.
+ *
+ * Per SHIPMENT, keyed off the `damage_adjustments` gate (seeded on Confirm
+ * Material Receipt only when the receipt was flagged damaged).
+ *   - Pending : damage_adjustments.planned_at IS NOT NULL AND actual_at IS NULL
+ *   - History : damage_adjustments.planned_at IS NOT NULL AND actual_at IS NOT NULL
+ *
+ * Submitting stamps actual_at and records the final status + credit-note details.
+ * This is the last gate — nothing is seeded downstream.
+ *
+ * `:id` on the mutating route is a damage_adjustments row id.
  */
 
-const db = require('../config/db');
-const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
-const { applyDispatchFilters } = require('../utils/searchUtils');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+
+const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
 
 class DamageAdjustmentService {
-  /**
-   * Get pending damage adjustment records
-   * Pending: planned_9 IS NOT NULL AND actual_9 IS NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} Pending records
-   */
   async getPendingAdjustments(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
-      const offset = (page - 1) * limit;
-
-      let whereConditions = ['lrc.planned_9 IS NOT NULL', 'lrc.actual_9 IS NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Add optional filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
-        paramIndex++;
-      }
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data
-      const dataQuery = `
-        SELECT 
-          lrc.*,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.transfer,
-          od.bill_company_name
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-        ORDER BY lrc.planned_9 ASC, lrc.d_sr_number ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} pending damage adjustments`);
-
-      return {
-        success: true,
-        data: {
-          orders: dataResult.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.ceil(total / limit)
-          }
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching pending damage adjustments', error);
-      throw new Error('Failed to fetch pending damage adjustments');
-    }
+    return this._listAdjustments({ ...filters, ...pagination, open: true });
   }
 
-  /**
-   * Get damage adjustment history
-   * History: planned_9 IS NOT NULL AND actual_9 IS NOT NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} History records
-   */
   async getAdjustmentHistory(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
-      const offset = (page - 1) * limit;
+    return this._listAdjustments({ ...filters, ...pagination, open: false });
+  }
 
-      let whereConditions = ['lrc.planned_9 IS NOT NULL', 'lrc.actual_9 IS NOT NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
+  async _listAdjustments({ open, page = 1, limit = 25, order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no, d_sr_number }) {
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 25;
 
-      // Add optional filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
-        paramIndex++;
-      }
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data
-      const dataQuery = `
-        SELECT 
-          lrc.*,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.actual_1 AS order_actual_1,
-          od.transfer,
-          od.bill_company_name
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-        ORDER BY lrc.actual_9 DESC, lrc.d_sr_number ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} damage adjustment history records`);
-
-      return {
-        success: true,
-        data: {
-          orders: dataResult.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.ceil(total / limit)
-          }
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching damage adjustment history', error);
-      throw new Error('Failed to fetch damage adjustment history');
+    const conditions = [
+      isNotNull(schema.damageAdjustments.plannedAt),
+      open ? isNull(schema.damageAdjustments.actualAt) : isNotNull(schema.damageAdjustments.actualAt),
+    ];
+    if (d_sr_number) conditions.push(eq(schema.dispatches.dsrNumber, d_sr_number));
+    if (order_no) {
+      conditions.push(sql`(${schema.orders.orderNo} ILIKE ${'%' + order_no + '%'} OR ${schema.customers.customerName} ILIKE ${'%' + order_no + '%'})`);
+    } else if (customer_name) {
+      conditions.push(sql`${schema.customers.customerName} ILIKE ${'%' + customer_name + '%'}`);
     }
+    if (start_date && end_date) {
+      conditions.push(sql`${schema.orders.deliveryDate} BETWEEN ${start_date} AND ${end_date}`);
+    }
+    if (Array.isArray(depo_names)) {
+      conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
+    }
+    if (manual_sauda_no) {
+      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+    }
+    const where = and(...conditions);
+
+    const baseJoin = (q) => q
+      .from(schema.damageAdjustments)
+      .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.damageAdjustments.dispatchId))
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId));
+
+    const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
+
+    const rows = await baseJoin(
+      dbV2.select({
+        damageAdjustment: schema.damageAdjustments,
+        materialReceipt: schema.materialReceipts,
+        dispatch: schema.dispatches,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+      })
+    )
+      .leftJoin(schema.materialReceipts, eq(schema.materialReceipts.dispatchId, schema.dispatches.id))
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .where(where)
+      .orderBy(open ? asc(schema.damageAdjustments.plannedAt) : desc(schema.damageAdjustments.actualAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    return {
+      success: true,
+      data: { orders: rows, pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) } },
+    };
   }
 
   /**
-   * Submit damage adjustment (set actual_9 and details)
-   * @param {number} id - Record ID from lift_receiving_confirmation
-   * @param {Object} data - Adjustment data
-   * @returns {Promise<Object>} Updated record
+   * Submit the final damage adjustment for one shipment.
+   *
+   * @param {number} damageAdjustmentId
+   * @param {Object} data - { status, creditNoteDate, creditNoteNo, creditNoteCopy,
+   *                          creditNoteQty, creditNoteAmount, netBalance, userId }
    */
-  async submitAdjustment(id, data = {}) {
-    try {
-      Logger.info(`Submitting damage adjustment for ID: ${id}`, { data });
+  async submitAdjustment(damageAdjustmentId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const [adj] = await tx
+        .select({ id: schema.damageAdjustments.id, dispatchId: schema.damageAdjustments.dispatchId, actualAt: schema.damageAdjustments.actualAt })
+        .from(schema.damageAdjustments)
+        .where(eq(schema.damageAdjustments.id, damageAdjustmentId));
+      if (!adj) throw new Error('Damage adjustment record not found');
 
-      const updateData = {
-        actual_9: new Date().toISOString(), // Adjustment Timestamp
-        damage_adjustment_user: data.user_id || null,
-        delay_9: data.delay_9 || null,
-        status_2: data.status_2 || null, // Final Status
-        credit_note_date: data.credit_note_date || null,
-        credit_note_no: data.credit_note_no || null,
-        credit_note_copy: data.credit_note_copy || null,
-        credit_note_qty: data.credit_note_qty || null,
-        credit_note_amount: data.credit_note_amount || null,
-        net_banalce: data.net_banalce || null
-      };
+      const updated = await tx
+        .update(schema.damageAdjustments)
+        .set({
+          actualAt: new Date(),
+          performedByUserId: data.userId ?? null,
+          status: data.status ?? null,
+          creditNoteDate: data.creditNoteDate ?? null,
+          creditNoteNo: data.creditNoteNo ?? null,
+          creditNoteCopy: data.creditNoteCopy ?? null,
+          creditNoteQty: toNum(data.creditNoteQty),
+          creditNoteAmount: toNum(data.creditNoteAmount),
+          netBalance: toNum(data.netBalance),
+        })
+        .where(and(eq(schema.damageAdjustments.id, damageAdjustmentId), isNull(schema.damageAdjustments.actualAt)))
+        .returning();
+      assertStageOpen({ rowCount: updated.length }, 'Damage Adjustment');
 
-      const fields = Object.keys(updateData);
-      const values = Object.values(updateData);
-
-      const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-
-      const query = `
-        UPDATE lift_receiving_confirmation 
-        SET ${setClause}
-        WHERE id = $${fields.length + 1}
-        RETURNING *
-      `;
-
-      const result = await db.query(query, [...values, id]);
-
-      if (result.rows.length === 0) {
-        throw new Error('Record not found');
-      }
-
-      Logger.info(`Damage adjustment submitted successfully for ID: ${id}`);
-
-      return {
-        success: true,
-        message: 'Damage adjustment submitted successfully',
-        data: result.rows[0]
-      };
-    } catch (error) {
-      Logger.error('Error submitting damage adjustment', error);
-      throw error;
-    }
+      Logger.info(`[DAMAGE ADJUSTMENT] Adjustment ${damageAdjustmentId} (dispatch ${adj.dispatchId}) completed — pipeline finished`);
+      return { success: true, message: 'Damage adjustment submitted successfully', data: { damageAdjustmentId, dispatchId: adj.dispatchId } };
+    });
   }
 }
 

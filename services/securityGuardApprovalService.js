@@ -1,557 +1,245 @@
 /**
- * Security Guard Approval Service
- * Business logic for security guard approval management (Stage 8: Security Guard Approval)
- * Uses lift_receiving_confirmation table
- * Conditions:
- * - Pending: planned_4 IS NOT NULL AND actual_4 IS NULL
- * - History: planned_4 IS NOT NULL AND actual_4 IS NOT NULL
+ * Security Guard Approval Service (Gate 5: Security Guard Approval) — v2 schema.
+ *
+ * Per SHIPMENT, keyed off the `security_guard_checks` gate (seeded when a
+ * shipment is actual-dispatched). Only BANARI-depot shipments land here pending;
+ * every other depot auto-skips Security at Actual Dispatch (its check row is born
+ * already-closed and the invoice gate is seeded straight away).
+ *   - Pending : security_guard_checks.planned_at IS NOT NULL AND actual_at IS NULL
+ *   - History : security_guard_checks.planned_at IS NOT NULL AND actual_at IS NOT NULL
+ *
+ * A check is an ATTEMPT (one dispatch can accrue several — reject, redo, re-check):
+ *   - APPROVE stamps actual_at + verdict, records the bilty, and seeds the
+ *     `invoices` gate (planned_made_at) so the shipment lands pending at Make
+ *     Invoice. This is the SAME seed the non-BANARI skip path performs in Actual
+ *     Dispatch — faithful to the reference's set_planned_5_from_actual_4 trigger.
+ *   - REJECT closes this attempt as rejected (verdict + remarks) AND re-opens the
+ *     shipment's Actual Dispatch (dispatches.actual_at → null) so it can be redone.
+ *     The redo mints a FRESH check attempt (Actual Dispatch inserts a new row),
+ *     so the rejected attempt stays in History for audit and never collides.
+ *
+ * `:id` on the mutating route is a security_guard_checks (attempt) id — the row
+ * the pending list represents.
  */
 
-const db = require('../config/db');
-const { assertStageOpen } = require('../utils/staleWriteGuard');
-const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
-const { applyDispatchFilters } = require('../utils/searchUtils');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { getPlannedAt } = require('./stageUtils');
+
+function staleWrite() {
+  const err = new Error('This shipment is no longer awaiting Security Guard Approval — it was already processed or moved by another user. Please refresh and try again.');
+  err.statusCode = 409;
+  err.code = 'STALE_WRITE';
+  return err;
+}
+
+// Elapsed time from the planned security stamp to now, as a Postgres interval
+// literal (was delay_4 — computed but never persisted in the old schema; the v2
+// column is real, so we fill it).
+function computeDelay(plannedAt) {
+  if (!plannedAt) return null;
+  const ms = Date.now() - new Date(plannedAt).getTime();
+  const hours = Math.floor(ms / (1000 * 60 * 60));
+  return `${hours} hours`;
+}
 
 class SecurityGuardApprovalService {
-  /**
-   * Get unique filter options for Security Guard stage
-   * @returns {Promise<Object>} Object containing customer names and depots
-   */
-  async getFilterOptions() {
-    try {
-      // Get unique customer names from pending items
-      const customerQuery = `
-        SELECT DISTINCT party_name 
-        FROM lift_receiving_confirmation 
-        WHERE planned_4 IS NOT NULL AND actual_4 IS NULL
-        ORDER BY party_name ASC
-      `;
-      const customerResult = await db.query(customerQuery);
-
-      // Get unique depots from pending items
-      const depoQuery = `
-        SELECT DISTINCT od.depo_name
-        FROM lift_receiving_confirmation lrc
-        JOIN order_dispatch od ON lrc.so_no = od.order_no
-        WHERE lrc.planned_4 IS NOT NULL AND lrc.actual_4 IS NULL
-        ORDER BY od.depo_name ASC
-      `;
-      const depoResult = await db.query(depoQuery);
-
-      return {
-        success: true,
-        data: {
-          customerNames: customerResult.rows.map(r => r.party_name),
-          depots: depoResult.rows.map(r => r.depo_name)
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching security guard filter options', error);
-      return { success: false, message: 'Failed to fetch filter options' };
-    }
-  }
-
-  /**
-   * Get pending security guard approvals
-
-   * Pending: planned_4 IS NOT NULL AND actual_4 IS NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} Pending security guard approvals
-   */
   async getPendingApprovals(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 10;
-      const offset = (page - 1) * limit;
-
-      const groupKeyExp = `
-        CONCAT(
-          COALESCE(lrc.actual_1::date::text, 'no-date'),
-          '|',
-          COALESCE(NULLIF(upper(trim(lrc.truck_no)), ''), 'NO-TRUCK')
-        )
-      `;
-
-      let whereConditions = ['lrc.planned_4 IS NOT NULL', 'lrc.actual_4 IS NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.customer_name) {
-        whereConditions.push(`lrc.party_name = $${paramIndex}`);
-        queryParams.push(filters.customer_name);
-        paramIndex++;
-      }
-
-      if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        if (filters.depo_names.length === 0) {
-          whereConditions.push('1=0');
-        } else {
-          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
-          queryParams.push(filters.depo_names);
-          paramIndex++;
-        }
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Step 1: Get paginated groups by actual dispatch date and vehicle number
-      const groupQuery = `
-        SELECT ${groupKeyExp} as group_key, MAX(lrc.actual_1) as sort_date
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-        GROUP BY group_key
-        ORDER BY sort_date DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
-      const groupKeys = groupResult.rows.map(r => r.group_key);
-
-      if (groupKeys.length === 0) {
-        return {
-          success: true,
-          data: [],
-          pagination: { page, limit, total: 0, totalPages: 0 }
-        };
-      }
-
-      // Step 2: Get total count of groups
-      const countQuery = `
-        SELECT COUNT(DISTINCT ${groupKeyExp}) as total
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-      `;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].total);
-
-      let dataWhereConditions = ['lrc.planned_4 IS NOT NULL', 'lrc.actual_4 IS NULL'];
-      let dataParams = [groupKeys];
-      let dataParamIndex = 2;
-
-      // Mirror dispatch filters with identical param positions
-      dataParamIndex = applyDispatchFilters(filters, dataWhereConditions, dataParams, dataParamIndex);
-
-      if (filters.customer_name) {
-        dataWhereConditions.push(`lrc.party_name = $${dataParamIndex}`);
-        dataParams.push(filters.customer_name);
-        dataParamIndex++;
-      }
-
-      if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        if (filters.depo_names.length === 0) {
-          dataWhereConditions.push('1=0');
-        } else {
-          dataWhereConditions.push(`od.depo_name = ANY($${dataParamIndex})`);
-          dataParams.push(filters.depo_names);
-          dataParamIndex++;
-        }
-      }
-
-      // Step 3: Fetch all rows for these actual-date + vehicle groups
-      const dataQuery = `
-        WITH selected_groups AS (
-          SELECT unnest($1::text[]) AS group_key
-        )
-        SELECT 
-          lrc.*,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.actual_1 AS order_actual_1,
-          od.transfer,
-          od.bill_company_name,
-          od.upload_copy AS upload_so,
-          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
-          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
-          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
-          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
-          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
-          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
-          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
-          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
-          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
-          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
-          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
-        JOIN selected_groups sg ON ${groupKeyExp} = sg.group_key
-        WHERE ${dataWhereConditions.join(' AND ')}
-        ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
-      `;
-
-      const dataResult = await db.query(dataQuery, dataParams);
-      await resolveAuditUsers(dataResult.rows);
-
-      return {
-        success: true,
-        data: dataResult.rows,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching pending security guard approvals', error);
-      throw new Error('Failed to fetch pending security guard approvals');
-    }
+    return this._listSecurity({ ...filters, ...pagination, open: true });
   }
 
-  /**
-   * Get security guard approval history
-   * History: planned_4 IS NOT NULL AND actual_4 IS NOT NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} History records
-   */
   async getApprovalHistory(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 10;
-      const offset = (page - 1) * limit;
-
-      const baseDoExp = `COALESCE(substring(lrc.so_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), lrc.so_no)`;
-
-      let whereConditions = ['lrc.planned_4 IS NOT NULL', 'lrc.actual_4 IS NOT NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.customer_name) {
-        whereConditions.push(`lrc.party_name = $${paramIndex}`);
-        queryParams.push(filters.customer_name);
-        paramIndex++;
-      }
-
-      if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        if (filters.depo_names.length === 0) {
-          whereConditions.push('1=0');
-        } else {
-          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
-          queryParams.push(filters.depo_names);
-          paramIndex++;
-        }
-      }
-
-      // Add date range filters for history
-      if (filters.start_date) {
-        whereConditions.push(`lrc.actual_4 >= $${paramIndex}`);
-        queryParams.push(filters.start_date);
-        paramIndex++;
-      }
-
-      if (filters.end_date) {
-        whereConditions.push(`lrc.actual_4 <= $${paramIndex}::timestamp + interval '1 day'`);
-        queryParams.push(filters.end_date);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Step 1: Get paginated Base DOs
-      const groupQuery = `
-        SELECT ${baseDoExp} as base_do, MAX(lrc.actual_4) as sort_date
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-        GROUP BY base_do
-        ORDER BY sort_date DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const groupResult = await db.query(groupQuery, [...queryParams, limit, offset]);
-      const baseDos = groupResult.rows.map(r => r.base_do);
-
-      if (baseDos.length === 0) {
-        return {
-          success: true,
-          data: [],
-          pagination: { page, limit, total: 0, totalPages: 0 }
-        };
-      }
-
-      // Step 2: Get total count
-      const countQuery = `
-        SELECT COUNT(DISTINCT ${baseDoExp}) as total
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-      `;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].total);
-
-      // Step 3: Fetch rows
-      const dataQuery = `
-        SELECT 
-          lrc.*,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.actual_1 AS order_actual_1,
-          od.transfer,
-          od.bill_company_name,
-          od.upload_copy AS upload_so,
-          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
-          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
-          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
-          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
-          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
-          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
-          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
-          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
-          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
-          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
-          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
-        WHERE ${baseDoExp} = ANY($1)
-          AND lrc.planned_4 IS NOT NULL AND lrc.actual_4 IS NOT NULL
-        ORDER BY lrc.actual_4 DESC, lrc.d_sr_number ASC
-      `;
-
-      const dataResult = await db.query(dataQuery, [baseDos]);
-      await resolveAuditUsers(dataResult.rows);
-
-      return {
-        success: true,
-        data: dataResult.rows,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching security guard approval history', error);
-      throw new Error('Failed to fetch security guard approval history');
-    }
+    return this._listSecurity({ ...filters, ...pagination, open: false });
   }
 
-  /**
-   * Submit security guard approval (set actual_4 and update approval details)
-   * @param {number} id - Record ID from lift_receiving_confirmation
-   * @param {Object} data - Security guard approval data
-   * @returns {Promise<Object>} Updated record
-   */
-  async submitApproval(id, data = {}) {
-    try {
-      Logger.info(`Submitting security guard approval for ID: ${id}`, { data });
-      const client = await db.getClient();
+  async _listSecurity({ open, page = 1, limit = 25, order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no }) {
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 25;
 
-      try {
-        await client.query('BEGIN');
-        await this.ensurePlanned5TriggerUsesTat(client);
-
-        // Calculate time delay if planned_4 exists
-        let timeDelay = null;
-        if (data.planned_4) {
-          const planned = new Date(data.planned_4);
-          const actual = new Date();
-          const diffMs = actual - planned;
-          const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-          timeDelay = `${diffHours} hours`;
-        }
-
-        let updateData = {};
-
-        if (data.verdict_status === 'REJECT') {
-          updateData = {
-            actual_1: null,
-            actual_4: null,
-            security_guard_status: 'REJECT',
-            security_guard_user: data.user_id || null,
-            revert_security_remarks: data.remarks || null,
-          };
-        } else {
-          updateData = {
-            actual_4: new Date().toISOString(),
-            planned_5: await this.getPlannedTimestamp(client, 'Make Invoice (Proforma)'),
-            bilty_no: data.bilty_no || null,
-            bilty_image: data.bilty_image || null,
-            vehicle_image_attachemrnt: data.vehicle_image_attachemrnt || null,
-            security_guard_user: data.user_id || null,
-            security_guard_status: 'APPROVE',
-          };
-        }
-
-        const fields = Object.keys(updateData);
-        const values = Object.values(updateData);
-
-        const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-
-        // Stale-write guard: only act on a row still pending at Security Guard (actual_4
-        // NULL). Blocks a second Approve, and Approve/Reject landing on an already-approved
-        // record, when two guards act from stale screens.
-        const query = `
-          UPDATE lift_receiving_confirmation
-          SET ${setClause}
-          WHERE id = $${fields.length + 1} AND actual_4 IS NULL
-          RETURNING *
-        `;
-
-        const result = await client.query(query, [...values, id]);
-
-        assertStageOpen(result, 'Security Guard Approval');
-
-        await client.query('COMMIT');
-
-        Logger.info(`Security guard approval submitted successfully for ID: ${id}`);
-
-        return {
-          success: true,
-          message: 'Security guard approval submitted successfully',
-          data: result.rows[0]
-        };
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      } finally {
-        client.release();
-      }
-    } catch (error) {
-      Logger.error('Error submitting security guard approval', error);
-      throw error;
+    const conditions = [
+      isNotNull(schema.securityGuardChecks.plannedAt),
+      open ? isNull(schema.securityGuardChecks.actualAt) : isNotNull(schema.securityGuardChecks.actualAt),
+    ];
+    if (order_no) {
+      conditions.push(sql`(${schema.orders.orderNo} ILIKE ${'%' + order_no + '%'} OR ${schema.customers.customerName} ILIKE ${'%' + order_no + '%'})`);
+    } else if (customer_name) {
+      conditions.push(sql`${schema.customers.customerName} ILIKE ${'%' + customer_name + '%'}`);
     }
-  }
+    if (start_date && end_date) {
+      conditions.push(sql`${schema.orders.deliveryDate} BETWEEN ${start_date} AND ${end_date}`);
+    }
+    if (Array.isArray(depo_names)) {
+      conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
+    }
+    if (manual_sauda_no) {
+      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+    }
+    const where = and(...conditions);
 
-  async getPlannedTimestamp(client, stageName) {
-    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const normalizedStageName = normalizeStageName(stageName);
-    const stageAliases = {
-      makeinvoiceproforma: ['makeinvoiceproforma', 'makeinvoice'],
+    const baseJoin = (q) => q
+      .from(schema.securityGuardChecks)
+      .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.securityGuardChecks.dispatchId))
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId));
+
+    const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
+
+    const rows = await baseJoin(
+      dbV2.select({
+        securityCheck: schema.securityGuardChecks,
+        dispatch: schema.dispatches,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+        vehicle: schema.vehicles,
+        driver: schema.drivers,
+        transporter: schema.transporters,
+      })
+    )
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .leftJoin(schema.vehicles, eq(schema.vehicles.id, schema.dispatches.vehicleId))
+      .leftJoin(schema.drivers, eq(schema.drivers.id, schema.dispatches.driverId))
+      .leftJoin(schema.transporters, eq(schema.transporters.id, schema.dispatches.transporterId))
+      .where(where)
+      .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.securityGuardChecks.actualAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    return {
+      success: true,
+      data: rows,
+      pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) },
     };
-    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
-
-    const result = await client.query(
-      `
-        SELECT (
-          CURRENT_TIMESTAMP + COALESCE(
-            (
-              SELECT stage_time
-              FROM process_stages
-              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
-              ORDER BY submitted_at DESC, id DESC
-              LIMIT 1
-            ),
-            INTERVAL '0'
-          )
-        ) AS planned_at
-      `,
-      [normalizedStageNames]
-    );
-
-    const plannedAt = result.rows[0]?.planned_at;
-    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
-  }
-
-  async ensurePlanned5TriggerUsesTat(client) {
-    await client.query(`
-      CREATE OR REPLACE FUNCTION set_planned_5_from_actual_4()
-      RETURNS TRIGGER AS $$
-      DECLARE
-          make_invoice_tat INTERVAL;
-      BEGIN
-          SELECT stage_time
-          INTO make_invoice_tat
-          FROM process_stages
-          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') IN ('makeinvoiceproforma', 'makeinvoice')
-          ORDER BY submitted_at DESC, id DESC
-          LIMIT 1;
-
-          IF NEW.actual_4 IS NOT NULL
-             AND (TG_OP = 'INSERT' OR OLD.actual_4 IS DISTINCT FROM NEW.actual_4) THEN
-              NEW.planned_5 := NEW.actual_4::timestamptz + COALESCE(make_invoice_tat, INTERVAL '0');
-          END IF;
-
-          RETURN NEW;
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
   }
 
   /**
-   * Get security guard approval by ID
-   * @param {number} id - Record ID
-   * @returns {Promise<Object>} Record details
+   * Submit a security guard verdict for one check attempt.
+   *
+   * @param {number} securityCheckId  security_guard_checks id
+   * @param {Object} data
+   *   - verdictStatus: 'APPROVE' | 'REJECT'
+   *   - userId
+   *   - APPROVE: biltyNo, biltyImage, vehicleImageAttachment
+   *   - REJECT:  remarks (→ revert_remarks)
    */
-  async getApprovalById(id) {
-    try {
-      const query = `
-        SELECT * FROM lift_receiving_confirmation 
-        WHERE id = $1
-      `;
+  async submitApproval(securityCheckId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const [chk] = await tx
+        .select({
+          id: schema.securityGuardChecks.id,
+          dispatchId: schema.securityGuardChecks.dispatchId,
+          plannedAt: schema.securityGuardChecks.plannedAt,
+          actualAt: schema.securityGuardChecks.actualAt,
+        })
+        .from(schema.securityGuardChecks)
+        .where(eq(schema.securityGuardChecks.id, securityCheckId));
+      if (!chk) throw new Error('Security guard record not found');
 
-      const result = await db.query(query, [id]);
+      const verdict = String(data.verdictStatus ?? data.verdict_status ?? 'APPROVE').toUpperCase();
+      const now = new Date();
+      const delay = computeDelay(chk.plannedAt);
 
-      if (result.rows.length === 0) {
-        throw new Error('Record not found');
+      if (verdict === 'REJECT') {
+        const rejected = await tx
+          .update(schema.securityGuardChecks)
+          .set({
+            actualAt: now,
+            delay,
+            verdictStatus: 'REJECT',
+            performedByUserId: data.userId ?? null,
+            revertRemarks: data.remarks ?? null,
+          })
+          .where(and(eq(schema.securityGuardChecks.id, securityCheckId), isNull(schema.securityGuardChecks.actualAt)))
+          .returning();
+        assertStageOpen({ rowCount: rejected.length }, 'Security Guard Approval');
+
+        // Kick the shipment back to redo Actual Dispatch. The redo mints a fresh
+        // security check attempt; this rejected one remains in History.
+        await tx.update(schema.dispatches).set({ actualAt: null }).where(eq(schema.dispatches.id, chk.dispatchId));
+
+        Logger.info(`[SECURITY] REJECT check ${securityCheckId} (dispatch ${chk.dispatchId}) → reopened Actual Dispatch (remarks: ${data.remarks || 'none'})`);
+        return { success: true, message: 'Security guard approval rejected; shipment returned to Actual Dispatch', data: { securityCheckId, dispatchId: chk.dispatchId, verdict: 'REJECT' } };
       }
 
-      return {
-        success: true,
-        data: result.rows[0]
-      };
-    } catch (error) {
-      Logger.error('Error fetching security guard approval by ID', error);
-      throw error;
-    }
+      const approved = await tx
+        .update(schema.securityGuardChecks)
+        .set({
+          actualAt: now,
+          delay,
+          verdictStatus: 'APPROVE',
+          performedByUserId: data.userId ?? null,
+          biltyNo: data.biltyNo ?? null,
+          biltyImage: data.biltyImage ?? null,
+          vehicleImageAttachment: data.vehicleImageAttachment ?? null,
+        })
+        .where(and(eq(schema.securityGuardChecks.id, securityCheckId), isNull(schema.securityGuardChecks.actualAt)))
+        .returning();
+      assertStageOpen({ rowCount: approved.length }, 'Security Guard Approval');
+
+      // Seed the Make Invoice gate for this shipment.
+      const invoicePlannedAt = await getPlannedAt(tx, 'Make Invoice (Proforma)');
+      await tx.insert(schema.invoices).values({ dispatchId: chk.dispatchId, plannedMadeAt: invoicePlannedAt });
+
+      Logger.info(`[SECURITY] APPROVE check ${securityCheckId} (dispatch ${chk.dispatchId}) → Make Invoice queued`);
+      return { success: true, message: 'Security guard approval submitted successfully', data: { securityCheckId, dispatchId: chk.dispatchId, verdict: 'APPROVE' } };
+    });
+  }
+
+  /** Fetch one security check attempt (joined to its shipment/order context). */
+  async getApprovalById(securityCheckId) {
+    const [row] = await dbV2
+      .select({
+        securityCheck: schema.securityGuardChecks,
+        dispatch: schema.dispatches,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+        vehicle: schema.vehicles,
+        driver: schema.drivers,
+        transporter: schema.transporters,
+      })
+      .from(schema.securityGuardChecks)
+      .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.securityGuardChecks.dispatchId))
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .leftJoin(schema.vehicles, eq(schema.vehicles.id, schema.dispatches.vehicleId))
+      .leftJoin(schema.drivers, eq(schema.drivers.id, schema.dispatches.driverId))
+      .leftJoin(schema.transporters, eq(schema.transporters.id, schema.dispatches.transporterId))
+      .where(eq(schema.securityGuardChecks.id, securityCheckId));
+    if (!row) throw new Error('Security guard record not found');
+    return { success: true, data: row };
+  }
+
+  /** Dynamic filter options (customers + depots) over the pending security list. */
+  async getFilterOptions() {
+    const where = and(isNotNull(schema.securityGuardChecks.plannedAt), isNull(schema.securityGuardChecks.actualAt));
+    const rows = await dbV2
+      .selectDistinct({ customerName: schema.customers.customerName, depotName: schema.depots.depotName })
+      .from(schema.securityGuardChecks)
+      .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.securityGuardChecks.dispatchId))
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .where(where);
+    return {
+      success: true,
+      data: {
+        customerNames: [...new Set(rows.map((r) => r.customerName).filter(Boolean))].sort(),
+        depots: [...new Set(rows.map((r) => r.depotName).filter(Boolean))].sort(),
+      },
+    };
   }
 }
 

@@ -1,363 +1,132 @@
 /**
- * Gate Out Service
- * Business logic for gate out management (Stage 11: Gate Out)
- * Uses lift_receiving_confirmation table
- * Conditions:
- * - Pending: planned_7 IS NOT NULL AND actual_7 IS NULL
- * - History: planned_7 IS NOT NULL AND actual_7 IS NOT NULL
+ * Gate Out Service (Gate 7: Gate Out) — v2 schema.
+ *
+ * Per SHIPMENT, keyed off the `gate_outs` gate (seeded on Check Invoice verify).
+ * Only BANARI-depot shipments land here pending; every other depot auto-skips
+ * Gate Out at Check Invoice (its row is born already-closed and Material Receipt
+ * is seeded straight away).
+ *   - Pending : gate_outs.planned_at IS NOT NULL AND actual_at IS NULL
+ *   - History : gate_outs.planned_at IS NOT NULL AND actual_at IS NOT NULL
+ *
+ * Submitting stamps actual_at, records the gate pass / loaded-vehicle image, and
+ * seeds the Material Receipt gate (planned_at) — the same seed the non-BANARI
+ * Gate Out skip performs at Check Invoice.
+ *
+ * `:id` on the mutating route is a gate_outs row id.
  */
 
-const db = require('../config/db');
-const { assertStageOpen } = require('../utils/staleWriteGuard');
-const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
-const { applyDispatchFilters } = require('../utils/searchUtils');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { getPlannedAt } = require('./stageUtils');
 
 class GateOutService {
-  /**
-   * Get pending gate out records
-   * Pending: planned_7 IS NOT NULL AND actual_7 IS NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} Pending records
-   */
   async getPendingGateOut(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
-      const offset = (page - 1) * limit;
-
-      let whereConditions = ['lrc.planned_7 IS NOT NULL', 'lrc.actual_7 IS NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Add optional filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
-        paramIndex++;
-      }
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data
-      const dataQuery = `
-        SELECT 
-          lrc.*,
-          lrc.actual_1 AS lrc_actual_1,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.actual_1,
-          od.transfer,
-          od.bill_company_name,
-          od.upload_copy AS upload_so,
-          od.depo_name,
-          sd.nos_per_main_uom,
-          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
-          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
-          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
-          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
-          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
-          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
-          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
-          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
-          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
-          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
-          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
-        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
-        ${whereClause}
-        ORDER BY lrc.planned_7 ASC, lrc.d_sr_number ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} pending gate out records`);
-
-      return {
-        success: true,
-        data: {
-          orders: dataResult.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.ceil(total / limit)
-          }
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching pending gate out records', error);
-      throw new Error('Failed to fetch pending gate out records');
-    }
+    return this._listGateOut({ ...filters, ...pagination, open: true });
   }
 
-  /**
-   * Get gate out history
-   * History: planned_7 IS NOT NULL AND actual_7 IS NOT NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} History records
-   */
   async getGateOutHistory(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
-      const offset = (page - 1) * limit;
+    return this._listGateOut({ ...filters, ...pagination, open: false });
+  }
 
-      let whereConditions = ['lrc.planned_7 IS NOT NULL', 'lrc.actual_7 IS NOT NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
+  async _listGateOut({ open, page = 1, limit = 25, order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no, d_sr_number }) {
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 25;
 
-      // Add optional filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
-        paramIndex++;
-      }
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data
-      const dataQuery = `
-        SELECT 
-          lrc.*,
-          lrc.actual_1 AS lrc_actual_1,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.actual_1 AS order_actual_1,
-          od.transfer,
-          od.bill_company_name,
-          od.upload_copy AS upload_so,
-          od.depo_name,
-          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
-          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
-          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
-          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
-          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
-          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
-          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
-          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
-          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
-          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
-          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
-        ${whereClause}
-        ORDER BY lrc.actual_7 DESC, lrc.d_sr_number ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} gate out history records`);
-
-      return {
-        success: true,
-        data: {
-          orders: dataResult.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.ceil(total / limit)
-          }
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching gate out history', error);
-      throw new Error('Failed to fetch gate out history');
+    const conditions = [
+      isNotNull(schema.gateOuts.plannedAt),
+      open ? isNull(schema.gateOuts.actualAt) : isNotNull(schema.gateOuts.actualAt),
+    ];
+    if (d_sr_number) conditions.push(eq(schema.dispatches.dsrNumber, d_sr_number));
+    if (order_no) {
+      conditions.push(sql`(${schema.orders.orderNo} ILIKE ${'%' + order_no + '%'} OR ${schema.customers.customerName} ILIKE ${'%' + order_no + '%'})`);
+    } else if (customer_name) {
+      conditions.push(sql`${schema.customers.customerName} ILIKE ${'%' + customer_name + '%'}`);
     }
+    if (start_date && end_date) {
+      conditions.push(sql`${schema.orders.deliveryDate} BETWEEN ${start_date} AND ${end_date}`);
+    }
+    if (Array.isArray(depo_names)) {
+      conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
+    }
+    if (manual_sauda_no) {
+      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+    }
+    const where = and(...conditions);
+
+    const baseJoin = (q) => q
+      .from(schema.gateOuts)
+      .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.gateOuts.dispatchId))
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId));
+
+    const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
+
+    const rows = await baseJoin(
+      dbV2.select({
+        gateOut: schema.gateOuts,
+        dispatch: schema.dispatches,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+        vehicle: schema.vehicles,
+        driver: schema.drivers,
+        transporter: schema.transporters,
+      })
+    )
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .leftJoin(schema.vehicles, eq(schema.vehicles.id, schema.dispatches.vehicleId))
+      .leftJoin(schema.drivers, eq(schema.drivers.id, schema.dispatches.driverId))
+      .leftJoin(schema.transporters, eq(schema.transporters.id, schema.dispatches.transporterId))
+      .where(where)
+      .orderBy(open ? asc(schema.gateOuts.plannedAt) : desc(schema.gateOuts.actualAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    return {
+      success: true,
+      data: { orders: rows, pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) } },
+    };
   }
 
   /**
-   * Submit gate out (set actual_7)
-   * @param {number} id - Record ID from lift_receiving_confirmation
-   * @param {Object} data - Gate out data
-   * @returns {Promise<Object>} Updated record
+   * Submit gate out for one shipment and advance to Material Receipt.
+   *
+   * @param {number} gateOutId
+   * @param {Object} data - { gatePassCopy, vehicleLoadedImage, userId }
    */
-  async submitGateOut(id, data = {}) {
-    const client = await db.getClient();
-    try {
-      await client.query('BEGIN');
-      Logger.info(`Submitting gate out for ID: ${id}`, { data });
-      await this.ensurePlanned8TriggerUsesTat(client);
+  async submitGateOut(gateOutId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const [gate] = await tx
+        .select({ id: schema.gateOuts.id, dispatchId: schema.gateOuts.dispatchId, actualAt: schema.gateOuts.actualAt })
+        .from(schema.gateOuts)
+        .where(eq(schema.gateOuts.id, gateOutId));
+      if (!gate) throw new Error('Gate out record not found');
 
-      const updateData = {
-        actual_7: new Date().toISOString(), // Gate Out Timestamp
-        planned_8: await this.getPlannedTimestamp(client, 'Confirm Material Receipt'),
-        gate_out_user: data.user_id || null,
-        gate_pass_copy: data.gate_pass || null, // Renamed column
-        vehicle_loaded_image: data.vehicle_image || null // Renamed column
-      };
+      const updated = await tx
+        .update(schema.gateOuts)
+        .set({
+          actualAt: new Date(),
+          performedByUserId: data.userId ?? null,
+          gatePassCopy: data.gatePassCopy ?? data.gate_pass ?? null,
+          vehicleLoadedImage: data.vehicleLoadedImage ?? data.vehicle_image ?? null,
+        })
+        .where(and(eq(schema.gateOuts.id, gateOutId), isNull(schema.gateOuts.actualAt)))
+        .returning();
+      assertStageOpen({ rowCount: updated.length }, 'Gate Out');
 
-      const fields = Object.keys(updateData);
-      const values = Object.values(updateData);
+      // Queue Material Receipt.
+      const receiptPlannedAt = await getPlannedAt(tx, 'Confirm Material Receipt');
+      await tx.insert(schema.materialReceipts).values({ dispatchId: gate.dispatchId, plannedAt: receiptPlannedAt });
 
-      const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-
-      // Stale-write guard: only advance a row still pending at Gate Out (actual_7 NULL).
-      const query = `
-        UPDATE lift_receiving_confirmation
-        SET ${setClause}
-        WHERE id = $${fields.length + 1} AND actual_7 IS NULL
-        RETURNING *
-      `;
-
-      const result = await client.query(query, [...values, id]);
-
-      assertStageOpen(result, 'Gate Out');
-
-      await client.query('COMMIT');
-      Logger.info(`Gate out submitted successfully for ID: ${id}`);
-
-      return {
-        success: true,
-        message: 'Gate out submitted successfully',
-        data: result.rows[0]
-      };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      Logger.error('Error submitting gate out', error);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async getPlannedTimestamp(client, stageName) {
-    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const normalizedStageName = normalizeStageName(stageName);
-    const stageAliases = {
-      confirmmaterialreceipt: ['confirmmaterialreceipt', 'materialreceipt'],
-    };
-    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
-
-    const result = await client.query(
-      `
-        SELECT (
-          CURRENT_TIMESTAMP + COALESCE(
-            (
-              SELECT stage_time
-              FROM process_stages
-              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
-              ORDER BY submitted_at DESC, id DESC
-              LIMIT 1
-            ),
-            INTERVAL '0'
-          )
-        ) AS planned_at
-      `,
-      [normalizedStageNames]
-    );
-
-    const plannedAt = result.rows[0]?.planned_at;
-    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
-  }
-
-  async ensurePlanned8TriggerUsesTat(client) {
-    await client.query(`
-      CREATE OR REPLACE FUNCTION set_planned_8_from_actual_7()
-      RETURNS TRIGGER AS $$
-      DECLARE
-          receipt_tat INTERVAL;
-      BEGIN
-          SELECT stage_time
-          INTO receipt_tat
-          FROM process_stages
-          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') IN ('confirmmaterialreceipt', 'materialreceipt')
-          ORDER BY submitted_at DESC, id DESC
-          LIMIT 1;
-
-          IF NEW.actual_7 IS NOT NULL
-             AND (TG_OP = 'INSERT' OR OLD.actual_7 IS DISTINCT FROM NEW.actual_7) THEN
-              NEW.planned_8 := NEW.actual_7::timestamptz + COALESCE(receipt_tat, INTERVAL '0');
-          END IF;
-
-          RETURN NEW;
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
+      Logger.info(`[GATE OUT] Gate out ${gateOutId} (dispatch ${gate.dispatchId}) → Material Receipt queued`);
+      return { success: true, message: 'Gate out submitted successfully', data: { gateOutId, dispatchId: gate.dispatchId } };
+    });
   }
 }
 

@@ -1,15 +1,26 @@
+/**
+ * Check Invoice Routes (Gate 6b: Check Invoice) — v2 schema.
+ * Operates on the Check sub-gate of `invoices`. :id = invoices row id.
+ *   - Pending: invoices.planned_checked_at NOT NULL, checked_at NULL, (made_at NOT NULL OR status='Issue')
+ *   - History: invoices.planned_checked_at NOT NULL, checked_at NOT NULL
+ */
+
 const express = require('express');
 const router = express.Router();
 const checkInvoiceController = require('../controllers/checkInvoiceController');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+const checkInvoiceValidator = require('../validators/checkInvoiceValidator');
+// pageAccess middleware intentionally not applied until the notification layer is migrated.
 
-// Get pending invoices for checking
+/** @route GET /api/v1/check-invoice/pending */
 router.get('/pending', checkInvoiceController.getPendingInvoices);
 
-// Get check history
+/** @route GET /api/v1/check-invoice/history */
 router.get('/history', checkInvoiceController.getCheckHistory);
 
-// Submit check (update status/remarks)
-router.post('/submit/:id', pageAccess, checkInvoiceController.submitCheck);
+/**
+ * @route POST /api/v1/check-invoice/submit/:id   (:id = invoices row id)
+ * @body  { status?: 'Issue'|<verified>, remarks?, userId? }
+ */
+router.post('/submit/:id', checkInvoiceValidator.validateSubmit, checkInvoiceController.submitCheck);
 
 module.exports = router;

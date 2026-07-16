@@ -5,7 +5,6 @@
 
 const orderDispatchService = require('../services/orderDispatchService');
 const { ResponseUtil, Logger } = require('../utils');
-const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
  * Get pending pre-approval orders
@@ -85,100 +84,88 @@ const getPreApprovalHistory = async (req, res, next) => {
  */
 const submitPreApproval = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const additionalData = req.body || {};
+    // :id is the order_item id in v2 (the pending list is per order_item).
+    const orderItemId = parseInt(req.params.id, 10);
+    Logger.info(`Submitting pre-approval for order_item ID: ${orderItemId}`);
 
-    Logger.info(`Submitting pre-approval for order ID: ${id}`);
+    // Fall back to the authenticated JWT user so the audit trail is never
+    // null just because a caller forgot/misnamed userId in the body.
+    const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
+    const result = await orderDispatchService.submitPreApproval(orderItemId, data);
 
-    const result = await orderDispatchService.submitPreApproval(id, additionalData);
-
-    // Trigger WhatsApp notifications for the next stage: Approval of Order
-    try {
-      const docDetails = {
-        stage: `✅ *Pre-Approval Completed*\n📍 *Pending in Approval of Order*`,
-        order_type: result.data.approved?.order_type,
-        do_date: result.data.approved?.delivery_date,
-        do_number: result.data.approved?.order_no,
-        customer_name: result.data.approved?.customer_name,
-        oil_type: result.data.approved?.oil_type,
-        rate_15_kg: result.data.approved?.rate_per_15kg,
-        rate_1_ltr: result.data.approved?.rate_per_ltr,
-        order_punch_remarks: result.data.approved?.order_punch_remarks
-      };
-
-      if (req.pageAccessDetails) {
-        whatsappShareService(docDetails, req.pageAccessDetails, 'Approval of Order')
-          .catch((err) => Logger.warn('Failed to send WhatsApp notifications for pre-approval submission', err));
-      }
-    } catch (notifyError) {
-      Logger.warn('Failed to send WhatsApp notifications for pre-approval submission', notifyError);
-    }
-
-    return ResponseUtil.success(
-      res,
-      result.data,
-      result.message
-    );
+    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
-    Logger.error('Error in submitPreApproval controller', error);
-    if (error.message.includes('not found')) {
+    if (error.code === 'STALE_WRITE') {
+      return ResponseUtil.error(res, error.message, 409);
+    }
+    if (error.message && error.message.includes('not found')) {
       return ResponseUtil.notFound(res, error.message);
     }
+    Logger.error('Error in submitPreApproval controller', error);
     next(error);
   }
 };
 
 /**
- * Deduct budget from an existing order without advancing it in the workflow.
+ * Deduct qty from an existing pending pre-approval order_item without advancing it.
  * @route PATCH /api/v1/pre-approval/deduct-budget/:id
+ * @body { orderQuantity: number }
  */
 const deductBudget = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const { order_quantity } = req.body;
+    const orderItemId = parseInt(req.params.id, 10);
+    const { orderQuantity } = req.body || {};
 
-    if (order_quantity === undefined || order_quantity === null) {
-      return res.status(400).json({ success: false, message: 'order_quantity is required' });
+    if (orderQuantity === undefined || orderQuantity === null) {
+      return ResponseUtil.error(res, 'orderQuantity is required', 400);
     }
 
-    Logger.info(`Deducting budget for order ID: ${id}, new qty: ${order_quantity}`);
-
-    const result = await orderDispatchService.deductBudget(id, order_quantity);
-
+    const result = await orderDispatchService.deductBudget(orderItemId, orderQuantity);
     return ResponseUtil.success(res, result, 'Budget deducted successfully');
   } catch (error) {
-    Logger.error('Error in deductBudget controller', error);
-    if (error.message.includes('not found')) {
+    if (error.message && error.message.includes('not found')) {
       return ResponseUtil.notFound(res, error.message);
     }
+    Logger.error('Error in deductBudget controller', error);
     next(error);
   }
 };
 
 /**
- * Atomically submit approvals + cascade deductions in one transaction.
+ * Atomically submit approvals + new SKU lines + cascade deductions in one transaction.
  * @route POST /api/v1/pre-approval/submit-batch
- * @body  { approvals: [{id, ...data}], cascadeBudgets: [{base_do, oil_type, qty}], deductions?: [{id, order_quantity}] }
+ * @body { approvals: [{id, ...data}], cascadeBudgets: [{base_do, oil_type, qty}], deductions?: [{id, orderQuantity}], skipIds?: number[], newItems?: [{orderId, skuId, uom, oilType, orderQuantity, rateOfMaterial, ratePerLtr, ratePer15kg}] }
  */
 const submitBatch = async (req, res, next) => {
   try {
-    const { approvals = [], cascadeBudgets = [], deductions = [], skipIds = [] } = req.body;
+    const { approvals = [], cascadeBudgets = [], deductions = [], skipIds = [], newItems = [] } = req.body || {};
 
-    if (!Array.isArray(approvals) || !Array.isArray(cascadeBudgets)) {
-      return res.status(400).json({ success: false, message: 'approvals and cascadeBudgets must be arrays' });
+    if (!Array.isArray(approvals) || !Array.isArray(cascadeBudgets) || !Array.isArray(newItems)) {
+      return ResponseUtil.error(res, 'approvals, cascadeBudgets and newItems must be arrays', 400);
     }
 
-    Logger.info(`[BATCH] Submitting ${approvals.length} approvals, ${cascadeBudgets.length} cascade budgets, ${skipIds.length} skipped (auto-close)`);
+    Logger.info(`[BATCH] Submitting ${approvals.length} approvals, ${newItems.length} new SKU lines, ${cascadeBudgets.length} cascade budgets, ${skipIds.length} skipped (auto-close)`);
 
+    // Fall back to the authenticated JWT user so the audit trail is never null
+    // just because a caller forgot/misnamed userId in the body.
+    const fallbackUserId = req.user?.id ?? null;
     const result = await orderDispatchService.submitBatch(
-      approvals.map(({ id, ...data }) => ({ id, data })),
+      approvals.map(({ id, userId, ...data }) => ({ id, data: { ...data, userId: userId ?? fallbackUserId } })),
       cascadeBudgets,
       deductions,
-      skipIds
+      skipIds,
+      newItems
     );
 
     return ResponseUtil.success(res, result, 'Batch submitted successfully');
   } catch (error) {
+    if (error.code === 'STALE_WRITE') {
+      return ResponseUtil.error(res, error.message, 409);
+    }
+    if (error.message && (error.message.includes('not found') || error.message.includes('New SKU line'))) {
+      return ResponseUtil.error(res, error.message, 400);
+    }
     Logger.error('Error in submitBatch controller', error);
     next(error);
   }

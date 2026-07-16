@@ -1,165 +1,114 @@
 /**
- * Security Guard Approval Controller
- * API endpoints for security guard approval management (Stage 8)
+ * Security Guard Approval Controller (Gate 5: Security Guard Approval) — v2 schema.
+ * :id on the mutating/detail routes is a security_guard_checks (attempt) id.
+ * Bodies are camelCase.
  */
 
 const securityGuardApprovalService = require('../services/securityGuardApprovalService');
-const { Logger } = require('../utils');
-const { whatsappShareService } = require('../services/whatsappShareService');
+const { ResponseUtil, Logger } = require('../utils');
+
+const handleError = (res, next, error, ctx) => {
+  if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
+    return ResponseUtil.error(res, error.message, 409);
+  }
+  if (error.message && error.message.includes('not found')) {
+    return ResponseUtil.notFound(res, error.message);
+  }
+  Logger.error(ctx, error);
+  next(error);
+};
+
+const parseListFilters = (query) => {
+  const { order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no } = query;
+  const filters = {
+    order_no,
+    customer_name,
+    start_date,
+    end_date,
+    manual_sauda_no,
+    depo_names: (depo_names !== undefined && depo_names !== 'undefined')
+      ? (Array.isArray(depo_names) ? depo_names : (depo_names === '' ? [] : depo_names.split(',')))
+      : undefined,
+  };
+  Object.keys(filters).forEach((key) => {
+    if (filters[key] === undefined || filters[key] === null) delete filters[key];
+  });
+  return filters;
+};
 
 /**
  * Get pending security guard approvals
- * GET /api/v1/security-approval/pending
+ * @route GET /api/v1/security-approval/pending
  */
 const getPendingApprovals = async (req, res, next) => {
   try {
-    const filters = {
-      search: req.query.search,
-      manual_sauda_no: req.query.manual_sauda_no,
-      do_date_from: req.query.do_date_from,
-      do_date_to: req.query.do_date_to,
-      customer_name: req.query.customer_name,
-      depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : [req.query.depo_names]) : undefined,
-    };
-    
-    const pagination = {
-      page: req.query.page,
-      limit: req.query.limit,
-    };
-    
-    const result = await securityGuardApprovalService.getPendingApprovals(filters, pagination);
-    
-    res.status(200).json({
-      success: true,
-      message: 'Pending security guard approvals fetched successfully',
-      data: {
-        approvals: result.data,
-        pagination: result.pagination
-      }
-    });
+    const { page, limit } = req.query;
+    const result = await securityGuardApprovalService.getPendingApprovals(parseListFilters(req.query), { page, limit });
+    return ResponseUtil.success(res, { approvals: result.data, pagination: result.pagination }, 'Pending security guard approvals fetched successfully');
   } catch (error) {
     Logger.error('Error in getPendingApprovals controller', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to fetch pending security guard approvals'
-    });
+    next(error);
   }
 };
 
 /**
  * Get security guard approval history
- * GET /api/v1/security-approval/history
+ * @route GET /api/v1/security-approval/history
  */
 const getApprovalHistory = async (req, res, next) => {
   try {
-    const filters = {
-      search: req.query.search,
-      manual_sauda_no: req.query.manual_sauda_no,
-      do_date_from: req.query.do_date_from,
-      do_date_to: req.query.do_date_to,
-      customer_name: req.query.customer_name,
-      depo_names: req.query.depo_names ? (Array.isArray(req.query.depo_names) ? req.query.depo_names : [req.query.depo_names]) : undefined,
-      start_date: req.query.start_date,
-      end_date: req.query.end_date,
-    };
-    
-    const pagination = {
-      page: req.query.page,
-      limit: req.query.limit,
-    };
-    
-    const result = await securityGuardApprovalService.getApprovalHistory(filters, pagination);
-    
-    res.status(200).json({
-      success: true,
-      message: 'Security guard approval history fetched successfully',
-      data: {
-        approvals: result.data,
-        pagination: result.pagination
-      }
-    });
+    const { page, limit } = req.query;
+    const result = await securityGuardApprovalService.getApprovalHistory(parseListFilters(req.query), { page, limit });
+    return ResponseUtil.success(res, { approvals: result.data, pagination: result.pagination }, 'Security guard approval history fetched successfully');
   } catch (error) {
     Logger.error('Error in getApprovalHistory controller', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to fetch security guard approval history'
-    });
+    next(error);
   }
 };
 
 /**
- * Get security guard filter options
- * GET /api/v1/security-approval/filters
+ * Get security guard filter options (unique customers + depots)
+ * @route GET /api/v1/security-approval/filters
  */
 const getFilterOptions = async (req, res, next) => {
   try {
     const result = await securityGuardApprovalService.getFilterOptions();
-    res.status(200).json(result);
+    return ResponseUtil.success(res, result.data, 'Filter options fetched successfully');
   } catch (error) {
     Logger.error('Error in getFilterOptions controller', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to fetch filter options'
-    });
+    next(error);
   }
 };
 
 /**
- * Submit security guard approval
- * POST /api/v1/security-approval/submit/:id
+ * Submit a security guard verdict
+ * @route POST /api/v1/security-approval/submit/:id   (:id = security_guard_checks id)
+ * @body  { verdictStatus: 'APPROVE'|'REJECT', biltyNo?, biltyImage?, vehicleImageAttachment?, remarks?, userId? }
  */
 const submitApproval = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const approvalData = req.body;
-    
-    Logger.info(`Submit security guard approval request for ID: ${id}`, { approvalData });
-    
-    const result = await securityGuardApprovalService.submitApproval(id, approvalData);
-    
-    // Trigger WhatsApp notification for the next stage
-    try {
-      if (result.success && result.data && result.data.so_no) {
-        const docDetails = {
-          stage: `👮 *Security Guard Approval Completed*\n📍 *Pending in Gate Out*`,
-          do_number: result.data.so_no
-        };
-        if (req.pageAccessDetails) {
-          whatsappShareService(docDetails, req.pageAccessDetails, 'Gate Out')
-            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Security Guard Approval', err));
-        }
-      }
-    } catch (notifyError) {
-      Logger.warn('Failed to send WhatsApp notifications for Security Guard Approval', notifyError);
-    }
-    
-    res.status(200).json(result);
+    const securityCheckId = parseInt(req.params.id, 10);
+    const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
+    Logger.info(`[SECURITY] Submit for security check ${securityCheckId}`, { verdict: data.verdictStatus });
+    const result = await securityGuardApprovalService.submitApproval(securityCheckId, data);
+    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
-    Logger.error('Error in submitApproval controller', error);
-    res.status(error.statusCode || 500).json({
-      success: false,
-      code: error.code,
-      message: error.message || 'Failed to submit security guard approval'
-    });
+    handleError(res, next, error, '[SECURITY] Error in submitApproval controller');
   }
 };
 
 /**
- * Get security guard approval by ID
- * GET /api/v1/security-approval/:id
+ * Get a security guard approval by id
+ * @route GET /api/v1/security-approval/:id   (:id = security_guard_checks id)
  */
 const getApprovalById = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const result = await securityGuardApprovalService.getApprovalById(id);
-    
-    res.status(200).json(result);
+    const securityCheckId = parseInt(req.params.id, 10);
+    const result = await securityGuardApprovalService.getApprovalById(securityCheckId);
+    return ResponseUtil.success(res, result.data, 'Security guard approval fetched successfully');
   } catch (error) {
-    Logger.error('Error in getApprovalById controller', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to fetch security guard approval'
-    });
+    handleError(res, next, error, '[SECURITY] Error in getApprovalById controller');
   }
 };
 

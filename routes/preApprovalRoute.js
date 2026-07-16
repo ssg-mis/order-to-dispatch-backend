@@ -6,7 +6,9 @@
 const express = require('express');
 const router = express.Router();
 const preApprovalController = require('../controllers/preApprovalController');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+const preApprovalValidator = require('../validators/preApprovalValidator');
+// pageAccess middleware (WhatsApp notification targeting, reads legacy `login`
+// table) intentionally not applied until the notification layer is migrated.
 
 /**
  * @route   GET /api/v1/pre-approval/pending
@@ -38,7 +40,7 @@ router.get(
  */
 router.post(
   '/submit/:id',
-  pageAccess,
+  preApprovalValidator.validateSubmit,
   preApprovalController.submitPreApproval
 );
 
@@ -62,7 +64,6 @@ router.patch(
  */
 router.post(
   '/submit-batch',
-  pageAccess,
   preApprovalController.submitBatch
 );
 

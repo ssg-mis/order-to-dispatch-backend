@@ -1,97 +1,91 @@
-const express = require('express');
-const gateOutService = require('../services/gateOutService');
-const { Logger } = require('../utils');
-const { whatsappShareService } = require('../services/whatsappShareService');
+/**
+ * Gate Out Controller (Gate 7: Gate Out) — v2 schema.
+ * :id on the mutating route is a gate_outs row id. Bodies are camelCase.
+ */
 
-// Get pending gate out records
-async function getPendingGateOut(req, res) {
+const gateOutService = require('../services/gateOutService');
+const { ResponseUtil, Logger } = require('../utils');
+
+const handleError = (res, next, error, ctx) => {
+  if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
+    return ResponseUtil.error(res, error.message, 409);
+  }
+  if (error.message && error.message.includes('not found')) {
+    return ResponseUtil.notFound(res, error.message);
+  }
+  Logger.error(ctx, error);
+  next(error);
+};
+
+const parseListFilters = (query) => {
+  const { order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no, d_sr_number } = query;
+  const filters = {
+    order_no,
+    customer_name,
+    start_date,
+    end_date,
+    manual_sauda_no,
+    d_sr_number,
+    depo_names: (depo_names !== undefined && depo_names !== 'undefined')
+      ? (Array.isArray(depo_names) ? depo_names : (depo_names === '' ? [] : depo_names.split(',')))
+      : undefined,
+  };
+  Object.keys(filters).forEach((key) => {
+    if (filters[key] === undefined || filters[key] === null) delete filters[key];
+  });
+  return filters;
+};
+
+/**
+ * Get pending gate out records
+ * @route GET /api/v1/gate-out/pending
+ */
+const getPendingGateOut = async (req, res, next) => {
   try {
-    const filters = {
-      d_sr_number: req.query.d_sr_number,
-      so_no: req.query.so_no,
-      party_name: req.query.party_name,
-      search: req.query.search,
-      manual_sauda_no: req.query.manual_sauda_no,
-      do_date_from: req.query.do_date_from,
-      do_date_to: req.query.do_date_to
-    };
-    
-    const pagination = {
-      page: req.query.page,
-      limit: req.query.limit
-    };
-    
-    const result = await gateOutService.getPendingGateOut(filters, pagination);
-    res.json(result);
+    const { page, limit } = req.query;
+    const result = await gateOutService.getPendingGateOut(parseListFilters(req.query), { page, limit });
+    return ResponseUtil.success(res, result.data, 'Pending gate out records fetched successfully');
   } catch (error) {
     Logger.error('Error in getPendingGateOut controller', error);
-    res.status(500).json({ error: error.message });
+    next(error);
   }
-}
+};
 
-// Get gate out history
-async function getGateOutHistory(req, res) {
+/**
+ * Get gate out history
+ * @route GET /api/v1/gate-out/history
+ */
+const getGateOutHistory = async (req, res, next) => {
   try {
-    const filters = {
-      d_sr_number: req.query.d_sr_number,
-      so_no: req.query.so_no,
-      party_name: req.query.party_name,
-      search: req.query.search,
-      manual_sauda_no: req.query.manual_sauda_no,
-      do_date_from: req.query.do_date_from,
-      do_date_to: req.query.do_date_to
-    };
-    
-    const pagination = {
-      page: req.query.page,
-      limit: req.query.limit
-    };
-    
-    const result = await gateOutService.getGateOutHistory(filters, pagination);
-    res.json(result);
+    const { page, limit } = req.query;
+    const result = await gateOutService.getGateOutHistory(parseListFilters(req.query), { page, limit });
+    return ResponseUtil.success(res, result.data, 'Gate out history fetched successfully');
   } catch (error) {
     Logger.error('Error in getGateOutHistory controller', error);
-    res.status(500).json({ error: error.message });
+    next(error);
   }
-}
+};
 
-// Submit gate out details
-async function submitGateOut(req, res) {
+/**
+ * Submit gate out
+ * @route POST /api/v1/gate-out/submit/:id   (:id = gate_outs row id)
+ * @body  { gatePassCopy?, vehicleLoadedImage?, userId? }
+ */
+const submitGateOut = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const data = req.body;
-    
-    if (!id) {
-      return res.status(400).json({ error: 'Record ID is required' });
-    }
-    
-    const result = await gateOutService.submitGateOut(id, data);
-    
-    // Trigger WhatsApp notification for the next stage
-    try {
-      if (result.success && result.data && result.data.so_no) {
-        const docDetails = {
-          stage: `🚪 *Gate Out Completed*\n📍 *Pending in Make Invoice*`,
-          do_number: result.data.so_no
-        };
-        if (req.pageAccessDetails) {
-          whatsappShareService(docDetails, req.pageAccessDetails, 'Make Invoice')
-            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Gate Out', err));
-        }
-      }
-    } catch (notifyError) {
-      Logger.warn('Failed to send WhatsApp notifications for Gate Out', notifyError);
-    }
-    
-    res.json(result);
+    const gateOutId = parseInt(req.params.id, 10);
+    const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
+    Logger.info(`[GATE OUT] Submit for gate out ${gateOutId}`);
+    const result = await gateOutService.submitGateOut(gateOutId, data);
+    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
-    Logger.error('Error in submitGateOut controller', error);
-    res.status(error.statusCode || 500).json({ error: error.message, code: error.code });
+    handleError(res, next, error, '[GATE OUT] Error in submitGateOut controller');
   }
-}
+};
 
 module.exports = {
   getPendingGateOut,
   getGateOutHistory,
-  submitGateOut
+  submitGateOut,
 };

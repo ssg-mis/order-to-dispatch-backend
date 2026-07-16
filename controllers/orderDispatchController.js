@@ -5,80 +5,25 @@
 
 const orderDispatchService = require('../services/orderDispatchService');
 const { ResponseUtil, Logger } = require('../utils');
-const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
- * Create new order
+ * Create new order (Order Punch) - v2 schema.
  * @route POST /api/v1/orders
+ * @body  { customerId, orderType, items: [{ skuId, orderQuantity, ... }], ... }
+ *
+ * NOTE: WhatsApp stage-notification (fire-and-forget to next-stage users) is
+ * intentionally NOT wired here yet - it depends on the users/notification layer
+ * which reads the old `login` table and hasn't been migrated to the v2 schema.
+ * Re-add once that layer is ported.
  */
 const createOrder = async (req, res, next) => {
   try {
-    const { products, ...orderData } = req.body;
-    
-    Logger.info('Creating new order', { 
-      customer: orderData.customer_name,
-      productsCount: products?.length || 1 
-    });
-    
-    // Log all field lengths to help debug VARCHAR constraints
-    Logger.info('Order data field lengths:', {
-      customer_name: orderData.customer_name?.length,
-      order_type: orderData.order_type?.length,
-      customer_type: orderData.customer_type?.length,
-      order_type_delivery_purpose: orderData.order_type_delivery_purpose?.length,
-      type_of_transporting: orderData.type_of_transporting?.length,
-      broker_name: orderData.broker_name?.length,
-      payment_terms: orderData.payment_terms?.length
-    });
-    
-    const result = await orderDispatchService.createOrder(orderData, products);
-    
-    // Trigger WhatsApp notifications for the relevant stage
-    try {
-      const orderTypeLower = (orderData.order_type || '').toLowerCase().trim();
-      const isPreApproval = orderTypeLower === 'pre approval' || orderTypeLower === 'pre-approval';
-      const targetPage = isPreApproval ? 'Pre Approval' : 'Approval of Order';
-      const docDetails = {
-        stage: `🆕 *New Order Punched*\n📍 *Pending in ${targetPage}*`,
-        order_type: orderData.order_type,
-        do_date: orderData.delivery_date,
-        do_number: result.data.order_no,
-        customer_name: orderData.customer_name,
-        oil_type: products?.[0]?.oil_type || orderData.oil_type,
-        rate_15_kg: products?.[0]?.rate_per_15kg || orderData.rate_per_15kg,
-        rate_1_ltr: products?.[0]?.rate_per_ltr || orderData.rate_per_ltr,
-        order_punch_remarks: orderData.order_punch_remarks
-      };
-
-      if (req.pageAccessDetails) {
-        Logger.info(`[WHATSAPP] Order punch notification — targetPage: "${targetPage}", totalUsers: ${req.pageAccessDetails.length}, orderNo: ${result.data.order_no}`);
-        Logger.info(`[WHATSAPP] docDetails:`, JSON.stringify(docDetails));
-        whatsappShareService(docDetails, req.pageAccessDetails, targetPage)
-          .then(() => Logger.info(`[WHATSAPP] whatsappShareService call completed for order ${result.data.order_no}`))
-          .catch((err) => Logger.warn('Failed to send WhatsApp notifications for new order', err));
-      } else {
-        Logger.warn(`[WHATSAPP] Skipping notification — req.pageAccessDetails is not set (pageAccess middleware may not have run)`);
-      }
-    } catch (notifyError) {
-      Logger.warn('Failed to send WhatsApp notifications for new order', notifyError);
-      // Don't fail the order creation if notification fails
-    }
-
-    return ResponseUtil.success(
-      res,
-      result.data,
-      result.message,
-      201
-    );
+    const { items, ...orderData } = req.body;
+    Logger.info('Creating new order', { customerId: orderData.customerId, itemCount: items?.length || 0 });
+    const result = await orderDispatchService.createOrder(orderData, items);
+    return ResponseUtil.success(res, result.data, result.message, 201);
   } catch (error) {
     Logger.error('Error in createOrder controller', error);
-    Logger.error('Error details:', {
-      message: error.message,
-      code: error.code,
-      detail: error.detail,
-      hint: error.hint,
-      position: error.position
-    });
     next(error);
   }
 };

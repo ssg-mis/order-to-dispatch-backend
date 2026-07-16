@@ -1,10 +1,9 @@
 /**
- * Order Approval Controller
- * Handles HTTP requests for order approval (Stage 3: Approval)
+ * Order Approval Controller (Gate 2: Approval of Order) — v2 schema.
+ * The pending list is per order_item, so :id on submit/get is an order_item id.
  */
 const orderApprovalService = require('../services/orderApprovalService');
 const { ResponseUtil, Logger } = require('../utils');
-const { whatsappShareService } = require('../services/whatsappShareService');
 
 /**
  * Get pending approval orders
@@ -12,31 +11,16 @@ const { whatsappShareService } = require('../services/whatsappShareService');
  */
 const getPendingApprovals = async (req, res, next) => {
   try {
-    const { page, limit, order_no, customer_name, start_date, end_date, ...otherFilters } = req.query;
+    const { page, limit, order_no, customer_name, start_date, end_date } = req.query;
 
-    const filters = {
-      order_no,
-      customer_name,
-      start_date,
-      end_date,
-      ...otherFilters
-    };
-
-    // Remove undefined/null filters
-    Object.keys(filters).forEach(key => {
-      if (!filters[key]) delete filters[key];
-    });
-
-    Logger.info('Fetching pending approvals', { filters, page, limit });
+    const filters = { order_no, customer_name, start_date, end_date };
+    Object.keys(filters).forEach(key => { if (!filters[key]) delete filters[key]; });
 
     const result = await orderApprovalService.getPendingApprovals(filters, { page, limit });
 
     return ResponseUtil.success(
       res,
-      {
-        orders: result.data,
-        pagination: result.pagination
-      },
+      { orders: result.data, pagination: result.pagination },
       'Pending approvals fetched successfully'
     );
   } catch (error) {
@@ -51,31 +35,16 @@ const getPendingApprovals = async (req, res, next) => {
  */
 const getApprovalHistory = async (req, res, next) => {
   try {
-    const { page, limit, order_no, customer_name, start_date, end_date, ...otherFilters } = req.query;
+    const { page, limit, order_no, customer_name, start_date, end_date } = req.query;
 
-    const filters = {
-      order_no,
-      customer_name,
-      start_date,
-      end_date,
-      ...otherFilters
-    };
-
-    // Remove undefined/null filters
-    Object.keys(filters).forEach(key => {
-      if (!filters[key]) delete filters[key];
-    });
-
-    Logger.info('Fetching approval history', { filters, page, limit });
+    const filters = { order_no, customer_name, start_date, end_date };
+    Object.keys(filters).forEach(key => { if (!filters[key]) delete filters[key]; });
 
     const result = await orderApprovalService.getApprovalHistory(filters, { page, limit });
 
     return ResponseUtil.success(
       res,
-      {
-        orders: result.data,
-        pagination: result.pagination
-      },
+      { orders: result.data, pagination: result.pagination },
       'Approval history fetched successfully'
     );
   } catch (error) {
@@ -85,85 +54,54 @@ const getApprovalHistory = async (req, res, next) => {
 };
 
 /**
- * Submit approval for an order
- * @route POST /api/v1/approval/submit/:id
+ * Submit approval for an order item
+ * @route POST /api/v1/approval/submit/:id   (:id = order_item id)
  */
 const submitApproval = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const additionalData = req.body;
+    const orderItemId = parseInt(req.params.id, 10);
+    Logger.info(`Submitting order approval for order_item ID: ${orderItemId}`);
 
-    Logger.info(`[SUBMIT APPROVAL] Received request for ID: ${id}`, {
-      params: req.params,
-      body: additionalData,
-      headers: {
-        'content-type': req.headers['content-type'],
-        'origin': req.headers['origin']
-      }
-    });
+    // Fall back to the authenticated JWT user so the audit trail is never
+    // null just because a caller forgot/misnamed userId in the body.
+    const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
+    const result = await orderApprovalService.submitApproval(orderItemId, data);
 
-    const result = await orderApprovalService.submitApproval(id, additionalData);
-
-    // Trigger WhatsApp notification for the next stage
-    try {
-      if (result.success && result.data && result.data.order_no) {
-        const docDetails = {
-          stage: `✅ *Approval of Order Completed*\n📍 *Pending in Dispatch Planning*`,
-          do_number: result.data.order_no
-        };
-        if (req.pageAccessDetails) {
-          whatsappShareService(docDetails, req.pageAccessDetails, 'Dispatch Planning')
-            .catch((err) => Logger.warn('Failed to send WhatsApp notifications for Approval of Order', err));
-        }
-      }
-    } catch (notifyError) {
-      Logger.warn('Failed to send WhatsApp notifications for Approval of Order', notifyError);
-    }
-
-    Logger.info(`[SUBMIT APPROVAL] Success for ID: ${id}`);
-
-    return ResponseUtil.success(
-      res,
-      result.data,
-      result.message
-    );
+    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
-    Logger.error('[SUBMIT APPROVAL] Error in submitApproval controller', error);
-    if (error.message.includes('not found')) {
+    if (error.code === 'STALE_WRITE') {
+      return ResponseUtil.error(res, error.message, 409);
+    }
+    if (error.message && error.message.includes('not found')) {
       return ResponseUtil.notFound(res, error.message);
     }
+    Logger.error('Error in submitApproval controller', error);
     next(error);
   }
 };
 
 /**
- * Get approval by order ID
+ * Get approval by order_item id
  * @route GET /api/v1/approval/:id
  */
 const getApprovalById = async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    Logger.info(`Fetching approval for order ID: ${id}`);
-
-    const result = await orderApprovalService.getApprovalById(id);
-
-    return ResponseUtil.success(
-      res,
-      result.data,
-      'Approval fetched successfully'
-    );
+    const orderItemId = parseInt(req.params.id, 10);
+    const result = await orderApprovalService.getApprovalById(orderItemId);
+    return ResponseUtil.success(res, result.data, 'Approval fetched successfully');
   } catch (error) {
-    Logger.error('Error in getApprovalById controller', error);
-    if (error.message.includes('not found')) {
+    if (error.message && error.message.includes('not found')) {
       return ResponseUtil.notFound(res, error.message);
     }
+    Logger.error('Error in getApprovalById controller', error);
     next(error);
   }
 };
 
 /**
- * Get dynamic filter options for Approval stage
+ * Get dynamic filter options for the Approval stage
+ * @route GET /api/v1/approval/filters
  */
 const getFilterOptions = async (req, res, next) => {
   try {
@@ -180,5 +118,5 @@ module.exports = {
   getApprovalHistory,
   submitApproval,
   getApprovalById,
-  getFilterOptions
+  getFilterOptions,
 };

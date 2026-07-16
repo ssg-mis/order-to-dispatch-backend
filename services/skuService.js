@@ -10,59 +10,19 @@ class SkuService {
   /**
    * Get all active SKUs
    */
+  // v2 schema: delegate to the shared master-lookup helper. Response key stays
+  // `skuDetails` (what the frontend reads).
   async getAllSkus(params = {}) {
     try {
-      const { all, page = 1, limit = 20, search = "" } = params;
-      const isAll = all === true || all === 'true';
-      // When `all` is requested without an explicit limit, return the full set
-      // (skip LIMIT/OFFSET). Callers that pass a limit still get pagination.
-      const noLimit = isAll && params.limit === undefined;
-      const offset = (page - 1) * limit;
-      const values = [];
-      let whereClause = "";
-
-      if (!isAll) {
-        whereClause = " WHERE (status = 'Active' OR sku_code = 'Active' OR status IS NULL)";
-      }
-      
-      if (search) {
-        const { buildSearchCondition } = require('../utils/searchUtils');
-        const { clause, params, newIndex } = buildSearchCondition(['sku_name', 'sku_code'], search, values.length + 1);
-        values.push(...params);
-        whereClause += whereClause ? " AND " : " WHERE ";
-        whereClause += clause;
-      }
-
-      // Get count
-      const countQuery = `SELECT COUNT(*) FROM sku_details ${whereClause}`;
-      const countResult = await pool.query(countQuery, values);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get paginated data
-      const query = `
-        SELECT 
-          id, sku_code, sku_name, status, main_uom, alternate_uom, 
-          nos_per_main_uom, units, oil_filling_per_unit, 
-          filling_units, converted_kg, packing_weight_per_main_unit, 
-          weight_difference, sku_weight, packing_weight, gross_weight
-        FROM sku_details
-        ${whereClause}
-        ORDER BY sku_name ASC
-        ${noLimit ? '' : `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`}
-      `;
-
-      if (!noLimit) values.push(limit, offset);
-      const result = await pool.query(query, values);
-      
-      Logger.info(`Fetched ${result.rows.length} active SKUs (total: ${total}, search: "${search}")`);
-      return {
-        skuDetails: result.rows,
-        pagination: {
-          total,
-          page: parseInt(page),
-          limit: parseInt(limit)
-        }
-      };
+      const { masterLookup } = require('./masterLookupHelper');
+      const { schema } = require('../config/db-v2.ts');
+      const { rows, total } = await masterLookup(schema.skus, {
+        nameColumn: 'skuName',
+        searchColumns: ['skuName', 'skuCode'],
+        ...params,
+      });
+      Logger.info(`Fetched ${rows.length} SKUs (total: ${total})`);
+      return { skuDetails: rows, pagination: { total, page: parseInt(params.page) || 1, limit: parseInt(params.limit) || total } };
     } catch (error) {
       Logger.error('Error fetching SKUs:', error);
       throw error;

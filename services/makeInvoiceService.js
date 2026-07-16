@@ -1,442 +1,185 @@
 /**
- * Make Invoice Service
- * Business logic for invoice generation (Stage 9: Make Invoice)
- * Uses lift_receiving_confirmation table
- * Conditions:
- * - Pending: planned_5 IS NOT NULL AND actual_5 IS NULL
- * - History: planned_5 IS NOT NULL AND actual_5 IS NOT NULL
+ * Make Invoice Service (Gate 6a: Make Invoice) — v2 schema.
+ *
+ * Per SHIPMENT, keyed off the Make-Invoice sub-gate on the `invoices` row
+ * (seeded on Security APPROVE, or on the non-BANARI Security skip at Actual
+ * Dispatch). Make Invoice + Check Invoice are two sub-gates on ONE invoices row.
+ *   - Pending : invoices.planned_made_at IS NOT NULL AND made_at IS NULL
+ *   - History : invoices.planned_made_at IS NOT NULL AND made_at IS NOT NULL
+ *
+ * Submitting records the invoice (bill type / no / date / copy / qty / amount),
+ * stamps made_at, and seeds the Check-Invoice sub-gate (planned_checked_at). A CD
+ * (cash discount) amount is stored on the shipment and permanently subtracted
+ * from the order item's rate columns — mirrors the reference.
+ *
+ * `:id` on the mutating/detail route is an invoices row id.
  */
 
-const db = require('../config/db');
-const { assertStageOpen } = require('../utils/staleWriteGuard');
-const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
-const { applyDispatchFilters } = require('../utils/searchUtils');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { getPlannedAt } = require('./stageUtils');
+
+const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
 
 class MakeInvoiceService {
-  /**
-   * Get pending invoice records
-   * Pending: planned_5 IS NOT NULL AND actual_5 IS NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} Pending invoice records
-   */
   async getPendingInvoices(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
-      const offset = (page - 1) * limit;
-
-      let whereConditions = ['lrc.planned_5 IS NOT NULL', 'lrc.actual_5 IS NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Add optional filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
-        paramIndex++;
-      }
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data with JOIN to order_dispatch for complete order details
-      const dataQuery = `
-        SELECT
-          lrc.*,
-          lrc.actual_1 AS lrc_actual_1,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.final_rate,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.depo_name,
-          od.customer_delivery_address,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.actual_1,
-          od.transfer,
-          od.bill_company_name,
-          od.freight_rate,
-          od.party_credit_status,
-          sd.nos_per_main_uom,
-          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
-          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
-          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
-          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
-          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
-          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
-          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
-          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
-          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
-          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
-          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
-        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
-        ${whereClause}
-        ORDER BY lrc.timestamp DESC, lrc.d_sr_number ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} pending invoices`);
-
-      return {
-        success: true,
-        data: {
-          invoices: dataResult.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.ceil(total / limit)
-          }
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching pending invoices', error);
-      throw new Error('Failed to fetch pending invoices');
-    }
+    return this._listMakeInvoice({ ...filters, ...pagination, open: true });
   }
 
-  /**
-   * Get invoice history
-   * History: planned_5 IS NOT NULL AND actual_5 IS NOT NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} History records
-   */
   async getInvoiceHistory(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
-      const offset = (page - 1) * limit;
-
-      let whereConditions = ['lrc.planned_5 IS NOT NULL', 'lrc.actual_5 IS NOT NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Add optional filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
-        paramIndex++;
-      }
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count total (join order_dispatch so Manual Sauda No. / DO Date filters apply)
-      const countQuery = `SELECT COUNT(*) FROM lift_receiving_confirmation lrc LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name ${whereClause}`;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data
-      const dataQuery = `
-        SELECT 
-          lrc.*,
-          lrc.actual_1 AS lrc_actual_1,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.depo_name,
-          od.customer_delivery_address,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.actual_1 AS order_actual_1,
-          od.transfer,
-          od.bill_company_name,
-          COALESCE(NULLIF(lrc.fitness, 'pending'), vm.fitness_image) AS fitness,
-          COALESCE(lrc.fitness_end_date, vm.fitness) AS fitness_end_date,
-          COALESCE(NULLIF(lrc.polution, 'pending'), vm.pollution_image) AS polution,
-          COALESCE(lrc.pollution_end_date, vm.pollution) AS pollution_end_date,
-          COALESCE(NULLIF(lrc.insurance, 'pending'), vm.insurance_image) AS insurance,
-          COALESCE(lrc.insurance_end_date, vm.insurance) AS insurance_end_date,
-          COALESCE(NULLIF(lrc.tax_copy, 'pending'), vm.road_tax_image) AS tax_copy,
-          COALESCE(lrc.tax_end_date, vm.road_tax) AS tax_end_date,
-          COALESCE(NULLIF(lrc.permit1, 'pending'), vm.state_permit_image) AS permit1,
-          COALESCE(lrc.permit1_end_date, vm.state_permit) AS permit1_end_date,
-          NULLIF(lrc.permit2_out_state, 'pending') AS permit2_out_state
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        LEFT JOIN vehicle_master vm ON TRIM(UPPER(lrc.truck_no)) = TRIM(UPPER(vm.registration_no))
-        ${whereClause}
-        ORDER BY lrc.actual_5 DESC, lrc.d_sr_number ASC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} invoice history records`);
-
-      return {
-        success: true,
-        data: {
-          invoices: dataResult.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.ceil(total / limit)
-          }
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching invoice history', error);
-      throw new Error('Failed to fetch invoice history');
-    }
+    return this._listMakeInvoice({ ...filters, ...pagination, open: false });
   }
 
-  /**
-   * Submit invoice (set actual_5 and update invoice details)
-   * @param {number} id - Record ID from lift_receiving_confirmation
-   * @param {Object} data - Invoice data
-   * @returns {Promise<Object>} Updated record
-   */
-  async submitInvoice(id, data = {}) {
-    const client = await db.getClient();
-    try {
-      await client.query('BEGIN');
-      Logger.info(`Submitting invoice for ID: ${id}`, { data });
-      await this.ensurePlanned6TriggerUsesTat(client);
+  async _listMakeInvoice({ open, page = 1, limit = 25, order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no, d_sr_number }) {
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 25;
 
-      const cd_amount = parseFloat(data.cd_amount) || 0;
-
-      const updateData = {
-        actual_5: new Date().toISOString(),
-        planned_6: await this.getPlannedTimestamp(client, 'Check Invoice'),
-        bill_type: data.bill_type || null,
-        invoice_date: data.invoice_date || null,
-        invoice_no: data.invoice_no || null,
-        invoice_copy: data.invoice_copy || null,
-        qty: data.qty || null,
-        bill_amount: data.bill_amount || null,
-        make_invoice_user: data.user_id || null,
-        cd_amount: cd_amount,
-        // Clear any prior "Issue" flag raised by Check Invoice so that a re-issued
-        // record returns to "Pending Review" (not stuck on "Issue Reported").
-        status_1: null,
-        remarks_2: null
-      };
-
-      const fields = Object.keys(updateData);
-      const values = Object.values(updateData);
-
-      const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-
-      // Stale-write guard: only advance a row still pending at Make Invoice (actual_5 NULL).
-      const query = `
-        UPDATE lift_receiving_confirmation
-        SET ${setClause}
-        WHERE id = $${fields.length + 1} AND actual_5 IS NULL
-        RETURNING so_no, product_name
-      `;
-
-      const result = await client.query(query, [...values, id]);
-
-      assertStageOpen(result, 'Make Invoice');
-
-      const so_no = result.rows[0].so_no;
-      const productName = result.rows[0].product_name;
-
-      // Update order_dispatch table: minus cd_amount from rate columns.
-      // Resolve the exact order_dispatch row for THIS invoiced product and key the rate
-      // update on its primary key id. order_no is NOT unique across sibling SKU rows on the
-      // same DO, so keying on order_no alone would subtract the discount from every sibling
-      // product's rates, not just the one being invoiced (matches the (order_no, product_name)
-      // → id disambiguation used elsewhere). If product_name is absent we fall back to the
-      // single order_no match so a legacy single-product DO still gets adjusted.
-      if (cd_amount > 0 && so_no) {
-        const targetRes = await client.query(
-          `SELECT id FROM order_dispatch
-           WHERE order_no = $1 AND (product_name = $2 OR $2 IS NULL)
-           ORDER BY id ASC
-           LIMIT 1`,
-          [so_no, productName]
-        );
-
-        if (targetRes.rows.length > 0) {
-          const orderDispatchId = targetRes.rows[0].id;
-          const updateRatesQuery = `
-            UPDATE order_dispatch
-            SET
-              final_rate = CASE WHEN final_rate IS NOT NULL THEN final_rate - $1 ELSE NULL END,
-              rate_of_material = CASE WHEN rate_of_material IS NOT NULL THEN rate_of_material - $1 ELSE NULL END,
-              rate_per_15kg = CASE WHEN rate_per_15kg IS NOT NULL THEN rate_per_15kg - $1 ELSE NULL END,
-              rate_per_ltr = CASE WHEN rate_per_ltr IS NOT NULL THEN rate_per_ltr - $1 ELSE NULL END
-            WHERE id = $2
-          `;
-          await client.query(updateRatesQuery, [cd_amount, orderDispatchId]);
-          Logger.info(`Adjusted rates in order_dispatch id ${orderDispatchId} (SO: ${so_no}, product: ${productName || 'n/a'}) by minus ${cd_amount}`);
-        } else {
-          Logger.warn(`[MAKE INVOICE] No matching order_dispatch row for SO: ${so_no} (product: ${productName || 'n/a'}) — CD rate adjustment skipped`);
-        }
-      }
-
-      await client.query('COMMIT');
-      Logger.info(`Invoice submitted successfully for ID: ${id}`);
-
-      return {
-        success: true,
-        message: 'Invoice submitted successfully',
-        data: result.rows[0]
-      };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      Logger.error('Error submitting invoice', error);
-      throw error;
-    } finally {
-      client.release();
+    const conditions = [
+      isNotNull(schema.invoices.plannedMadeAt),
+      open ? isNull(schema.invoices.madeAt) : isNotNull(schema.invoices.madeAt),
+    ];
+    if (d_sr_number) conditions.push(eq(schema.dispatches.dsrNumber, d_sr_number));
+    if (order_no) {
+      conditions.push(sql`(${schema.orders.orderNo} ILIKE ${'%' + order_no + '%'} OR ${schema.customers.customerName} ILIKE ${'%' + order_no + '%'})`);
+    } else if (customer_name) {
+      conditions.push(sql`${schema.customers.customerName} ILIKE ${'%' + customer_name + '%'}`);
     }
-  }
+    if (start_date && end_date) {
+      conditions.push(sql`${schema.orders.deliveryDate} BETWEEN ${start_date} AND ${end_date}`);
+    }
+    if (Array.isArray(depo_names)) {
+      conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
+    }
+    if (manual_sauda_no) {
+      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+    }
+    const where = and(...conditions);
 
-  async getPlannedTimestamp(client, stageName) {
-    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const normalizedStageName = normalizeStageName(stageName);
-    const stageAliases = {
-      checkinvoice: ['checkinvoice'],
+    const baseJoin = (q) => q
+      .from(schema.invoices)
+      .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.invoices.dispatchId))
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId));
+
+    const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
+
+    const rows = await baseJoin(
+      dbV2.select({
+        invoice: schema.invoices,
+        dispatch: schema.dispatches,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+        vehicle: schema.vehicles,
+        driver: schema.drivers,
+        transporter: schema.transporters,
+      })
+    )
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .leftJoin(schema.vehicles, eq(schema.vehicles.id, schema.dispatches.vehicleId))
+      .leftJoin(schema.drivers, eq(schema.drivers.id, schema.dispatches.driverId))
+      .leftJoin(schema.transporters, eq(schema.transporters.id, schema.dispatches.transporterId))
+      .where(where)
+      .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.invoices.madeAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    return {
+      success: true,
+      data: { invoices: rows, pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) } },
     };
-    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
-
-    const result = await client.query(
-      `
-        SELECT (
-          CURRENT_TIMESTAMP + COALESCE(
-            (
-              SELECT stage_time
-              FROM process_stages
-              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
-              ORDER BY submitted_at DESC, id DESC
-              LIMIT 1
-            ),
-            INTERVAL '0'
-          )
-        ) AS planned_at
-      `,
-      [normalizedStageNames]
-    );
-
-    const plannedAt = result.rows[0]?.planned_at;
-    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
-  }
-
-  async ensurePlanned6TriggerUsesTat(client) {
-    await client.query(`
-      CREATE OR REPLACE FUNCTION set_planned_6_from_actual_5()
-      RETURNS TRIGGER AS $$
-      DECLARE
-          check_invoice_tat INTERVAL;
-      BEGIN
-          SELECT stage_time
-          INTO check_invoice_tat
-          FROM process_stages
-          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = 'checkinvoice'
-          ORDER BY submitted_at DESC, id DESC
-          LIMIT 1;
-
-          IF NEW.actual_5 IS NOT NULL
-             AND (TG_OP = 'INSERT' OR OLD.actual_5 IS DISTINCT FROM NEW.actual_5) THEN
-              NEW.planned_6 := NEW.actual_5::timestamptz + COALESCE(check_invoice_tat, INTERVAL '0');
-          END IF;
-
-          RETURN NEW;
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
   }
 
   /**
-   * Get invoice by ID
-   * @param {number} id - Record ID
-   * @returns {Promise<Object>} Record details
+   * Record the invoice for one shipment and advance to Check Invoice.
+   *
+   * @param {number} invoiceId
+   * @param {Object} data - { billType, invoiceDate, invoiceNo, invoiceCopy, qty,
+   *                          billAmount, cdAmount, userId }
    */
-  async getInvoiceById(id) {
-    try {
-      const query = `
-        SELECT * FROM lift_receiving_confirmation 
-        WHERE id = $1
-      `;
+  async submitInvoice(invoiceId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const [inv] = await tx
+        .select({ id: schema.invoices.id, dispatchId: schema.invoices.dispatchId, madeAt: schema.invoices.madeAt, orderItemId: schema.dispatches.orderItemId })
+        .from(schema.invoices)
+        .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.invoices.dispatchId))
+        .where(eq(schema.invoices.id, invoiceId));
+      if (!inv) throw new Error('Invoice record not found');
 
-      const result = await db.query(query, [id]);
+      const plannedCheckedAt = await getPlannedAt(tx, 'Check Invoice');
+      const cd = toNum(data.cdAmount) ?? 0;
 
-      if (result.rows.length === 0) {
-        throw new Error('Record not found');
+      const updated = await tx
+        .update(schema.invoices)
+        .set({
+          madeAt: new Date(),
+          plannedCheckedAt,
+          billType: data.billType ?? null,
+          invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : null,
+          invoiceNo: data.invoiceNo ?? null,
+          invoiceCopy: data.invoiceCopy ?? null,
+          qty: toNum(data.qty),
+          billAmount: toNum(data.billAmount),
+          madeByUserId: data.userId ?? null,
+          // Clear any prior Check-Invoice "Issue" flag so a re-issued document
+          // returns to normal Pending Review (not stuck on "Issue Reported").
+          status: null,
+          checkRemarks: null,
+        })
+        .where(and(eq(schema.invoices.id, invoiceId), isNull(schema.invoices.madeAt)))
+        .returning();
+      assertStageOpen({ rowCount: updated.length }, 'Make Invoice');
+
+      // CD (cash discount): store on the shipment and permanently subtract from
+      // the invoiced order item's rate columns (keyed on the exact order_item, so
+      // sibling SKU lines are untouched — the v2 equivalent of the reference's
+      // (order_no, product_name)→id disambiguation).
+      if (cd > 0) {
+        await tx.update(schema.dispatches).set({ cdAmount: cd }).where(eq(schema.dispatches.id, inv.dispatchId));
+        await tx
+          .update(schema.orderItems)
+          .set({
+            finalRate: sql`CASE WHEN ${schema.orderItems.finalRate} IS NOT NULL THEN ${schema.orderItems.finalRate} - ${cd} ELSE NULL END`,
+            rateOfMaterial: sql`CASE WHEN ${schema.orderItems.rateOfMaterial} IS NOT NULL THEN ${schema.orderItems.rateOfMaterial} - ${cd} ELSE NULL END`,
+            ratePer15kg: sql`CASE WHEN ${schema.orderItems.ratePer15kg} IS NOT NULL THEN ${schema.orderItems.ratePer15kg} - ${cd} ELSE NULL END`,
+            ratePerLtr: sql`CASE WHEN ${schema.orderItems.ratePerLtr} IS NOT NULL THEN ${schema.orderItems.ratePerLtr} - ${cd} ELSE NULL END`,
+          })
+          .where(eq(schema.orderItems.id, inv.orderItemId));
+        Logger.info(`[MAKE INVOICE] CD ${cd} applied to order_item ${inv.orderItemId} (dispatch ${inv.dispatchId})`);
       }
 
-      return {
-        success: true,
-        data: result.rows[0]
-      };
-    } catch (error) {
-      Logger.error('Error fetching invoice by ID', error);
-      throw error;
-    }
+      Logger.info(`[MAKE INVOICE] Invoice ${invoiceId} made (dispatch ${inv.dispatchId}) → Check Invoice queued`);
+      return { success: true, message: 'Invoice submitted successfully', data: { invoiceId, dispatchId: inv.dispatchId } };
+    });
+  }
+
+  async getInvoiceById(invoiceId) {
+    const [row] = await dbV2
+      .select({
+        invoice: schema.invoices,
+        dispatch: schema.dispatches,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+      })
+      .from(schema.invoices)
+      .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.invoices.dispatchId))
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .where(eq(schema.invoices.id, invoiceId));
+    if (!row) throw new Error('Invoice record not found');
+    return { success: true, data: row };
   }
 }
 

@@ -1,25 +1,27 @@
 /**
- * Commitment Punch Routes
+ * Commitment Punch Routes — v2 schema.
+ * A commitment is a bulk pre-sale promise; /:id/process raises it, spawning a
+ * real order (orders + order_items) pending at Order Approval.
  */
 
 const express = require('express');
 const router = express.Router();
 const { createCommitment, getAll, getPending, processCommitment, getDetails } = require('../controllers/commitmentPunchController');
-const { pageAccess } = require('../middleware/pageAccessMiddleware');
+// pageAccess middleware intentionally not applied until the notification layer is migrated.
 
-// POST /api/v1/commitment-punch — Create a new commitment
+/** @route POST /api/v1/commitment-punch — create a commitment (one or more lines) */
 router.post('/', createCommitment);
 
-// GET /api/v1/commitment-punch — Get all commitments
+/** @route GET /api/v1/commitment-punch — list commitments */
 router.get('/', getAll);
 
-// GET /api/v1/commitment-punch/pending — Get pending commitments (planned1 NOT NULL, actual1 IS NULL)
+/** @route GET /api/v1/commitment-punch/pending — commitments with balance left to raise */
 router.get('/pending', getPending);
 
-// GET /api/v1/commitment-punch/:id/details — Get all processed details for a commitment
+/** @route GET /api/v1/commitment-punch/:id/details — all raises for a commitment */
 router.get('/:id/details', getDetails);
 
-// PUT /api/v1/commitment-punch/:id/process — Process a commitment
-router.put('/:id/process', pageAccess, processCommitment);
+/** @route PUT /api/v1/commitment-punch/:id/process — raise a chunk → spawns an order */
+router.put('/:id/process', processCommitment);
 
 module.exports = router;

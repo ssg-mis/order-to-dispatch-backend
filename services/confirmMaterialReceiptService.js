@@ -1,375 +1,145 @@
 /**
- * Confirm Material Receipt Service
- * Business logic for material receipt confirmation (Stage 12: Confirm Material Receipt)
- * Uses lift_receiving_confirmation table
- * Conditions:
- * - Pending: planned_8 IS NOT NULL AND actual_8 IS NULL
- * - History: planned_8 IS NOT NULL AND actual_8 IS NOT NULL
+ * Confirm Material Receipt Service (Gate 8: Confirm Material Receipt) — v2 schema.
+ *
+ * Per SHIPMENT, keyed off the `material_receipts` gate (seeded on Gate Out submit
+ * / the non-BANARI Gate Out skip at Check Invoice).
+ *   - Pending : material_receipts.planned_at IS NOT NULL AND actual_at IS NULL
+ *   - History : material_receipts.planned_at IS NOT NULL AND actual_at IS NOT NULL
+ *
+ * Submitting stamps actual_at and records the received date / proof / damage
+ * fields. Two side effects mirror the reference:
+ *   - A billing correction (bill amount) is written to invoices.billAmount for
+ *     the shipment (the old table duplicated bill_amount here; v2 keeps it on the
+ *     invoice — see material_receipts.ts schema note).
+ *   - When damage_status indicates damage, the final Damage Adjustment gate
+ *     (gate 9) is seeded; otherwise the pipeline ends here for this shipment.
+ *
+ * `:id` on the mutating route is a material_receipts row id.
  */
 
-const db = require('../config/db');
-const { resolveAuditUsers } = require('../utils/auditUserResolver');
 const { Logger } = require('../utils');
-const { applyDispatchFilters } = require('../utils/searchUtils');
+const { assertStageOpen } = require('../utils/staleWriteGuard');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { getPlannedAt } = require('./stageUtils');
+
+const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
 
 class ConfirmMaterialReceiptService {
-  /**
-   * Get pending material receipt records
-   * Pending: planned_8 IS NOT NULL AND actual_8 IS NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} Pending records
-   */
   async getPendingReceipts(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
-      const offset = (page - 1) * limit;
-
-      let whereConditions = ['lrc.planned_8 IS NOT NULL', 'lrc.actual_8 IS NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
-
-      // Add filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
-        paramIndex++;
-      }
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
-      }
-
-      if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        if (filters.depo_names.length === 0) {
-          whereConditions.push('1=0');
-        } else {
-          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
-          queryParams.push(filters.depo_names);
-          paramIndex++;
-        }
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count total (needs join for depo_name filter)
-      const countQuery = `
-        SELECT COUNT(*) 
-        FROM lift_receiving_confirmation lrc 
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-      `;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data
-      const dataQuery = `
-        SELECT 
-          lrc.*,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.depo_name,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.rate_of_material,
-          od.transfer,
-          od.bill_company_name,
-          sd.nos_per_main_uom
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        LEFT JOIN sku_details sd ON sd.sku_name = lrc.product_name
-        ${whereClause}
-        ORDER BY lrc.planned_8 DESC, lrc.id DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} pending material receipts`);
-
-      return {
-        success: true,
-        data: {
-          orders: dataResult.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.ceil(total / limit)
-          }
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching pending material receipts', error);
-      throw new Error('Failed to fetch pending material receipts');
-    }
+    return this._listReceipts({ ...filters, ...pagination, open: true });
   }
 
-  /**
-   * Get material receipt history
-   * History: planned_8 IS NOT NULL AND actual_8 IS NOT NULL
-   * @param {Object} filters - Filter parameters
-   * @param {Object} pagination - Pagination parameters
-   * @returns {Promise<Object>} History records
-   */
   async getReceiptHistory(filters = {}, pagination = {}) {
-    try {
-      const page = parseInt(pagination.page) || 1;
-      const limit = parseInt(pagination.limit) || 1000;
-      const offset = (page - 1) * limit;
+    return this._listReceipts({ ...filters, ...pagination, open: false });
+  }
 
-      let whereConditions = ['lrc.planned_8 IS NOT NULL', 'lrc.actual_8 IS NOT NULL'];
-      let queryParams = [];
-      let paramIndex = 1;
+  async _listReceipts({ open, page = 1, limit = 25, order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no, d_sr_number }) {
+    page = parseInt(page) || 1;
+    limit = parseInt(limit) || 25;
 
-      // Add filters
-      if (filters.d_sr_number) {
-        whereConditions.push(`lrc.d_sr_number = $${paramIndex}`);
-        queryParams.push(filters.d_sr_number);
-        paramIndex++;
-      }
-
-      // Search (DO No.), Manual Sauda No. and DO Date range filters
-      paramIndex = applyDispatchFilters(filters, whereConditions, queryParams, paramIndex);
-
-      if (filters.party_name) {
-        whereConditions.push(`lrc.party_name ILIKE $${paramIndex}`);
-        queryParams.push(`%${filters.party_name}%`);
-        paramIndex++;
-      }
-
-      if (filters.depo_names && Array.isArray(filters.depo_names)) {
-        if (filters.depo_names.length === 0) {
-          whereConditions.push('1=0');
-        } else {
-          whereConditions.push(`od.depo_name = ANY($${paramIndex})`);
-          queryParams.push(filters.depo_names);
-          paramIndex++;
-        }
-      }
-
-      const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
-
-      // Count total (needs join for depo_name filter)
-      const countQuery = `
-        SELECT COUNT(*) 
-        FROM lift_receiving_confirmation lrc 
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-      `;
-      const countResult = await db.query(countQuery, queryParams);
-      const total = parseInt(countResult.rows[0].count);
-
-      // Get data
-      const dataQuery = `
-        SELECT 
-          lrc.*,
-          od.order_type_delivery_purpose,
-          od.start_date,
-          od.end_date,
-          od.delivery_date,
-          od.order_type,
-          od.customer_type,
-          od.party_so_date,
-          od.oil_type,
-          od.rate_per_15kg,
-          od.rate_per_ltr,
-          od.rate_of_material,
-          od.total_amount_with_gst,
-          od.type_of_transporting,
-          od.customer_contact_person_name,
-          od.customer_contact_person_whatsapp_no,
-          od.customer_address,
-          od.depo_name,
-          od.payment_terms,
-          od.advance_payment_to_be_taken,
-          od.advance_amount,
-          od.is_order_through_broker,
-          od.is_order_through,
-          od.broker_name,
-          od.sku_name,
-          od.approval_qty,
-          od.order_punch_remarks,
-          od.actual_1 AS order_actual_1,
-          od.transfer,
-          od.bill_company_name
-        FROM lift_receiving_confirmation lrc
-        LEFT JOIN order_dispatch od ON lrc.so_no = od.order_no AND lrc.product_name = od.product_name
-        ${whereClause}
-        ORDER BY lrc.actual_8 DESC, lrc.id DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-      `;
-
-      const dataResult = await db.query(dataQuery, [...queryParams, limit, offset]);
-      await resolveAuditUsers(dataResult.rows);
-
-      Logger.info(`Fetched ${dataResult.rows.length} material receipt history records`);
-
-      return {
-        success: true,
-        data: {
-          orders: dataResult.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            totalPages: Math.ceil(total / limit)
-          }
-        }
-      };
-    } catch (error) {
-      Logger.error('Error fetching material receipt history', error);
-      throw new Error('Failed to fetch material receipt history');
+    const conditions = [
+      isNotNull(schema.materialReceipts.plannedAt),
+      open ? isNull(schema.materialReceipts.actualAt) : isNotNull(schema.materialReceipts.actualAt),
+    ];
+    if (d_sr_number) conditions.push(eq(schema.dispatches.dsrNumber, d_sr_number));
+    if (order_no) {
+      conditions.push(sql`(${schema.orders.orderNo} ILIKE ${'%' + order_no + '%'} OR ${schema.customers.customerName} ILIKE ${'%' + order_no + '%'})`);
+    } else if (customer_name) {
+      conditions.push(sql`${schema.customers.customerName} ILIKE ${'%' + customer_name + '%'}`);
     }
+    if (start_date && end_date) {
+      conditions.push(sql`${schema.orders.deliveryDate} BETWEEN ${start_date} AND ${end_date}`);
+    }
+    if (Array.isArray(depo_names)) {
+      conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
+    }
+    if (manual_sauda_no) {
+      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+    }
+    const where = and(...conditions);
+
+    const baseJoin = (q) => q
+      .from(schema.materialReceipts)
+      .innerJoin(schema.dispatches, eq(schema.dispatches.id, schema.materialReceipts.dispatchId))
+      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId));
+
+    const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
+
+    const rows = await baseJoin(
+      dbV2.select({
+        materialReceipt: schema.materialReceipts,
+        dispatch: schema.dispatches,
+        orderItem: schema.orderItems,
+        order: schema.orders,
+        customer: schema.customers,
+        depot: schema.depots,
+        sku: schema.skus,
+      })
+    )
+      .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .where(where)
+      .orderBy(open ? asc(schema.materialReceipts.plannedAt) : desc(schema.materialReceipts.actualAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    return {
+      success: true,
+      data: { orders: rows, pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) } },
+    };
   }
 
   /**
-   * Submit material receipt (set actual_8 and details)
-   * @param {number} id - Record ID from lift_receiving_confirmation
-   * @param {Object} data - Receipt data
-   * @returns {Promise<Object>} Updated record
+   * Confirm material receipt for one shipment.
+   *
+   * @param {number} materialReceiptId
+   * @param {Object} data - { materialReceivedDate, receivedImageProof, damageStatus,
+   *                          damageQty, damageImage, remarks, billAmount, userId }
    */
-  async submitReceipt(id, data = {}) {
-    const client = await db.getClient();
-    try {
-      await client.query('BEGIN');
-      Logger.info(`Submitting material receipt for ID: ${id}`, { data });
-      await this.ensurePlanned9TriggerUsesTat(client);
-      const isDamaged = String(data.damage_status || '').toLowerCase().trim() === 'damaged';
+  async submitReceipt(materialReceiptId, data = {}) {
+    return dbV2.transaction(async (tx) => {
+      const [receipt] = await tx
+        .select({ id: schema.materialReceipts.id, dispatchId: schema.materialReceipts.dispatchId, actualAt: schema.materialReceipts.actualAt })
+        .from(schema.materialReceipts)
+        .where(eq(schema.materialReceipts.id, materialReceiptId));
+      if (!receipt) throw new Error('Material receipt record not found');
 
-      const updateData = {
-        actual_8: new Date().toISOString(),
-        planned_9: isDamaged ? await this.getPlannedTimestamp(client, 'Damage Adjustment') : null,
-        material_receipt_user: data.user_id || null,
-        material_received_date: data.material_received_date || null,
-        received_image_proof: data.received_image_proof || null,
-        damage_status: data.damage_status || null,
-        sku: data.sku || null,
-        damage_qty: data.damage_qty || null,
-        damage_image: data.damage_image || null,
-        remarks_3: data.remarks_3 || null,
-        bill_amount: data.bill_amount !== undefined ? data.bill_amount : null,
-      };
+      const isDamaged = String(data.damageStatus ?? '').toLowerCase().trim() === 'damaged';
 
-      const fields = Object.keys(updateData);
-      const values = Object.values(updateData);
+      const updated = await tx
+        .update(schema.materialReceipts)
+        .set({
+          actualAt: new Date(),
+          performedByUserId: data.userId ?? null,
+          materialReceivedDate: data.materialReceivedDate ?? null,
+          receivedImageProof: data.receivedImageProof ?? null,
+          damageStatus: data.damageStatus ?? null,
+          damageQty: toNum(data.damageQty),
+          damageImage: data.damageImage ?? null,
+          remarks: data.remarks ?? null,
+        })
+        .where(and(eq(schema.materialReceipts.id, materialReceiptId), isNull(schema.materialReceipts.actualAt)))
+        .returning();
+      assertStageOpen({ rowCount: updated.length }, 'Confirm Material Receipt');
 
-      const setClause = fields.map((field, index) => `${field} = $${index + 1}`).join(', ');
-
-      const query = `
-        UPDATE lift_receiving_confirmation 
-        SET ${setClause}
-        WHERE id = $${fields.length + 1}
-        RETURNING *
-      `;
-
-      const result = await client.query(query, [...values, id]);
-
-      if (result.rows.length === 0) {
-        throw new Error('Record not found');
+      // Billing correction for damaged goods lives on the invoice in v2 (the old
+      // table duplicated bill_amount on the receipt row).
+      if (data.billAmount !== undefined && data.billAmount !== null && data.billAmount !== '') {
+        await tx.update(schema.invoices).set({ billAmount: toNum(data.billAmount) }).where(eq(schema.invoices.dispatchId, receipt.dispatchId));
       }
 
-      await client.query('COMMIT');
-      Logger.info(`Material receipt submitted successfully for ID: ${id}`);
+      // Damage → seed the final Damage Adjustment gate; otherwise the shipment is done.
+      if (isDamaged) {
+        const damagePlannedAt = await getPlannedAt(tx, 'Damage Adjustment');
+        await tx.insert(schema.damageAdjustments).values({ dispatchId: receipt.dispatchId, plannedAt: damagePlannedAt });
+      }
 
-      return {
-        success: true,
-        message: 'Material receipt submitted successfully',
-        data: result.rows[0]
-      };
-    } catch (error) {
-      await client.query('ROLLBACK');
-      Logger.error('Error submitting material receipt', error);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async getPlannedTimestamp(client, stageName) {
-    const normalizeStageName = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const normalizedStageName = normalizeStageName(stageName);
-    const stageAliases = {
-      damageadjustment: ['damageadjustment'],
-    };
-    const normalizedStageNames = stageAliases[normalizedStageName] || [normalizedStageName];
-
-    const result = await client.query(
-      `
-        SELECT (
-          CURRENT_TIMESTAMP + COALESCE(
-            (
-              SELECT stage_time
-              FROM process_stages
-              WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = ANY($1::text[])
-              ORDER BY submitted_at DESC, id DESC
-              LIMIT 1
-            ),
-            INTERVAL '0'
-          )
-        ) AS planned_at
-      `,
-      [normalizedStageNames]
-    );
-
-    const plannedAt = result.rows[0]?.planned_at;
-    return plannedAt instanceof Date ? plannedAt.toISOString() : new Date(plannedAt).toISOString();
-  }
-
-  async ensurePlanned9TriggerUsesTat(client) {
-    await client.query(`
-      CREATE OR REPLACE FUNCTION set_planned_9_from_actual_8()
-      RETURNS TRIGGER AS $$
-      DECLARE
-          damage_adjustment_tat INTERVAL;
-      BEGIN
-          SELECT stage_time
-          INTO damage_adjustment_tat
-          FROM process_stages
-          WHERE regexp_replace(lower(trim(stage_name)), '[^a-z0-9]', '', 'g') = 'damageadjustment'
-          ORDER BY submitted_at DESC, id DESC
-          LIMIT 1;
-
-          IF NEW.actual_8 IS NOT NULL
-             AND (TG_OP = 'INSERT' OR OLD.actual_8 IS DISTINCT FROM NEW.actual_8)
-             AND lower(trim(COALESCE(NEW.damage_status, ''))) = 'damaged' THEN
-              NEW.planned_9 := NEW.actual_8::timestamptz + COALESCE(damage_adjustment_tat, INTERVAL '0');
-          ELSIF lower(trim(COALESCE(NEW.damage_status, ''))) <> 'damaged' THEN
-              NEW.planned_9 := NULL;
-          END IF;
-
-          RETURN NEW;
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
+      Logger.info(`[MATERIAL RECEIPT] Receipt ${materialReceiptId} (dispatch ${receipt.dispatchId}) confirmed${isDamaged ? ' → Damage Adjustment queued' : ' (pipeline complete)'}`);
+      return { success: true, message: 'Material receipt submitted successfully', data: { materialReceiptId, dispatchId: receipt.dispatchId, damaged: isDamaged } };
+    });
   }
 }
 
