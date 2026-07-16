@@ -794,13 +794,20 @@ class ActualDispatchService {
           throw conflict;
         }
 
-        // Step 3: Restore quantity and reopen Dispatch Planning for this order
+        // Step 3: Restore quantity and reopen Dispatch Planning for this order.
+        // planned_3 is COALESCEd to NOW() because Stock Transfer orders skip Dispatch
+        // Planning on approval (planned_3 left NULL — see orderApprovalService.js
+        // submitApproval skip-stage-4 branch), so reverting one here would otherwise
+        // leave planned_3 NULL and the order would fail Dispatch Planning's pending
+        // filter (planned_3 IS NOT NULL AND actual_3 IS NULL), vanishing from both
+        // stages. For regular orders planned_3 is already set, so this is a no-op.
         if (orderDispatchId) {
           const updateOrderQuery = `
             UPDATE order_dispatch
             SET
               remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
               actual_3 = NULL,
+              planned_3 = COALESCE(planned_3, NOW()),
               revert_dispatch_remarks = $3
             WHERE id = $2
           `;
