@@ -807,7 +807,7 @@ class ActualDispatchService {
             SET
               remaining_dispatch_qty = COALESCE(remaining_dispatch_qty, 0) + $1,
               actual_3 = NULL,
-              planned_3 = COALESCE(planned_3, NOW()),
+              planned_3 = COALESCE(planned_3, NOW()::text),
               revert_dispatch_remarks = $3
             WHERE id = $2
           `;
