@@ -21,7 +21,7 @@ const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
 const { eq, and, isNull, isNotNull, sql, desc, inArray } = require('drizzle-orm');
 const { alias } = require('drizzle-orm/pg-core');
-const { getPlannedAt, mintDsr, resolveInheritedApproval } = require('./stageUtils');
+const { getPlannedAt, mintDsr, resolveInheritedApproval, insertSplitOrderItem } = require('./stageUtils');
 const { deriveConsolidatedRatesForGroup, deriveRatesForRegularOrder, detectOilType } = require('../utils/rateDerivation');
 
 const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
@@ -377,25 +377,10 @@ class DispatchPlanningService {
 
         // New line = the un-dispatched remainder, back at Pre-Approval. Same SKU/rate
         // for now; it has NO shipments so its SKU can be changed safely there.
-        const [newItem] = await tx
-          .insert(schema.orderItems)
-          .values({
-            orderId: item.orderId,
-            skuId: item.skuId,
-            uom: item.uom,
-            alternateUom: item.alternateUom,
-            alternateQtyKg: item.alternateQtyKg,
-            oilType: item.oilType,
-            orderQuantity: remainingNow,
-            rateOfMaterial: item.rateOfMaterial,
-            finalRate: item.finalRate,
-            ratePer15kg: item.ratePer15kg,
-            ratePerLtr: item.ratePerLtr,
-            origin: 'split',
-            splitFromItemId: orderItemId,
-            budgetRootId: item.budgetRootId ?? item.id,
-          })
-          .returning();
+        const newItem = await insertSplitOrderItem(tx, schema, item, {
+          orderQuantity: remainingNow,
+          splitFromItemId: orderItemId,
+        });
         const preAt = await getPlannedAt(tx, 'Pre Approval');
         await tx.insert(schema.preApprovals).values({ orderItemId: newItem.id, plannedAt: preAt });
 

@@ -27,6 +27,7 @@ const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
 const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
 const { getPlannedAt } = require('./stageUtils');
+const { alias } = require('drizzle-orm/pg-core');
 
 function staleWrite() {
   const err = new Error('This shipment is no longer awaiting Security Guard Approval — it was already processed or moved by another user. Please refresh and try again.');
@@ -88,6 +89,8 @@ class SecurityGuardApprovalService {
 
     const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
 
+    const securityGuardUser = alias(schema.users, 'security_guard_doer');
+
     const rows = await baseJoin(
       dbV2.select({
         securityCheck: schema.securityGuardChecks,
@@ -100,12 +103,14 @@ class SecurityGuardApprovalService {
         vehicle: schema.vehicles,
         driver: schema.drivers,
         transporter: schema.transporters,
+        securityGuardUser: securityGuardUser.username,
       })
     )
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
       .leftJoin(schema.vehicles, eq(schema.vehicles.id, schema.dispatches.vehicleId))
       .leftJoin(schema.drivers, eq(schema.drivers.id, schema.dispatches.driverId))
       .leftJoin(schema.transporters, eq(schema.transporters.id, schema.dispatches.transporterId))
+      .leftJoin(securityGuardUser, eq(securityGuardUser.id, schema.securityGuardChecks.performedByUserId))
       .where(where)
       .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.securityGuardChecks.actualAt))
       .limit(limit)

@@ -33,7 +33,7 @@ const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
 const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
 const { alias } = require('drizzle-orm/pg-core');
-const { getPlannedAt, isStockTransfer, resolveInheritedApproval } = require('./stageUtils');
+const { getPlannedAt, isStockTransfer, resolveInheritedApproval, insertSplitOrderItem, subtractApprovedQty } = require('./stageUtils');
 const { deriveConsolidatedRatesForGroup, deriveRatesForRegularOrder, detectOilType } = require('../utils/rateDerivation');
 
 const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
@@ -167,6 +167,7 @@ class ActualDispatchService {
     const punchUser = alias(schema.users, 'punch_user');
     const preApprovalUser = alias(schema.users, 'pre_approval_doer');
     const orderApprovalUser = alias(schema.users, 'order_approval_doer');
+    const actualDispatchUser = alias(schema.users, 'actual_dispatch_doer');
 
     let rowsQuery = dbV2
       .select({
@@ -196,6 +197,7 @@ class ActualDispatchService {
         preApprovalUser: preApprovalUser.username,
         orderApprovalActualAt: schema.orderApprovals.actualAt,
         orderApprovalUser: orderApprovalUser.username,
+        actualDispatchUser: actualDispatchUser.username,
       })
       .from(schema.dispatches)
       .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
@@ -210,6 +212,7 @@ class ActualDispatchService {
       .leftJoin(punchUser, eq(punchUser.id, schema.orders.orderPunchUserId))
       .leftJoin(preApprovalUser, eq(preApprovalUser.id, schema.preApprovals.approvedByUserId))
       .leftJoin(orderApprovalUser, eq(orderApprovalUser.id, schema.orderApprovals.approvedByUserId))
+      .leftJoin(actualDispatchUser, eq(actualDispatchUser.id, schema.dispatches.performedByUserId))
       .where(open ? and(where, inArray(schema.orders.id, pageOrderIds)) : where)
       // Newest first: sort pending rows by DO Date (party_so_date), tie-broken
       // by order_no so same-day orders stay in a stable, deterministic order.
@@ -471,35 +474,17 @@ class ActualDispatchService {
         // Shrink the original line by exactly this shipment's qty (family total
         // unchanged, so the qty-guard trigger stays satisfied) and fork a new
         // line for the reverted qty — send only that back to Pre-Approval.
-        // approved_qty is only ever decremented if it was a REAL value already
-        // (a line born from a "revert to Dispatch Planning" split never got one -
-        // Order-Approval was skipped - so it must stay null, not go negative).
         const newOrderQuantity = (toNum(item.orderQuantity) ?? 0) - revertedQty;
-        const newApprovedQty = item.approvedQty != null ? (toNum(item.approvedQty) - revertedQty) : null;
+        const newApprovedQty = subtractApprovedQty(item.approvedQty, revertedQty);
         await tx
           .update(schema.orderItems)
           .set({ orderQuantity: newOrderQuantity, approvedQty: newApprovedQty })
           .where(eq(schema.orderItems.id, row.orderItemId));
 
-        const [newItem] = await tx
-          .insert(schema.orderItems)
-          .values({
-            orderId: item.orderId,
-            skuId: item.skuId,
-            uom: item.uom,
-            alternateUom: item.alternateUom,
-            alternateQtyKg: item.alternateQtyKg,
-            oilType: item.oilType,
-            orderQuantity: revertedQty,
-            rateOfMaterial: item.rateOfMaterial,
-            finalRate: item.finalRate,
-            ratePer15kg: item.ratePer15kg,
-            ratePerLtr: item.ratePerLtr,
-            origin: 'split',
-            splitFromItemId: row.orderItemId,
-            budgetRootId: item.budgetRootId ?? item.id,
-          })
-          .returning();
+        const newItem = await insertSplitOrderItem(tx, schema, item, {
+          orderQuantity: revertedQty,
+          splitFromItemId: row.orderItemId,
+        });
         const preAt = await getPlannedAt(tx, 'Pre Approval');
         await tx.insert(schema.preApprovals).values({ orderItemId: newItem.id, plannedAt: preAt });
 
@@ -593,35 +578,17 @@ class ActualDispatchService {
         // Shrink the original line by exactly this shipment's qty (family total
         // unchanged, so the qty-guard trigger stays satisfied) and fork a new
         // line for the reverted qty — send only that back to Dispatch Planning.
-        // approved_qty is only ever decremented if it was a REAL value already
-        // (a line born from a "revert to Dispatch Planning" split never got one -
-        // Order-Approval was skipped - so it must stay null, not go negative).
         const newOrderQuantity = (toNum(item.orderQuantity) ?? 0) - revertedQty;
-        const newApprovedQty = item.approvedQty != null ? (toNum(item.approvedQty) - revertedQty) : null;
+        const newApprovedQty = subtractApprovedQty(item.approvedQty, revertedQty);
         await tx
           .update(schema.orderItems)
           .set({ orderQuantity: newOrderQuantity, approvedQty: newApprovedQty })
           .where(eq(schema.orderItems.id, row.orderItemId));
 
-        const [newItem] = await tx
-          .insert(schema.orderItems)
-          .values({
-            orderId: item.orderId,
-            skuId: item.skuId,
-            uom: item.uom,
-            alternateUom: item.alternateUom,
-            alternateQtyKg: item.alternateQtyKg,
-            oilType: item.oilType,
-            orderQuantity: revertedQty,
-            rateOfMaterial: item.rateOfMaterial,
-            finalRate: item.finalRate,
-            ratePer15kg: item.ratePer15kg,
-            ratePerLtr: item.ratePerLtr,
-            origin: 'split',
-            splitFromItemId: row.orderItemId,
-            budgetRootId: item.budgetRootId ?? item.id,
-          })
-          .returning();
+        const newItem = await insertSplitOrderItem(tx, schema, item, {
+          orderQuantity: revertedQty,
+          splitFromItemId: row.orderItemId,
+        });
         await tx.insert(schema.dispatchPlannings).values({
           orderItemId: newItem.id,
           plannedAt: new Date(),

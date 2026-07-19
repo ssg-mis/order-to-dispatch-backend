@@ -89,4 +89,57 @@ async function resolveInheritedApproval(db, orderItemId) {
   return res.rows[0] || null;
 }
 
-module.exports = { getPlannedAt, mintDsr, isStockTransfer, resolveInheritedApproval };
+// Insert the new split order_item that carries an un-dispatched/reverted
+// remainder off `item`. Byte-identical INSERT used by all 3 revert-split call
+// sites (dispatchPlanningService.revertDispatchPlanning,
+// actualDispatchService.revertActualDispatch, .revertToDispatchPlanning) -
+// they differ only in what triggers the split and which gate the new line
+// lands at next (Pre-Approval vs Dispatch Planning), never in this shape.
+// Centralized so the budgetRootId invariant only has to be correct in ONE
+// place instead of three.
+async function insertSplitOrderItem(tx, schema, item, { orderQuantity, splitFromItemId }) {
+  const [newItem] = await tx
+    .insert(schema.orderItems)
+    .values({
+      orderId: item.orderId,
+      skuId: item.skuId,
+      uom: item.uom,
+      alternateUom: item.alternateUom,
+      alternateQtyKg: item.alternateQtyKg,
+      oilType: item.oilType,
+      orderQuantity,
+      rateOfMaterial: item.rateOfMaterial,
+      finalRate: item.finalRate,
+      ratePer15kg: item.ratePer15kg,
+      ratePerLtr: item.ratePerLtr,
+      origin: 'split',
+      splitFromItemId,
+      // NEVER `item.id` alone — if THIS item is itself already a split
+      // (item.budgetRootId is set), that value already points at the true
+      // original root. Using item.id here would anchor the new line to an
+      // intermediate split instead, letting the qty_guard family-sum check
+      // (order_items.ts / qty_guard.sql) drift across generations of
+      // splitting a split. `?? item.id` only kicks in when THIS item IS the
+      // root (budgetRootId null) - see order_items.ts for the full
+      // family-key contract.
+      budgetRootId: item.budgetRootId ?? item.id,
+    })
+    .returning();
+  return newItem;
+}
+
+// Decrement approved_qty by a reverted/split-off amount, but ONLY if it was a
+// REAL value to begin with. A line born from a "revert to Dispatch Planning"
+// split never got one (Order-Approval was skipped for it), so it's legitimately
+// null - coalescing that null to 0 before subtracting would fabricate a
+// negative number instead of correctly staying null. (Real bug found + fixed
+// 2026-07-20 in both actualDispatchService revert methods - see
+// split-on-revert-shipment-integrity memory.)
+function subtractApprovedQty(approvedQty, amount) {
+  return approvedQty != null ? (parseFloat(approvedQty) - amount) : null;
+}
+
+module.exports = {
+  getPlannedAt, mintDsr, isStockTransfer, resolveInheritedApproval,
+  insertSplitOrderItem, subtractApprovedQty,
+};

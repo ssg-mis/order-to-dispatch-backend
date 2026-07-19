@@ -32,7 +32,16 @@ export const orderItems = pgTable("order_items", {
   oilType: varchar("oil_type", { length: 100 }),
 
   orderQuantity: numeric("order_quantity", { precision: 15, scale: 4 }),
-  approvedQty: numeric("approved_qty", { precision: 15, scale: 4 }), // set at order-approval
+  // Set at order-approval. NULL has a REAL MEANING here - "this line never went
+  // through Order-Approval" (e.g. a line born from a "revert to Dispatch
+  // Planning" split, which deliberately skips re-approval) - it is NOT the same
+  // as 0 and must never be coalesced to 0 before arithmetic. Doing so produced a
+  // real bug (a negative approved_qty) - see services/stageUtils.js's
+  // subtractApprovedQty() and use it (or the same null != check) for ANY future
+  // code that decrements this field. Reads that just need "the best available
+  // qty" should fall back through remaining_qty -> approved_qty -> order_quantity
+  // (existing pattern elsewhere) rather than defaulting a missing value to 0.
+  approvedQty: numeric("approved_qty", { precision: 15, scale: 4 }),
   remainingQty: numeric("remaining_qty", { precision: 15, scale: 4 }), // whittled by dispatch-planning
   precloseQty: numeric("preclose_qty", { precision: 15, scale: 4 }).default("0"), // qty closed without dispatch
 

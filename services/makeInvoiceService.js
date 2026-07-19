@@ -19,6 +19,7 @@ const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
 const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { alias } = require('drizzle-orm/pg-core');
 const { getPlannedAt } = require('./stageUtils');
 
 const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
@@ -67,6 +68,8 @@ class MakeInvoiceService {
 
     const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
 
+    const makeInvoiceUser = alias(schema.users, 'make_invoice_doer');
+
     const rows = await baseJoin(
       dbV2.select({
         invoice: schema.invoices,
@@ -79,12 +82,14 @@ class MakeInvoiceService {
         vehicle: schema.vehicles,
         driver: schema.drivers,
         transporter: schema.transporters,
+        makeInvoiceUser: makeInvoiceUser.username,
       })
     )
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
       .leftJoin(schema.vehicles, eq(schema.vehicles.id, schema.dispatches.vehicleId))
       .leftJoin(schema.drivers, eq(schema.drivers.id, schema.dispatches.driverId))
       .leftJoin(schema.transporters, eq(schema.transporters.id, schema.dispatches.transporterId))
+      .leftJoin(makeInvoiceUser, eq(makeInvoiceUser.id, schema.invoices.madeByUserId))
       .where(where)
       .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.invoices.madeAt))
       .limit(limit)
