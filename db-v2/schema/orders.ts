@@ -68,4 +68,6 @@ export const orders = pgTable("orders", {
   brokerIdIdx: index("orders_broker_id_idx").on(t.brokerId),
   salespersonIdIdx: index("orders_salesperson_id_idx").on(t.salespersonId),
   orderPunchUserIdIdx: index("orders_order_punch_user_id_idx").on(t.orderPunchUserId),
+  createdAtIdx: index("orders_created_at_idx").on(t.createdAt),
+  partySoDateIdx: index("orders_party_so_date_idx").on(t.partySoDate),
 }));

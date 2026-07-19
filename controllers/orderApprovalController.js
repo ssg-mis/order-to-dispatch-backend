@@ -12,9 +12,11 @@ const { notifyNextStage } = require('../services/stageNotifier');
  */
 const getPendingApprovals = async (req, res, next) => {
   try {
-    const { page, limit, order_no, customer_name, start_date, end_date } = req.query;
+    const { page, limit, order_no, search, customer_name, start_date, end_date } = req.query;
 
-    const filters = { order_no, customer_name, start_date, end_date };
+    // `search` is the generic search-box param sent by the frontend shell;
+    // `order_no` already matches against both order no. and customer name.
+    const filters = { order_no: order_no || search, customer_name, start_date, end_date };
     Object.keys(filters).forEach(key => { if (!filters[key]) delete filters[key]; });
 
     const result = await orderApprovalService.getPendingApprovals(filters, { page, limit });
@@ -36,9 +38,9 @@ const getPendingApprovals = async (req, res, next) => {
  */
 const getApprovalHistory = async (req, res, next) => {
   try {
-    const { page, limit, order_no, customer_name, start_date, end_date } = req.query;
+    const { page, limit, order_no, search, customer_name, start_date, end_date } = req.query;
 
-    const filters = { order_no, customer_name, start_date, end_date };
+    const filters = { order_no: order_no || search, customer_name, start_date, end_date };
     Object.keys(filters).forEach(key => { if (!filters[key]) delete filters[key]; });
 
     const result = await orderApprovalService.getApprovalHistory(filters, { page, limit });

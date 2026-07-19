@@ -55,4 +55,38 @@ function isStockTransfer(orderCategory) {
   return String(orderCategory ?? '').toLowerCase().trim() === 'stock transfer';
 }
 
-module.exports = { getPlannedAt, mintDsr, isStockTransfer };
+// A line created by "revert to Dispatch Planning" (one stage back — see
+// dispatchPlanningService/actualDispatchService's revert-split code) skips
+// Pre-Approval/Order-Approval entirely, so it has no pre_approvals/
+// order_approvals row of its own — its audit trail lives on whichever ancestor
+// (via split_from_item_id) it split from. Walk that chain up to the nearest
+// ancestor with a REAL approval record, so slips/vouchers can still show a
+// name instead of blank. Returns null if this item (or none of its ancestors)
+// has ever been actually approved.
+async function resolveInheritedApproval(db, orderItemId) {
+  const res = await db.execute(sql`
+    WITH RECURSIVE chain AS (
+      SELECT id, split_from_item_id, 0 AS depth FROM order_items WHERE id = ${orderItemId}
+      UNION ALL
+      SELECT oi.id, oi.split_from_item_id, chain.depth + 1
+      FROM order_items oi
+      JOIN chain ON oi.id = chain.split_from_item_id
+      WHERE chain.depth < 20
+    )
+    SELECT
+      pa.actual_at AS pre_approval_actual_at, u1.username AS pre_approval_user,
+      oa.actual_at AS order_approval_actual_at, u2.username AS order_approval_user,
+      chain.id AS resolved_from_item_id
+    FROM chain
+    LEFT JOIN pre_approvals pa ON pa.order_item_id = chain.id AND pa.actual_at IS NOT NULL
+    LEFT JOIN order_approvals oa ON oa.order_item_id = chain.id AND oa.actual_at IS NOT NULL
+    LEFT JOIN users u1 ON u1.id = pa.approved_by_user_id
+    LEFT JOIN users u2 ON u2.id = oa.approved_by_user_id
+    WHERE pa.actual_at IS NOT NULL OR oa.actual_at IS NOT NULL
+    ORDER BY chain.depth ASC
+    LIMIT 1
+  `);
+  return res.rows[0] || null;
+}
+
+module.exports = { getPlannedAt, mintDsr, isStockTransfer, resolveInheritedApproval };

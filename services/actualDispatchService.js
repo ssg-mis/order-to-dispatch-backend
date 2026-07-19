@@ -32,7 +32,8 @@ const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
 const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
-const { getPlannedAt, isStockTransfer } = require('./stageUtils');
+const { alias } = require('drizzle-orm/pg-core');
+const { getPlannedAt, isStockTransfer, resolveInheritedApproval } = require('./stageUtils');
 const { deriveConsolidatedRatesForGroup, deriveRatesForRegularOrder, detectOilType } = require('../utils/rateDerivation');
 
 const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
@@ -112,16 +113,62 @@ class ActualDispatchService {
     }
     const where = and(...conditions);
 
-    const [{ count }] = await dbV2
-      .select({ count: sql`count(*)::int` })
-      .from(schema.dispatches)
-      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
-      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
-      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
-      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
-      .where(where);
+    // Pending rows are paginated by DISTINCT ORDER (not by raw dispatch row):
+    // a page always corresponds to N whole orders, so an order's shipments —
+    // which the frontend groups back into one visual row per order — can never
+    // be split across two pages. History keeps the original row-level count/
+    // pagination (ordered by actual_at, not an order-level column, so grouping
+    // pagination doesn't apply there).
+    let count;
+    let pageOrderIds = null;
+    if (open) {
+      const [{ distinctCount }] = await dbV2
+        .select({ distinctCount: sql`count(distinct ${schema.orders.id})::int` })
+        .from(schema.dispatches)
+        .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+        .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+        .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+        .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+        .where(where);
+      count = distinctCount;
 
-    const rows = await dbV2
+      const pageOrders = await dbV2
+        .selectDistinct({ id: schema.orders.id, partySoDate: schema.orders.partySoDate, orderNo: schema.orders.orderNo })
+        .from(schema.dispatches)
+        .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+        .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+        .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+        .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+        .where(where)
+        .orderBy(sql`${schema.orders.partySoDate} DESC, ${schema.orders.orderNo} DESC`)
+        .limit(limit)
+        .offset((page - 1) * limit);
+      pageOrderIds = pageOrders.map((o) => o.id);
+
+      if (pageOrderIds.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) },
+        };
+      }
+    } else {
+      const [{ count: rowCount }] = await dbV2
+        .select({ count: sql`count(*)::int` })
+        .from(schema.dispatches)
+        .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
+        .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+        .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+        .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+        .where(where);
+      count = rowCount;
+    }
+
+    const punchUser = alias(schema.users, 'punch_user');
+    const preApprovalUser = alias(schema.users, 'pre_approval_doer');
+    const orderApprovalUser = alias(schema.users, 'order_approval_doer');
+
+    let rowsQuery = dbV2
       .select({
         dispatch: schema.dispatches,
         orderItem: schema.orderItems,
@@ -129,6 +176,8 @@ class ActualDispatchService {
         customer: schema.customers,
         depot: schema.depots,
         sku: schema.skus,
+        broker: schema.brokers,
+        salesperson: schema.salespersons,
         // "Slip status": has any OTHER shipment on this order already been
         // actual-dispatched? (drives the frontend's already-dispatched indicator).
         hasPriorDispatch: sql`EXISTS (
@@ -138,6 +187,15 @@ class ActualDispatchService {
             AND d2.id <> ${schema.dispatches.id}
             AND d2.actual_at IS NOT NULL
         )`,
+        // Earlier-gate audit trail (who/when) — the Actual Dispatch slip/voucher
+        // printout shows Order Punch / Pre-Approve / Approve By, same rollup
+        // pattern as dispatchPlanningService.js's _listDispatchPlanning.
+        orderCreatedAt: schema.orders.createdAt,
+        orderPunchUser: punchUser.username,
+        preApprovalActualAt: schema.preApprovals.actualAt,
+        preApprovalUser: preApprovalUser.username,
+        orderApprovalActualAt: schema.orderApprovals.actualAt,
+        orderApprovalUser: orderApprovalUser.username,
       })
       .from(schema.dispatches)
       .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
@@ -145,10 +203,39 @@ class ActualDispatchService {
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
       .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
-      .where(where)
-      .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.dispatches.actualAt))
-      .limit(limit)
-      .offset((page - 1) * limit);
+      .leftJoin(schema.brokers, eq(schema.brokers.id, schema.orders.brokerId))
+      .leftJoin(schema.salespersons, eq(schema.salespersons.id, schema.orders.salespersonId))
+      .leftJoin(schema.preApprovals, eq(schema.preApprovals.orderItemId, schema.orderItems.id))
+      .leftJoin(schema.orderApprovals, eq(schema.orderApprovals.orderItemId, schema.orderItems.id))
+      .leftJoin(punchUser, eq(punchUser.id, schema.orders.orderPunchUserId))
+      .leftJoin(preApprovalUser, eq(preApprovalUser.id, schema.preApprovals.approvedByUserId))
+      .leftJoin(orderApprovalUser, eq(orderApprovalUser.id, schema.orderApprovals.approvedByUserId))
+      .where(open ? and(where, inArray(schema.orders.id, pageOrderIds)) : where)
+      // Newest first: sort pending rows by DO Date (party_so_date), tie-broken
+      // by order_no so same-day orders stay in a stable, deterministic order.
+      .orderBy(open ? sql`${schema.orders.partySoDate} DESC, ${schema.orders.orderNo} DESC` : desc(schema.dispatches.actualAt));
+
+    if (!open) {
+      rowsQuery = rowsQuery.limit(limit).offset((page - 1) * limit);
+    }
+
+    const rows = await rowsQuery;
+
+    // A line reopened by "revert to Dispatch Planning" (one stage back) skips
+    // Pre-Approval/Order-Approval entirely, so it has no approval row of its
+    // own — resolve the nearest ancestor's approver instead of showing blank.
+    for (const row of rows) {
+      if (!row.preApprovalUser && !row.orderApprovalUser && row.orderItem?.splitFromItemId) {
+        const inherited = await resolveInheritedApproval(dbV2, row.orderItem.id);
+        if (inherited) {
+          row.preApprovalUser = inherited.pre_approval_user ?? null;
+          row.preApprovalActualAt = inherited.pre_approval_actual_at ?? null;
+          row.orderApprovalUser = inherited.order_approval_user ?? null;
+          row.orderApprovalActualAt = inherited.order_approval_actual_at ?? null;
+          row.approvalInherited = true;
+        }
+      }
+    }
 
     return {
       success: true,
@@ -384,8 +471,11 @@ class ActualDispatchService {
         // Shrink the original line by exactly this shipment's qty (family total
         // unchanged, so the qty-guard trigger stays satisfied) and fork a new
         // line for the reverted qty — send only that back to Pre-Approval.
+        // approved_qty is only ever decremented if it was a REAL value already
+        // (a line born from a "revert to Dispatch Planning" split never got one -
+        // Order-Approval was skipped - so it must stay null, not go negative).
         const newOrderQuantity = (toNum(item.orderQuantity) ?? 0) - revertedQty;
-        const newApprovedQty = (toNum(item.approvedQty) ?? 0) - revertedQty;
+        const newApprovedQty = item.approvedQty != null ? (toNum(item.approvedQty) - revertedQty) : null;
         await tx
           .update(schema.orderItems)
           .set({ orderQuantity: newOrderQuantity, approvedQty: newApprovedQty })
@@ -426,15 +516,17 @@ class ActualDispatchService {
       const restored = (toNum(item.remainingQty) ?? 0) + revertedQty;
       await tx.update(schema.orderItems).set({ remainingQty: restored }).where(eq(schema.orderItems.id, row.orderItemId));
 
-      // Deactivate dispatch-planning + order-approval gates (keep rows for audit),
-      // stash the revert remark, and re-open pre-approval.
+      // Deactivate dispatch-planning + order-approval gates (keep rows for audit,
+      // stash the revert remark) — but null out each gate's own doer too: a
+      // deactivated gate means nobody has (currently) performed that stage, so
+      // it shouldn't still show whoever did before it was undone.
       await tx
         .update(schema.dispatchPlannings)
-        .set({ plannedAt: null, actualAt: null, revertRemarks: data.remarks ?? null, performedByUserId: data.userId ?? null })
+        .set({ plannedAt: null, actualAt: null, revertRemarks: data.remarks ?? null, performedByUserId: null })
         .where(and(eq(schema.dispatchPlannings.orderItemId, row.orderItemId), isNotNull(schema.dispatchPlannings.plannedAt)));
       await tx
         .update(schema.orderApprovals)
-        .set({ plannedAt: null, actualAt: null })
+        .set({ plannedAt: null, actualAt: null, approvedByUserId: null })
         .where(and(eq(schema.orderApprovals.orderItemId, row.orderItemId), isNotNull(schema.orderApprovals.plannedAt)));
       const reopened = await tx
         .update(schema.preApprovals)
@@ -501,8 +593,11 @@ class ActualDispatchService {
         // Shrink the original line by exactly this shipment's qty (family total
         // unchanged, so the qty-guard trigger stays satisfied) and fork a new
         // line for the reverted qty — send only that back to Dispatch Planning.
+        // approved_qty is only ever decremented if it was a REAL value already
+        // (a line born from a "revert to Dispatch Planning" split never got one -
+        // Order-Approval was skipped - so it must stay null, not go negative).
         const newOrderQuantity = (toNum(item.orderQuantity) ?? 0) - revertedQty;
-        const newApprovedQty = (toNum(item.approvedQty) ?? 0) - revertedQty;
+        const newApprovedQty = item.approvedQty != null ? (toNum(item.approvedQty) - revertedQty) : null;
         await tx
           .update(schema.orderItems)
           .set({ orderQuantity: newOrderQuantity, approvedQty: newApprovedQty })
@@ -531,7 +626,7 @@ class ActualDispatchService {
           orderItemId: newItem.id,
           plannedAt: new Date(),
           revertRemarks: data.remarks ?? null,
-          performedByUserId: data.userId ?? null,
+          performedByUserId: null,
         });
 
         Logger.info(`[ACTUAL DISPATCH][REVERT→PLANNING-SPLIT] ${row.dsrNumber}: kept order_item ${row.orderItemId} untouched (siblings exist), moved reverted qty ${revertedQty} -> new order_item ${newItem.id} at Dispatch Planning`);
@@ -549,9 +644,11 @@ class ActualDispatchService {
 
       // Re-open the dispatch-planning gate (keep planned_at; COALESCE guards a
       // Stock-Transfer item whose gate skipped planning and left planned_at NULL).
+      // Null the doer too — the gate is deactivated, so nobody has (currently)
+      // performed it.
       await tx
         .update(schema.dispatchPlannings)
-        .set({ actualAt: null, plannedAt: sql`COALESCE(${schema.dispatchPlannings.plannedAt}, now())`, revertRemarks: data.remarks ?? null, performedByUserId: data.userId ?? null })
+        .set({ actualAt: null, plannedAt: sql`COALESCE(${schema.dispatchPlannings.plannedAt}, now())`, revertRemarks: data.remarks ?? null, performedByUserId: null })
         .where(eq(schema.dispatchPlannings.orderItemId, row.orderItemId));
 
       Logger.info(`[ACTUAL DISPATCH][REVERT→PLANNING] ${row.dsrNumber} reverted (order_item ${row.orderItemId}, +${revertedQty} qty, remarks: ${data.remarks || 'none'})`);

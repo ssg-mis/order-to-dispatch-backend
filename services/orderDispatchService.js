@@ -419,18 +419,58 @@ class OrderDispatchService {
     }
     const where = and(...conditions);
 
-    const [{ count }] = await dbV2
-      .select({ count: sql`count(*)::int` })
-      .from(schema.preApprovals)
-      .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.preApprovals.orderItemId))
-      .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
-      .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
-      .where(where);
+    // Pending rows are paginated by DISTINCT ORDER (not by raw order_item row):
+    // a page always corresponds to N whole orders, so an order's line items —
+    // which the frontend groups back into one visual row per order — can never
+    // be split across two pages. History keeps the original row-level count/
+    // pagination (ordered by actual_at, not an order-level column, so grouping
+    // pagination doesn't apply there).
+    let count;
+    let pageOrderIds = null;
+    if (open) {
+      const [{ distinctCount }] = await dbV2
+        .select({ distinctCount: sql`count(distinct ${schema.orders.id})::int` })
+        .from(schema.preApprovals)
+        .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.preApprovals.orderItemId))
+        .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+        .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+        .where(where);
+      count = distinctCount;
+
+      const pageOrders = await dbV2
+        .selectDistinct({ id: schema.orders.id, partySoDate: schema.orders.partySoDate, orderNo: schema.orders.orderNo })
+        .from(schema.preApprovals)
+        .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.preApprovals.orderItemId))
+        .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+        .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+        .where(where)
+        .orderBy(sql`${schema.orders.partySoDate} DESC, ${schema.orders.orderNo} DESC`)
+        .limit(limit)
+        .offset((page - 1) * limit);
+      pageOrderIds = pageOrders.map((o) => o.id);
+
+      if (pageOrderIds.length === 0) {
+        return {
+          success: true,
+          data: [],
+          pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) },
+        };
+      }
+    } else {
+      const [{ count: rowCount }] = await dbV2
+        .select({ count: sql`count(*)::int` })
+        .from(schema.preApprovals)
+        .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.preApprovals.orderItemId))
+        .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
+        .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
+        .where(where);
+      count = rowCount;
+    }
 
     const punchUser = alias(schema.users, 'punch_user');
     const preApprovalUser = alias(schema.users, 'pre_approval_doer');
 
-    const rows = await dbV2
+    let rowsQuery = dbV2
       .select({
         preApprovalId: schema.preApprovals.id,
         plannedAt: schema.preApprovals.plannedAt,
@@ -451,10 +491,16 @@ class OrderDispatchService {
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
       .leftJoin(punchUser, eq(punchUser.id, schema.orders.orderPunchUserId))
       .leftJoin(preApprovalUser, eq(preApprovalUser.id, schema.preApprovals.approvedByUserId))
-      .where(where)
-      .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.preApprovals.actualAt))
-      .limit(limit)
-      .offset((page - 1) * limit);
+      .where(open ? and(where, inArray(schema.orders.id, pageOrderIds)) : where)
+      // Newest first: sort pending rows by DO Date (party_so_date), tie-broken
+      // by order_no so same-day orders stay in a stable, deterministic order.
+      .orderBy(open ? sql`${schema.orders.partySoDate} DESC, ${schema.orders.orderNo} DESC` : desc(schema.preApprovals.actualAt));
+
+    if (!open) {
+      rowsQuery = rowsQuery.limit(limit).offset((page - 1) * limit);
+    }
+
+    const rows = await rowsQuery;
 
     return {
       success: true,
