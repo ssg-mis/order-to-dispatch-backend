@@ -1,41 +1,45 @@
-const db = require("../config/db.js")
+/**
+ * SKU Selling Price service — v2 schema.
+ *
+ * Powers the sku_selling_price list + inline edit surface
+ * (GET/PUT /api/v1/skus/sku-selling-price). Both sku_selling_price and var_calc
+ * live in v2, so this is a straight swap off the old RDS pool onto dbV2. The
+ * landing_cost recompute (gt/1000 * net_oil_in_gm + packing_cost) is unchanged
+ * and matches varCalcService's per-SKU recompute.
+ */
+
+const { dbV2 } = require("../config/db-v2.ts");
+const { sql } = require("drizzle-orm");
 
 const skuSellingPriceService = async (params = {}) => {
-    const { page = 1, limit = 20, search = "" } = params;
+    const page = parseInt(params.page) || 1;
+    const limit = parseInt(params.limit) || 20;
     const offset = (page - 1) * limit;
-    const values = [];
-    let whereClause = "";
+    const search = params.search || "";
 
-    if (search) {
-        const searchPattern = `%${search}%`;
-        const searchIndex = values.length + 1;
-        values.push(searchPattern);
-        whereClause = ` WHERE packing_material ILIKE $${searchIndex} OR sku_unit ILIKE $${searchIndex} OR conversion_formula ILIKE $${searchIndex}`;
-    }
+    // conversion_formula is numeric in the v2 schema (was text in the old table),
+    // so cast all search targets to text for the ILIKE.
+    const where = search
+        ? sql`WHERE packing_material::text ILIKE ${'%' + search + '%'} OR sku_unit::text ILIKE ${'%' + search + '%'} OR conversion_formula::text ILIKE ${'%' + search + '%'}`
+        : sql``;
 
-    // Get count
-    const countQuery = `SELECT COUNT(*) FROM sku_selling_price ${whereClause}`;
-    const countResult = await db.query(countQuery, values);
+    const countResult = await dbV2.execute(sql`SELECT COUNT(*)::int AS count FROM sku_selling_price ${where}`);
     const total = parseInt(countResult.rows[0].count);
 
-    // Get paginated data
-    const query = `
-        SELECT * FROM sku_selling_price 
-        ${whereClause}
+    const result = await dbV2.execute(sql`
+        SELECT * FROM sku_selling_price
+        ${where}
         ORDER BY id DESC
-        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
-    `;
-    
-    values.push(limit, offset);
-    const result = await db.query(query, values);
-    
+        LIMIT ${limit} OFFSET ${offset}
+    `);
+
     return {
         skus: result.rows,
         pagination: {
             total,
-            page: parseInt(page),
-            limit: parseInt(limit)
-        }
+            page,
+            limit,
+        },
     };
 };
 
@@ -47,46 +51,30 @@ const updateSkuSellingPriceService = async (id, data) => {
     const netOilInGm = skuWeightGm - packingWeightGm;
 
     // Fetch the latest GT from var_calc for landing cost recalculation
-    const latestVarRes = await db.query(`SELECT gt FROM var_calc ORDER BY calculation_date DESC LIMIT 1`);
+    const latestVarRes = await dbV2.execute(sql`SELECT gt FROM var_calc ORDER BY calculation_date DESC LIMIT 1`);
     const latestGt = (latestVarRes.rows.length > 0) ? parseFloat(latestVarRes.rows[0].gt) || 0 : 0;
 
     // Formula: landing_cost = (gt / 1000) * net_oil_in_gm + packing_cost
     const landingCost = (latestGt / 1000) * netOilInGm + packingCost;
 
-    const query = `
-        UPDATE sku_selling_price 
-        SET 
-            packing_material = $1,
-            sku_weight = $2,
-            sku_unit = $3,
-            conversion_formula = $4,
-            sku_weight_in_gm = $5,
-            packing_material_weight_in_gm = $6,
-            net_oil_in_gm = $7,
-            packing_cost = $8,
-            var = $9,
-            margin = $10,
-            landing_cost = $11
-        WHERE id = $12
+    const result = await dbV2.execute(sql`
+        UPDATE sku_selling_price
+        SET
+            packing_material = ${data.packing_material},
+            sku_weight = ${data.sku_weight},
+            sku_unit = ${data.sku_unit},
+            conversion_formula = ${data.conversion_formula},
+            sku_weight_in_gm = ${skuWeightGm},
+            packing_material_weight_in_gm = ${packingWeightGm},
+            net_oil_in_gm = ${netOilInGm},
+            packing_cost = ${packingCost},
+            var = ${data.var},
+            margin = ${data.margin},
+            landing_cost = ${landingCost.toFixed(2)}
+        WHERE id = ${id}
         RETURNING *;
-    `;
-    const values = [
-        data.packing_material,
-        data.sku_weight,
-        data.sku_unit,
-        data.conversion_formula,
-        skuWeightGm,
-        packingWeightGm,
-        netOilInGm,
-        packingCost,
-        data.var,
-        data.margin,
-        landingCost.toFixed(2),
-        id
-    ];
+    `);
 
-    const result = await db.query(query, values);
-    
     if (!result.rows.length) {
         throw new Error("Record not found or update failed");
     }

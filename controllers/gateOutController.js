@@ -5,6 +5,7 @@
 
 const gateOutService = require('../services/gateOutService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 const handleError = (res, next, error, ctx) => {
   if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
@@ -77,7 +78,7 @@ const submitGateOut = async (req, res, next) => {
     const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
     Logger.info(`[GATE OUT] Submit for gate out ${gateOutId}`);
     const result = await gateOutService.submitGateOut(gateOutId, data);
-    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    notifyNextStage({ dispatchId: result.data?.dispatchId }, { userId: data.userId });
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     handleError(res, next, error, '[GATE OUT] Error in submitGateOut controller');

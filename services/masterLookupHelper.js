@@ -23,8 +23,14 @@ function toSnakeCase(row) {
  *              nameColumn/searchColumns are drizzle (camelCase) column keys.
  * @returns { rows: <snake_case objects>, total }
  */
-async function masterLookup(table, { nameColumn, searchColumns, all, page = 1, limit = 20, search = '' }) {
+async function masterLookup(table, { nameColumn, searchColumns, all, page = 1, limit, search = '' }) {
   const isAll = all === true || all === 'true';
+  // all=true with NO explicit limit => return everything (pickers, exports and
+  // the SKU-weight lookup maps rely on this). A caller that DOES pass a limit
+  // still paginates even under all=true — e.g. the Master page's infinite-
+  // scroll list sends {all:'true', page, limit:20}. (Previously `limit`
+  // defaulted to 20 here, so noLimit was dead and {all:'true'} silently capped
+  // every master's pickers at 20 rows.)
   const noLimit = isAll && (limit === undefined || limit === null);
 
   const conditions = [eq(table.approvalStatus, 'approved')];
@@ -50,4 +56,4 @@ async function masterLookup(table, { nameColumn, searchColumns, all, page = 1, l
   return { rows: rows.map(toSnakeCase), total: count };
 }
 
-module.exports = { masterLookup };
+module.exports = { masterLookup, toSnakeCase };

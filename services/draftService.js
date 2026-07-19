@@ -1,77 +1,56 @@
 /**
- * Draft Service
- * Business logic for saving/retrieving/deleting Actual Dispatch form drafts
- * Uses dispatch_drafts table
- *
- * Drafts are shared per order (order_key) — any user can view and continue a
- * draft another user started. `username` is retained only as "last saved by"
- * metadata, not as part of the lookup key.
+ * Draft Service — v2 schema.
+ * Save/retrieve/delete Actual-Dispatch form drafts in `dispatch_drafts`
+ * (shared per order_key — any user can continue another's draft; `username`
+ * is just "last saved by"). Was raw SQL against old RDS; the table is now a
+ * real v2 table (schema.dispatchDrafts, backfilled). Shares that table with
+ * gateInService, so both must live on the same DB — hence migrated together.
  */
-
-const db = require('../config/db');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq } = require('drizzle-orm');
 const { Logger } = require('../utils');
 
 class DraftService {
-  /**
-   * Save or update a draft (upsert by order_key)
-   * @param {string} username
-   * @param {string} orderKey
-   * @param {Object} draftData
-   * @returns {Promise<Object>}
-   */
   async saveDraft(username, orderKey, draftData) {
     try {
-      const query = `
-        INSERT INTO dispatch_drafts (username, order_key, draft_data, saved_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT (order_key)
-        DO UPDATE SET username = EXCLUDED.username, draft_data = EXCLUDED.draft_data, saved_at = NOW()
-        RETURNING id, saved_at
-      `;
-      const result = await db.query(query, [username, orderKey, JSON.stringify(draftData)]);
+      const [row] = await dbV2
+        .insert(schema.dispatchDrafts)
+        .values({ username, orderKey, draftData, savedAt: new Date() })
+        .onConflictDoUpdate({
+          target: schema.dispatchDrafts.orderKey,
+          set: { username, draftData, savedAt: new Date() },
+        })
+        .returning({ id: schema.dispatchDrafts.id, saved_at: schema.dispatchDrafts.savedAt });
       Logger.info(`[DRAFT] Saved draft for user=${username}, order_key=${orderKey}`);
-      return { success: true, data: result.rows[0] };
+      return { success: true, data: row };
     } catch (error) {
       Logger.error('[DRAFT] Error saving draft', error);
       throw new Error('Failed to save draft');
     }
   }
 
-  /**
-   * Retrieve a draft by order_key, regardless of who saved it
-   * @param {string} orderKey
-   * @returns {Promise<Object>}
-   */
   async getDraft(orderKey) {
     try {
-      const query = `
-        SELECT id, username, order_key, draft_data, saved_at
-        FROM dispatch_drafts
-        WHERE order_key = $1
-      `;
-      const result = await db.query(query, [orderKey]);
-      if (result.rows.length === 0) {
-        return { success: true, data: null };
-      }
-      return { success: true, data: result.rows[0] };
+      const [row] = await dbV2
+        .select({
+          id: schema.dispatchDrafts.id,
+          username: schema.dispatchDrafts.username,
+          order_key: schema.dispatchDrafts.orderKey,
+          draft_data: schema.dispatchDrafts.draftData,
+          saved_at: schema.dispatchDrafts.savedAt,
+        })
+        .from(schema.dispatchDrafts)
+        .where(eq(schema.dispatchDrafts.orderKey, orderKey));
+      return { success: true, data: row || null };
     } catch (error) {
       Logger.error('[DRAFT] Error fetching draft', error);
       throw new Error('Failed to fetch draft');
     }
   }
 
-  /**
-   * Delete a draft after successful submission
-   * @param {string} orderKey
-   * @returns {Promise<Object>}
-   */
   async deleteDraft(orderKey) {
     try {
-      const query = `
-        DELETE FROM dispatch_drafts
-        WHERE order_key = $1
-      `;
-      await db.query(query, [orderKey]);
+      await dbV2.delete(schema.dispatchDrafts).where(eq(schema.dispatchDrafts.orderKey, orderKey));
       Logger.info(`[DRAFT] Deleted draft for order_key=${orderKey}`);
       return { success: true };
     } catch (error) {

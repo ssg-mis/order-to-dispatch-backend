@@ -5,6 +5,7 @@
 
 const confirmMaterialReceiptService = require('../services/confirmMaterialReceiptService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 const handleError = (res, next, error, ctx) => {
   if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
@@ -78,7 +79,8 @@ const submitReceipt = async (req, res, next) => {
     const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
     Logger.info(`[MATERIAL RECEIPT] Submit for receipt ${materialReceiptId}`);
     const result = await confirmMaterialReceiptService.submitReceipt(materialReceiptId, data);
-    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    // Auto-resolves to Damage Adjustment only when the receipt flagged damage; otherwise nothing is pending (no nudge).
+    notifyNextStage({ dispatchId: result.data?.dispatchId }, { userId: data.userId });
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     handleError(res, next, error, '[MATERIAL RECEIPT] Error in submitReceipt controller');

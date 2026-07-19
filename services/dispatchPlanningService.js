@@ -20,6 +20,7 @@ const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
 const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { alias } = require('drizzle-orm/pg-core');
 const { getPlannedAt, mintDsr } = require('./stageUtils');
 const { deriveConsolidatedRatesForGroup, deriveRatesForRegularOrder, detectOilType } = require('../utils/rateDerivation');
 
@@ -61,7 +62,7 @@ class DispatchPlanningService {
       conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
     }
     if (manual_sauda_no) {
-      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+      conditions.push(sql`${schema.orders.manualSaudaNo} ILIKE ${'%' + manual_sauda_no + '%'}`);
     }
     const where = and(...conditions);
 
@@ -73,6 +74,11 @@ class DispatchPlanningService {
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
       .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
       .where(where);
+
+    const punchUser = alias(schema.users, 'punch_user');
+    const preApprovalUser = alias(schema.users, 'pre_approval_doer');
+    const orderApprovalUser = alias(schema.users, 'order_approval_doer');
+    const dispatchPlanningUser = alias(schema.users, 'dispatch_planning_doer');
 
     const rows = await dbV2
       .select({
@@ -92,6 +98,21 @@ class DispatchPlanningService {
           JOIN order_items oi2 ON oi2.id = d.order_item_id
           WHERE oi2.order_id = ${schema.orders.id} AND oi2.id <> ${schema.orderItems.id}
         )`,
+        // Roll up the earlier gates so downstream history shows the full trail.
+        preApprovalPlannedAt: schema.preApprovals.plannedAt,
+        preApprovalActualAt: schema.preApprovals.actualAt,
+        overallStatus: schema.orderApprovals.overallStatus,
+        rateIsRightlyAsPerCurrentMarketRate: schema.orderApprovals.rateIsRightlyAsPerCurrentMarketRate,
+        weAreDealingInOrderedSku: schema.orderApprovals.weAreDealingInOrderedSku,
+        partyCreditStatus: schema.orderApprovals.partyCreditStatus,
+        dispatchDateConfirmed: schema.orderApprovals.dispatchDateConfirmed,
+        orderConfirmationWithCustomer: schema.orderApprovals.orderConfirmationWithCustomer,
+        orderApprovalPlannedAt: schema.orderApprovals.plannedAt,
+        orderApprovalActualAt: schema.orderApprovals.actualAt,
+        orderPunchUser: punchUser.username,
+        preApprovalUser: preApprovalUser.username,
+        orderApprovalUser: orderApprovalUser.username,
+        dispatchPlanningUser: dispatchPlanningUser.username,
       })
       .from(schema.dispatchPlannings)
       .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatchPlannings.orderItemId))
@@ -99,6 +120,12 @@ class DispatchPlanningService {
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
       .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .leftJoin(schema.preApprovals, eq(schema.preApprovals.orderItemId, schema.orderItems.id))
+      .leftJoin(schema.orderApprovals, eq(schema.orderApprovals.orderItemId, schema.orderItems.id))
+      .leftJoin(punchUser, eq(punchUser.id, schema.orders.orderPunchUserId))
+      .leftJoin(preApprovalUser, eq(preApprovalUser.id, schema.preApprovals.approvedByUserId))
+      .leftJoin(orderApprovalUser, eq(orderApprovalUser.id, schema.orderApprovals.approvedByUserId))
+      .leftJoin(dispatchPlanningUser, eq(dispatchPlanningUser.id, schema.dispatchPlannings.performedByUserId))
       .where(where)
       .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.dispatchPlannings.actualAt))
       .limit(limit)
@@ -142,7 +169,7 @@ class DispatchPlanningService {
       if (!gate) throw staleWrite();
 
       const [orderRow] = await tx
-        .select({ orderNo: schema.orders.orderNo })
+        .select({ orderNo: schema.orders.orderNo, manualSaudaNo: schema.orders.manualSaudaNo })
         .from(schema.orders)
         .where(eq(schema.orders.id, item.orderId));
 
@@ -153,8 +180,16 @@ class DispatchPlanningService {
       const dispatchQty = data.dispatchQty != null ? parseFloat(data.dispatchQty) : currentAvailable;
       if (!(dispatchQty > 0)) throw new Error('Dispatch quantity must be greater than 0');
 
+      // Hard cap: a shipment can never dispatch more than what's left of the punched
+      // original, so SUM(dispatched) can never exceed the order qty. Mirrors the
+      // preclose guard below. (Stock Transfer never reaches Dispatch Planning — it
+      // ships in full at Order Approval — so no category check is needed here.)
+      if (dispatchQty > currentAvailable + 0.0001) {
+        throw new Error(`Dispatch quantity (${dispatchQty}) cannot exceed remaining quantity (${currentAvailable})`);
+      }
+
       const rawRemaining = currentAvailable - dispatchQty;
-      const complete = rawRemaining <= 0.0001; // full or over-dispatch → item done
+      const complete = rawRemaining <= 0.0001; // exactly-full dispatch → item done
       const newRemaining = complete ? 0 : rawRemaining;
 
       const dsrNumber = await mintDsr(tx);
@@ -170,6 +205,10 @@ class DispatchPlanningService {
           qtyToBeDispatched: dispatchQty,
           dispatchFrom: data.dispatchFrom ?? null,
           isTransfer,
+          // Snapshot the order's Manual Sauda No. at mint time (mirrors the
+          // reference's lift_receiving_confirmation.processid copy) - it can
+          // be edited later at Order Approval, so this must NOT be read live.
+          manualSaudaNo: orderRow?.manualSaudaNo ?? null,
         })
         .returning();
 
@@ -231,6 +270,76 @@ class DispatchPlanningService {
       if (locked.length === 0) throw new Error('Order item not found');
 
       const [order] = await tx.select().from(schema.orders).where(eq(schema.orders.id, locked[0].orderId));
+
+      // ── Split-on-revert ──────────────────────────────────────────────────────
+      // If this line already has shipments (trucks out) AND still has an
+      // un-dispatched remainder, DON'T revert the whole line: that would drag the
+      // already-shipped boxes back to Pre-Approval, where a later SKU change would
+      // relabel them (v2) / orphan them (v1). Instead keep the shipped boxes on THIS
+      // line (locked — its dispatches + SKU frozen) and move ONLY the un-dispatched
+      // remainder to a NEW line that goes back to Pre-Approval. Reuses the same split
+      // family mechanism as partial pre-approval (origin='split' + budget_root_id),
+      // so the frozen original + qty guard stay exact (shipped + remainder = original).
+      const shipments = await tx
+        .select({ id: schema.dispatches.id })
+        .from(schema.dispatches)
+        .where(eq(schema.dispatches.orderItemId, orderItemId));
+      const remainingNow = toNum(locked[0].remainingQty) ?? 0;
+      if (shipments.length > 0 && remainingNow > 0.0001) {
+        const item = locked[0];
+        // Close THIS line's open dispatch-planning gate — it's fully dispatched now.
+        const closed = await tx
+          .update(schema.dispatchPlannings)
+          .set({ actualAt: new Date(), revertRemarks: data.remarks ?? null, performedByUserId: data.userId ?? null })
+          .where(and(
+            eq(schema.dispatchPlannings.orderItemId, orderItemId),
+            isNotNull(schema.dispatchPlannings.plannedAt),
+            isNull(schema.dispatchPlannings.actualAt),
+          ))
+          .returning();
+        if (closed.length === 0) throw staleWrite();
+
+        // Shrink this line to the shipped portion. Update DOWN first (so the family
+        // sum only drops before the new line is added — keeps the qty guard happy).
+        const shippedQty = (toNum(item.orderQuantity) ?? 0) - remainingNow;
+        await tx
+          .update(schema.orderItems)
+          .set({ orderQuantity: shippedQty, approvedQty: shippedQty, remainingQty: 0 })
+          .where(eq(schema.orderItems.id, orderItemId));
+
+        // New line = the un-dispatched remainder, back at Pre-Approval. Same SKU/rate
+        // for now; it has NO shipments so its SKU can be changed safely there.
+        const [newItem] = await tx
+          .insert(schema.orderItems)
+          .values({
+            orderId: item.orderId,
+            skuId: item.skuId,
+            uom: item.uom,
+            alternateUom: item.alternateUom,
+            alternateQtyKg: item.alternateQtyKg,
+            oilType: item.oilType,
+            orderQuantity: remainingNow,
+            rateOfMaterial: item.rateOfMaterial,
+            finalRate: item.finalRate,
+            ratePer15kg: item.ratePer15kg,
+            ratePerLtr: item.ratePerLtr,
+            origin: 'split',
+            splitFromItemId: orderItemId,
+            budgetRootId: item.budgetRootId ?? item.id,
+          })
+          .returning();
+        const preAt = await getPlannedAt(tx, 'Pre Approval');
+        await tx.insert(schema.preApprovals).values({ orderItemId: newItem.id, plannedAt: preAt });
+
+        Logger.info(`[REVERT-SPLIT] order_item ${orderItemId}: kept ${shippedQty} shipped (locked), moved remaining ${remainingNow} -> new order_item ${newItem.id} at Pre-Approval`);
+        return {
+          success: true,
+          split: true,
+          message: `Already-dispatched quantity kept on the original line; remaining ${remainingNow} moved to a new line at Pre-Approval — change the product there.`,
+          data: { kept: orderItemId, moved: newItem.id },
+        };
+      }
+      // ── end split-on-revert; below is the normal whole-line revert ────────────
 
       // Deactivate the (open) dispatch-planning gate and stash the revert remark.
       const reverted = await tx

@@ -5,6 +5,7 @@
 
 const orderDispatchService = require('../services/orderDispatchService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 /**
  * Get pending pre-approval orders
@@ -93,7 +94,7 @@ const submitPreApproval = async (req, res, next) => {
     const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
     const result = await orderDispatchService.submitPreApproval(orderItemId, data);
 
-    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    notifyNextStage({ orderItemId }, { targetPage: 'Approval of Order', userId: data.userId });
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     if (error.code === 'STALE_WRITE') {

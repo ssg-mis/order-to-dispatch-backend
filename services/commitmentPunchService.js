@@ -279,9 +279,13 @@ class CommitmentPunchService {
           uom: cm.unit ?? null,
           oilType: cm.oilType ?? null,
           orderQuantity: skuQty,
+          // Frozen WRITE-ONCE at punch: auditable original + hard ceiling (see
+          // qty_guard trigger). Punch row is its own budget-family root.
+          originalOrderQuantity: skuQty,
           remainingQty: skuQty,
           rateOfMaterial: skuRate,
           finalRate: skuRate,
+          origin: 'punch',
         })
         .returning();
 

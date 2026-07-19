@@ -77,8 +77,6 @@ const preApprovalRoute = require('./routes/preApprovalRoute');
 const orderApprovalRoute = require('./routes/orderApprovalRoute');
 const dispatchPlanningRoute = require('./routes/dispatchPlanningRoute');
 const actualDispatchRoute = require('./routes/actualDispatchRoute');
-const vehicleDetailsRoute = require('./routes/vehicleDetailsRoute');
-const materialLoadRoute = require('./routes/materialLoadRoute');
 const securityGuardApprovalRoute = require('./routes/securityGuardApprovalRoute');
 const makeInvoiceRoute = require('./routes/makeInvoiceRoute'); // New import
 const checkInvoiceRoute = require('./routes/checkInvoiceRoute');
@@ -104,8 +102,6 @@ app.use('/api/v1/pre-approval', preApprovalRoute); // Changed prefix
 app.use('/api/v1/approval', orderApprovalRoute); // Changed prefix
 app.use('/api/v1/dispatch-planning', dispatchPlanningRoute); // Changed prefix
 app.use('/api/v1/actual-dispatch', actualDispatchRoute); // Changed prefix
-app.use('/api/v1/vehicle-details', vehicleDetailsRoute); // Changed prefix
-app.use('/api/v1/material-load', materialLoadRoute); // Changed prefix
 app.use('/api/v1/security-approval', securityGuardApprovalRoute); // Changed prefix
 app.use('/api/v1/make-invoice', makeInvoiceRoute); // New route usage
 app.use('/api/v1/check-invoice', checkInvoiceRoute);
@@ -130,13 +126,13 @@ app.use('/api/v1/commitment-punch', require('./routes/commitmentPunchRoutes'));
 app.use('/api/v1/drafts', require('./routes/draftRoute'));
 app.use('/api/v1/gate-in', require('./routes/gateInRoute'));
 app.use('/api/v1/process-stages', require('./routes/processStageRoute'));
-app.use('/api/v1/tags', require('./routes/tagRoute'));
 app.use('/api/v1/inventory', require('./routes/inventoryRoute'));
 app.use('/api/v1/production', require('./routes/productionRoute'));
 
-// Test database connection
-const db = require('./config/db');
-db.query('SELECT NOW()')
+// Test database connection (v2 Drizzle client — the app's source of truth now)
+const { dbV2 } = require('./config/db-v2.ts');
+const { sql: dbSql } = require('drizzle-orm');
+dbV2.execute(dbSql`SELECT NOW()`)
   .then(() => Logger.info('✅ Database connected successfully'))
   .catch((err) => Logger.error('❌ Database connection failed', err));
 

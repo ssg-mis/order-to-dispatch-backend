@@ -39,7 +39,7 @@ router.get('/:id', orderApprovalController.getApprovalById);
  * @route   POST /api/v1/approval/submit/:id   (:id = order_item id)
  * @body    { overallStatus, rateIsRightlyAsPerCurrentMarketRate, weAreDealingInOrderedSku,
  *            partyCreditStatus, dispatchDateConfirmed, orderConfirmationWithCustomer,
- *            processId?, userId? }
+ *            manualSaudaNo?, userId? }
  */
 router.post(
   '/submit/:id',

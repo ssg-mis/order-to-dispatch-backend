@@ -6,6 +6,7 @@
 
 const securityGuardApprovalService = require('../services/securityGuardApprovalService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 const handleError = (res, next, error, ctx) => {
   if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
@@ -91,7 +92,8 @@ const submitApproval = async (req, res, next) => {
     const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
     Logger.info(`[SECURITY] Submit for security check ${securityCheckId}`, { verdict: data.verdictStatus });
     const result = await securityGuardApprovalService.submitApproval(securityCheckId, data);
-    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    // Live gates decide the target: APPROVE -> Make Invoice, REJECT -> back to Actual Dispatch.
+    notifyNextStage({ dispatchId: result.data?.dispatchId }, { userId: data.userId });
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     handleError(res, next, error, '[SECURITY] Error in submitApproval controller');

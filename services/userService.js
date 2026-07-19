@@ -1,9 +1,16 @@
 /**
- * User Service
- * Handles CRUD operations for user management with role-based access control
+ * User Service — v2 schema.
+ *
+ * Handles CRUD + auth for user management. Ported from raw-SQL-against-`login`
+ * (production RDS) to Drizzle against the local v2 `users` table (see
+ * order-to-dispatch-db-v2/src/schema/users.ts). Response shape kept snake_case
+ * (phone_no/page_access/depo_access/created_at/updated_at) so the existing
+ * frontend keeps working unchanged.
  */
 
-const db = require('../config/db');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq, and, desc, sql } = require('drizzle-orm');
+const { toSnakeCase } = require('./masterLookupHelper');
 const { Logger } = require('../utils');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -11,99 +18,71 @@ const appConfig = require('../config/app');
 
 const SALT_ROUNDS = 10;
 
+// Never select the real password hash for list/detail/create/update responses.
+const PUBLIC_COLUMNS = {
+  id: schema.users.id,
+  username: schema.users.username,
+  email: schema.users.email,
+  phoneNo: schema.users.phoneNo,
+  status: schema.users.status,
+  role: schema.users.role,
+  pageAccess: schema.users.pageAccess,
+  depoAccess: schema.users.depoAccess,
+  features: schema.users.features,
+  createdAt: schema.users.createdAt,
+  updatedAt: schema.users.updatedAt,
+};
+
+function uniqueViolationMessage(error) {
+  if (error.code !== '23505') return null;
+  if (error.constraint === 'users_username_unique') return 'Username already exists';
+  if (error.constraint === 'users_email_unique') return 'Email already exists';
+  return null;
+}
+
 class UserService {
   /**
    * Get all users
-   * @param {Object} params - Query parameters
-   * @returns {Promise<Object>} List of users with passwords masked
    */
   async getAllUsers(params = {}) {
     try {
       const { page = 1, limit = 100, role, status, search } = params;
-      const offset = (page - 1) * limit;
+      const p = parseInt(page) || 1;
+      const l = parseInt(limit) || 100;
 
-      let query = `
-        SELECT
-          id, username, email, phone_no, status, role, page_access, depo_access, features,
-          created_at, updated_at
-        FROM login
-        WHERE 1=1
-      `;
-      const queryParams = [];
-      let paramIndex = 1;
-
+      const conditions = [];
       if (search) {
         const term = `%${search}%`;
-        query += ` AND (
-          username ILIKE $${paramIndex} OR
-          COALESCE(email, '') ILIKE $${paramIndex} OR
-          COALESCE(phone_no, '') ILIKE $${paramIndex} OR
-          role ILIKE $${paramIndex} OR
-          status ILIKE $${paramIndex} OR
-          CAST(id AS TEXT) LIKE $${paramIndex}
-        )`;
-        queryParams.push(term);
-        paramIndex++;
+        conditions.push(sql`(
+          ${schema.users.username} ILIKE ${term} OR
+          COALESCE(${schema.users.email}, '') ILIKE ${term} OR
+          COALESCE(${schema.users.phoneNo}, '') ILIKE ${term} OR
+          ${schema.users.role} ILIKE ${term} OR
+          ${schema.users.status} ILIKE ${term} OR
+          CAST(${schema.users.id} AS TEXT) LIKE ${term}
+        )`);
       }
+      if (role) conditions.push(eq(schema.users.role, role));
+      if (status) conditions.push(eq(schema.users.status, status));
+      const where = conditions.length ? and(...conditions) : undefined;
 
-      if (role) {
-        query += ` AND role = $${paramIndex++}`;
-        queryParams.push(role);
-      }
+      let countQuery = dbV2.select({ count: sql`count(*)::int` }).from(schema.users);
+      if (where) countQuery = countQuery.where(where);
+      const [{ count: total }] = await countQuery;
 
-      if (status) {
-        query += ` AND status = $${paramIndex++}`;
-        queryParams.push(status);
-      }
-
-      query += ` ORDER BY created_at DESC`;
-      query += ` LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
-      queryParams.push(limit, offset);
-
-      const result = await db.query(query, queryParams);
-
-      // Get total count for pagination
-      let countQuery = 'SELECT COUNT(*) FROM login WHERE 1=1';
-      const countParams = [];
-      let countIndex = 1;
-
-      if (search) {
-        const term = `%${search}%`;
-        countQuery += ` AND (
-          username ILIKE $${countIndex} OR
-          COALESCE(email, '') ILIKE $${countIndex} OR
-          COALESCE(phone_no, '') ILIKE $${countIndex} OR
-          role ILIKE $${countIndex} OR
-          status ILIKE $${countIndex} OR
-          CAST(id AS TEXT) LIKE $${countIndex}
-        )`;
-        countParams.push(term);
-        countIndex++;
-      }
-
-      if (role) {
-        countQuery += ` AND role = $${countIndex++}`;
-        countParams.push(role);
-      }
-      if (status) {
-        countQuery += ` AND status = $${countIndex++}`;
-        countParams.push(status);
-      }
-
-      const countResult = await db.query(countQuery, countParams);
-      const total = parseInt(countResult.rows[0].count);
+      let query = dbV2.select(PUBLIC_COLUMNS).from(schema.users).orderBy(desc(schema.users.createdAt));
+      if (where) query = query.where(where);
+      query = query.limit(l).offset((p - 1) * l);
+      const rows = await query;
 
       return {
-        users: result.rows.map(user => ({
-          ...user,
-          password: '••••••••' // Mask password in response
-        })),
+        users: rows.map(toSnakeCase).map((u) => ({ ...u, password: '••••••••' })),
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: p,
+          limit: l,
           total,
-          totalPages: Math.ceil(total / limit)
-        }
+          totalPages: Math.ceil(total / l),
+        },
       };
     } catch (error) {
       Logger.error('Error fetching users', error);
@@ -113,29 +92,12 @@ class UserService {
 
   /**
    * Get user by ID
-   * @param {number} id - User ID
-   * @returns {Promise<Object>} User object
    */
   async getUserById(id) {
     try {
-      const query = `
-        SELECT
-          id, username, email, phone_no, status, role, page_access, depo_access, features,
-          created_at, updated_at
-        FROM login
-        WHERE id = $1
-      `;
-
-      const result = await db.query(query, [id]);
-
-      if (result.rows.length === 0) {
-        return null;
-      }
-
-      return {
-        ...result.rows[0],
-        password: '••••••••'
-      };
+      const [row] = await dbV2.select(PUBLIC_COLUMNS).from(schema.users).where(eq(schema.users.id, id));
+      if (!row) return null;
+      return { ...toSnakeCase(row), password: '••••••••' };
     } catch (error) {
       Logger.error('Error fetching user by ID', error);
       throw error;
@@ -144,175 +106,83 @@ class UserService {
 
   /**
    * Create new user
-   * @param {Object} userData - User data
-   * @returns {Promise<Object>} Created user
    */
   async createUser(userData) {
     try {
       const { username, password, email, phone_no, status = 'active', role, page_access = [], depo_access = {}, features = {} } = userData;
-
-      // Hash password
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-      const query = `
-        INSERT INTO login (username, password, email, phone_no, status, role, page_access, depo_access, features)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING id, username, email, phone_no, status, role, page_access, depo_access, features, created_at, updated_at
-      `;
+      const [row] = await dbV2
+        .insert(schema.users)
+        .values({
+          username,
+          password: hashedPassword,
+          email: email || null,
+          phoneNo: phone_no,
+          status,
+          role,
+          pageAccess: page_access ?? [],
+          depoAccess: depo_access ?? {},
+          features: features ?? {},
+        })
+        .returning(PUBLIC_COLUMNS);
 
-      // Serialize: convert object/array to JSON string for jsonb columns
-      const pageAccessValue = page_access ? JSON.stringify(page_access) : JSON.stringify({})
-      const depoAccessValue = depo_access ? JSON.stringify(depo_access) : JSON.stringify({})
-      const featuresValue = features ? JSON.stringify(features) : JSON.stringify({})
-
-      const result = await db.query(query, [
-        username,
-        hashedPassword,
-        email || null,
-        phone_no,
-        status,
-        role,
-        pageAccessValue,
-        depoAccessValue,
-        featuresValue
-      ]);
-
-      return {
-        ...result.rows[0],
-        password: '••••••••'
-      };
+      return { ...toSnakeCase(row), password: '••••••••' };
     } catch (error) {
       Logger.error('Error creating user', error);
-
-      // Handle unique constraint violations
-      if (error.code === '23505') {
-        if (error.constraint === 'login_username_key') {
-          throw new Error('Username already exists');
-        }
-        if (error.constraint === 'login_email_key') {
-          throw new Error('Email already exists');
-        }
-      }
-
+      const message = uniqueViolationMessage(error);
+      if (message) throw new Error(message);
       throw error;
     }
   }
 
   /**
    * Update user
-   * @param {number} id - User ID
-   * @param {Object} userData - Updated user data
-   * @returns {Promise<Object>} Updated user
    */
   async updateUser(id, userData) {
     try {
       const { username, password, email, phone_no, status, role, page_access, depo_access, features } = userData;
 
-      // Build dynamic update query
-      const updateFields = [];
-      const queryParams = [];
-      let paramIndex = 1;
-
-      if (username !== undefined) {
-        updateFields.push(`username = $${paramIndex++}`);
-        queryParams.push(username);
-      }
-
+      const patch = {};
+      if (username !== undefined) patch.username = username;
       if (password !== undefined && password !== '••••••••' && password.trim() !== '') {
-        const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-        updateFields.push(`password = $${paramIndex++}`);
-        queryParams.push(hashedPassword);
+        patch.password = await bcrypt.hash(password, SALT_ROUNDS);
       }
+      if (email !== undefined) patch.email = email === '' ? null : email;
+      if (phone_no !== undefined) patch.phoneNo = phone_no;
+      if (status !== undefined) patch.status = status;
+      if (role !== undefined) patch.role = role;
+      if (page_access !== undefined) patch.pageAccess = page_access;
+      if (depo_access !== undefined) patch.depoAccess = depo_access;
+      if (features !== undefined) patch.features = features;
 
-      if (email !== undefined) {
-        // If email is empty string, set it to NULL
-        const emailValue = email === "" ? null : email;
-        updateFields.push(`email = $${paramIndex++}`);
-        queryParams.push(emailValue);
-      }
-
-      if (phone_no !== undefined) {
-        updateFields.push(`phone_no = $${paramIndex++}`);
-        queryParams.push(phone_no);
-      }
-
-      if (status !== undefined) {
-        updateFields.push(`status = $${paramIndex++}`);
-        queryParams.push(status);
-      }
-
-      if (role !== undefined) {
-        updateFields.push(`role = $${paramIndex++}`);
-        queryParams.push(role);
-      }
-
-      if (page_access !== undefined) {
-        updateFields.push(`page_access = $${paramIndex++}`);
-        // Serialize: accepts both object and array formats
-        queryParams.push(JSON.stringify(page_access));
-      }
-
-      if (depo_access !== undefined) {
-        updateFields.push(`depo_access = $${paramIndex++}`);
-        queryParams.push(JSON.stringify(depo_access));
-      }
-
-      if (features !== undefined) {
-        updateFields.push(`features = $${paramIndex++}`);
-        queryParams.push(JSON.stringify(features));
-      }
-
-      if (updateFields.length === 0) {
+      if (Object.keys(patch).length === 0) {
         return this.getUserById(id);
       }
 
-      queryParams.push(id);
+      const [row] = await dbV2
+        .update(schema.users)
+        .set(patch)
+        .where(eq(schema.users.id, id))
+        .returning(PUBLIC_COLUMNS);
 
-      const query = `
-        UPDATE login 
-        SET ${updateFields.join(', ')}
-        WHERE id = $${paramIndex}
-        RETURNING id, username, email, phone_no, status, role, page_access, depo_access, features, created_at, updated_at
-      `;
-
-      const result = await db.query(query, queryParams);
-
-      if (result.rows.length === 0) {
-        return null;
-      }
-
-      return {
-        ...result.rows[0],
-        password: '••••••••'
-      };
+      if (!row) return null;
+      return { ...toSnakeCase(row), password: '••••••••' };
     } catch (error) {
       Logger.error('Error updating user', error);
-
-      // Handle unique constraint violations
-      if (error.code === '23505') {
-        if (error.constraint === 'login_username_key') {
-          throw new Error('Username already exists');
-        }
-        if (error.constraint === 'login_email_key') {
-          throw new Error('Email already exists');
-        }
-      }
-
+      const message = uniqueViolationMessage(error);
+      if (message) throw new Error(message);
       throw error;
     }
   }
 
   /**
    * Delete user
-   * @param {number} id - User ID
-   * @returns {Promise<boolean>} Success status
    */
   async deleteUser(id) {
     try {
-      const query = 'DELETE FROM login WHERE id = $1 RETURNING id';
-      const result = await db.query(query, [id]);
-
-      return result.rows.length > 0;
+      const rows = await dbV2.delete(schema.users).where(eq(schema.users.id, id)).returning({ id: schema.users.id });
+      return rows.length > 0;
     } catch (error) {
       Logger.error('Error deleting user', error);
       throw error;
@@ -321,33 +191,19 @@ class UserService {
 
   /**
    * Authenticate user
-   * @param {string} username - Username
-   * @param {string} password - Plain text password
-   * @returns {Promise<Object|null>} User object if authenticated, null otherwise
    */
   async authenticateUser(username, password) {
     try {
-      const query = `
-        SELECT id, username, password, email, phone_no, status, role, page_access, depo_access, features, created_at, updated_at
-        FROM login
-        WHERE username = $1 AND status = 'active'
-      `;
+      const [user] = await dbV2
+        .select()
+        .from(schema.users)
+        .where(and(eq(schema.users.username, username), eq(schema.users.status, 'active')));
+      if (!user) return null;
 
-      const result = await db.query(query, [username]);
-
-      if (result.rows.length === 0) {
-        return null;
-      }
-
-      const user = result.rows[0];
       const isValid = await bcrypt.compare(password, user.password);
+      if (!isValid) return null;
 
-      if (!isValid) {
-        return null;
-      }
-
-      // Return user without password + signed JWT
-      const { password: _, ...userWithoutPassword } = user;
+      const { password: _pw, ...userWithoutPassword } = toSnakeCase(user);
       const token = jwt.sign(
         { id: user.id, username: user.username, role: user.role },
         appConfig.jwt.secret,
@@ -362,17 +218,12 @@ class UserService {
 
   /**
    * Get CSV export formats for a user
-   * @param {number} userId
-   * @returns {Promise<Object|null>} formats map { formatName: string[] }
    */
   async getCsvFormats(userId) {
     try {
-      const result = await db.query(
-        `SELECT features->'csv_formats' AS csv_formats FROM login WHERE id = $1`,
-        [userId]
-      );
-      if (result.rows.length === 0) return null;
-      return result.rows[0].csv_formats || {};
+      const [row] = await dbV2.select({ features: schema.users.features }).from(schema.users).where(eq(schema.users.id, userId));
+      if (!row) return null;
+      return row.features?.csv_formats || {};
     } catch (error) {
       Logger.error('Error fetching csv formats', error);
       throw error;
@@ -381,22 +232,19 @@ class UserService {
 
   /**
    * Save CSV export formats for a user (merges into features JSONB)
-   * @param {number} userId
-   * @param {Object} formats - { formatName: string[] }
-   * @returns {Promise<Object|null>}
    */
   async saveCsvFormats(userId, formats) {
     try {
-      const result = await db.query(
-        `UPDATE login
-         SET features = features || jsonb_build_object('csv_formats', $1::jsonb),
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $2
-         RETURNING features->'csv_formats' AS csv_formats`,
-        [JSON.stringify(formats), userId]
-      );
-      if (result.rows.length === 0) return null;
-      return result.rows[0].csv_formats || {};
+      const [row] = await dbV2
+        .update(schema.users)
+        .set({
+          features: sql`COALESCE(${schema.users.features}, '{}'::jsonb) || jsonb_build_object('csv_formats', ${JSON.stringify(formats)}::jsonb)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.users.id, userId))
+        .returning({ features: schema.users.features });
+      if (!row) return null;
+      return row.features?.csv_formats || {};
     } catch (error) {
       Logger.error('Error saving csv formats', error);
       throw error;
@@ -406,17 +254,12 @@ class UserService {
   /**
    * Get all column preferences for a user.
    * Shape: { [stageKey]: { visible?: string[], order?: string[] } }
-   * @param {number} userId
-   * @returns {Promise<Object|null>} prefs map, or null if user not found
    */
   async getColumnPrefs(userId) {
     try {
-      const result = await db.query(
-        `SELECT features->'column_prefs' AS column_prefs FROM login WHERE id = $1`,
-        [userId]
-      );
-      if (result.rows.length === 0) return null;
-      return result.rows[0].column_prefs || {};
+      const [row] = await dbV2.select({ features: schema.users.features }).from(schema.users).where(eq(schema.users.id, userId));
+      if (!row) return null;
+      return row.features?.column_prefs || {};
     } catch (error) {
       Logger.error('Error fetching column prefs', error);
       throw error;
@@ -426,32 +269,26 @@ class UserService {
   /**
    * Save (deep-merge) one stage's column preferences for a user.
    * Only the provided keys of `partial` ({ visible?, order? }) are updated; the
-   * other key and every other stage are preserved. Uses nested shallow jsonb
-   * merges so concurrent visible/order saves can't clobber each other (each
-   * UPDATE is atomic on the row).
-   * @param {number} userId
-   * @param {string} stageKey  e.g. "check-invoice"
-   * @param {Object} partial   { visible?: string[], order?: string[] }
-   * @returns {Promise<Object|null>} updated column_prefs map, or null if user not found
+   * other key and every other stage are preserved.
    */
   async saveColumnPrefs(userId, stageKey, partial) {
     try {
-      const result = await db.query(
-        `UPDATE login
-         SET features = COALESCE(features, '{}'::jsonb) || jsonb_build_object(
-               'column_prefs',
-               COALESCE(features->'column_prefs', '{}'::jsonb) || jsonb_build_object(
-                 $2::text,
-                 COALESCE(features #> ARRAY['column_prefs', $2], '{}'::jsonb) || $3::jsonb
-               )
-             ),
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1
-         RETURNING features->'column_prefs' AS column_prefs`,
-        [userId, stageKey, JSON.stringify(partial)]
-      );
-      if (result.rows.length === 0) return null;
-      return result.rows[0].column_prefs || {};
+      const [row] = await dbV2
+        .update(schema.users)
+        .set({
+          features: sql`COALESCE(${schema.users.features}, '{}'::jsonb) || jsonb_build_object(
+            'column_prefs',
+            COALESCE(${schema.users.features}->'column_prefs', '{}'::jsonb) || jsonb_build_object(
+              ${stageKey}::text,
+              COALESCE(${schema.users.features} #> ARRAY['column_prefs', ${stageKey}], '{}'::jsonb) || ${JSON.stringify(partial)}::jsonb
+            )
+          )`,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.users.id, userId))
+        .returning({ features: schema.users.features });
+      if (!row) return null;
+      return row.features?.column_prefs || {};
     } catch (error) {
       Logger.error('Error saving column prefs', error);
       throw error;
@@ -460,7 +297,6 @@ class UserService {
 
   /**
    * Get available page access options
-   * @returns {Array<string>} List of page names
    */
   getPageAccessOptions() {
     return [

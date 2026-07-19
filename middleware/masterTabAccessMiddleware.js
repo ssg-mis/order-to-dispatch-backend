@@ -1,4 +1,5 @@
-const db = require("../config/db");
+const { dbV2, schema } = require("../config/db-v2.ts");
+const { eq, and } = require("drizzle-orm");
 
 /**
  * masterTabAccess(tabKey)
@@ -23,16 +24,16 @@ const masterTabAccess = (tabKey) => async (req, res, next) => {
   if (role === 'super_admin') return next();
 
   try {
-    const result = await db.query(
-      "SELECT features FROM login WHERE id = $1 AND status = 'active'",
-      [userId]
-    );
+    const [row] = await dbV2
+      .select({ features: schema.users.features })
+      .from(schema.users)
+      .where(and(eq(schema.users.id, userId), eq(schema.users.status, 'active')));
 
-    if (!result.rows.length) {
+    if (!row) {
       return res.status(403).json({ success: false, message: 'User not found or inactive' });
     }
 
-    let featuresObj = result.rows[0].features || {};
+    let featuresObj = row.features || {};
     if (typeof featuresObj === 'string') {
       try { featuresObj = JSON.parse(featuresObj); } catch { featuresObj = {}; }
     }

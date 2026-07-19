@@ -5,7 +5,11 @@
   "main": "server.js",
   "scripts": {
     "start": "tsx server.js",
-    "dev": "nodemon --exec tsx server.js"
+    "dev": "nodemon --exec tsx server.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "db:push": "drizzle-kit push"
   },
   "keywords": [
     "express",
@@ -25,11 +29,13 @@
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
-    "order-to-dispatch-db-v2": "file:../order-to-dispatch-db-v2",
     "pg": "^8.17.1"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.28.1",
     "nodemon": "^3.0.1",
-    "tsx": "^4.19.2"
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

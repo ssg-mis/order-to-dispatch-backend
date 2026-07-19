@@ -1,4 +1,18 @@
-const db = require('../config/db');
+/**
+ * Process Stage Service — TAT (turn-around-time) config per workflow stage
+ * (set-turn-around-time page). Each stage's stage_time is added to NOW() when
+ * the previous gate completes to seed the next gate's planned_at.
+ *
+ * Migrated to the v2 schema (order-to-dispatch-db-v2). The `process_stages`
+ * table already lives in v2 (src/schema/process_stages.ts) and is what every
+ * stage service reads via stageUtils.getPlannedAt — so this CRUD just needed
+ * repointing off the old RDS. No ensureTable() needed anymore (the table is
+ * part of the fixed v2 schema); stage_name carries a UNIQUE constraint in v2.
+ * Reads keep the exact response shape (stage_time text + seconds + submitted_at).
+ */
+
+const { dbV2 } = require('../config/db-v2.ts');
+const { sql } = require('drizzle-orm');
 const { Logger } = require('../utils');
 
 const ALLOWED_STAGES = [
@@ -18,21 +32,9 @@ const ALLOWED_STAGES = [
 ];
 
 class ProcessStageService {
-  async ensureTable() {
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS process_stages (
-        id SERIAL PRIMARY KEY,
-        stage_name VARCHAR(100) NOT NULL,
-        stage_time INTERVAL NOT NULL,
-        submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-  }
-
   async getAll() {
     try {
-      await this.ensureTable();
-      const result = await db.query(`
+      const result = await dbV2.execute(sql`
         SELECT
           id,
           stage_name,
@@ -52,8 +54,6 @@ class ProcessStageService {
 
   async save(data) {
     try {
-      await this.ensureTable();
-
       const stageName = String(data.stage_name || '').trim();
       const totalMinutes = Number(data.total_minutes);
 
@@ -65,32 +65,29 @@ class ProcessStageService {
         throw new Error('Stage time must be greater than zero');
       }
 
-      const existing = await db.query(
-        'SELECT id FROM process_stages WHERE stage_name = $1 ORDER BY id ASC LIMIT 1',
-        [stageName]
-      );
+      const existing = await dbV2.execute(sql`
+        SELECT id FROM process_stages WHERE stage_name = ${stageName} ORDER BY id ASC LIMIT 1
+      `);
 
       let result;
       if (existing.rows.length) {
-        const query = `
+        result = await dbV2.execute(sql`
           UPDATE process_stages
-          SET stage_time = ($1::int * INTERVAL '1 minute'),
+          SET stage_time = (${totalMinutes}::int * INTERVAL '1 minute'),
               submitted_at = CURRENT_TIMESTAMP
-          WHERE id = $2
+          WHERE id = ${existing.rows[0].id}
           RETURNING id, stage_name, stage_time::text AS stage_time,
             EXTRACT(EPOCH FROM stage_time)::integer AS stage_time_seconds,
             submitted_at
-        `;
-        result = await db.query(query, [totalMinutes, existing.rows[0].id]);
+        `);
       } else {
-        const query = `
+        result = await dbV2.execute(sql`
           INSERT INTO process_stages (stage_name, stage_time)
-          VALUES ($1, $2::int * INTERVAL '1 minute')
+          VALUES (${stageName}, ${totalMinutes}::int * INTERVAL '1 minute')
           RETURNING id, stage_name, stage_time::text AS stage_time,
             EXTRACT(EPOCH FROM stage_time)::integer AS stage_time_seconds,
             submitted_at
-        `;
-        result = await db.query(query, [stageName, totalMinutes]);
+        `);
       }
 
       return result.rows[0];
@@ -102,8 +99,6 @@ class ProcessStageService {
 
   async update(id, data) {
     try {
-      await this.ensureTable();
-
       const stageName = String(data.stage_name || '').trim();
       const totalMinutes = Number(data.total_minutes);
 
@@ -115,19 +110,16 @@ class ProcessStageService {
         throw new Error('Stage time must be greater than zero');
       }
 
-      const result = await db.query(
-        `
-          UPDATE process_stages
-          SET stage_name = $1,
-              stage_time = ($2::int * INTERVAL '1 minute'),
-              submitted_at = CURRENT_TIMESTAMP
-          WHERE id = $3
-          RETURNING id, stage_name, stage_time::text AS stage_time,
-            EXTRACT(EPOCH FROM stage_time)::integer AS stage_time_seconds,
-            submitted_at
-        `,
-        [stageName, totalMinutes, id]
-      );
+      const result = await dbV2.execute(sql`
+        UPDATE process_stages
+        SET stage_name = ${stageName},
+            stage_time = (${totalMinutes}::int * INTERVAL '1 minute'),
+            submitted_at = CURRENT_TIMESTAMP
+        WHERE id = ${id}
+        RETURNING id, stage_name, stage_time::text AS stage_time,
+          EXTRACT(EPOCH FROM stage_time)::integer AS stage_time_seconds,
+          submitted_at
+      `);
 
       if (result.rows.length === 0) {
         throw new Error('Process stage not found');
@@ -142,11 +134,9 @@ class ProcessStageService {
 
   async delete(id) {
     try {
-      await this.ensureTable();
-      const result = await db.query(
-        'DELETE FROM process_stages WHERE id = $1 RETURNING id',
-        [id]
-      );
+      const result = await dbV2.execute(sql`
+        DELETE FROM process_stages WHERE id = ${id} RETURNING id
+      `);
       if (result.rows.length === 0) {
         throw new Error('Process stage not found');
       }

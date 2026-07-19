@@ -5,7 +5,7 @@
 // migration is complete and reviewed - never at RDS.
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import * as schema from "order-to-dispatch-db-v2/src/schema/index";
+import * as schema from "../db-v2/schema/index";
 
 const connectionString = process.env.DB_V2_URL;
 

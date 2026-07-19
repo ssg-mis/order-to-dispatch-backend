@@ -4,6 +4,7 @@
  */
 const orderApprovalService = require('../services/orderApprovalService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 /**
  * Get pending approval orders
@@ -67,7 +68,10 @@ const submitApproval = async (req, res, next) => {
     const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
     const result = await orderApprovalService.submitApproval(orderItemId, data);
 
-    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    // Only an APPROVE advances the item to Dispatch Planning — a reject has no next-stage nudge.
+    if (String(data.overallStatus || '').toLowerCase() === 'approve') {
+      notifyNextStage({ orderItemId }, { targetPage: 'Dispatch Planning', userId: data.userId });
+    }
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     if (error.code === 'STALE_WRITE') {

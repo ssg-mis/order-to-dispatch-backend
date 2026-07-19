@@ -30,10 +30,10 @@ class OwnerDashboardController {
 
   async getCustomerOrders(req, res, next) {
     try {
-      const customer = req.query.customer;
-      if (!customer) return res.status(400).json({ success: false, message: 'customer is required' });
+      // customerId is the customers FK; empty/absent = the unmapped ("—") group.
+      const customerId = req.query.customerId;
       const filters = { depot: req.query.depot || null, order_type: req.query.order_type || null, date_from: req.query.date_from || null, date_to: req.query.date_to || null };
-      const data = await ownerDashboardService.getCustomerOrders(customer, filters);
+      const data = await ownerDashboardService.getCustomerOrders(customerId, filters);
       res.status(200).json({ success: true, data });
     } catch (err) { Logger.error('getCustomerOrders', err); next(err); }
   }

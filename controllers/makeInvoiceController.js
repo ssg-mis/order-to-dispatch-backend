@@ -5,6 +5,7 @@
 
 const makeInvoiceService = require('../services/makeInvoiceService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 const handleError = (res, next, error, ctx) => {
   if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
@@ -77,7 +78,7 @@ const submitInvoice = async (req, res, next) => {
     const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
     Logger.info(`[MAKE INVOICE] Submit for invoice ${invoiceId}`);
     const result = await makeInvoiceService.submitInvoice(invoiceId, data);
-    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    notifyNextStage({ dispatchId: result.data?.dispatchId }, { userId: data.userId });
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     handleError(res, next, error, '[MAKE INVOICE] Error in submitInvoice controller');

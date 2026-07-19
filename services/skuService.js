@@ -3,8 +3,10 @@
  * Handles operations for sku_details table
  */
 
-const pool = require('../config/db');
 const Logger = require('../utils/logger');
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { eq } = require('drizzle-orm');
+const { toSnakeCase } = require('./masterLookupHelper');
 
 class SkuService {
   /**
@@ -30,23 +32,12 @@ class SkuService {
   }
 
   /**
-   * Get SKU by ID
+   * Get SKU by ID (v2 `skus`; snake_case out, matching the old sku_details row)
    */
   async getSkuById(id) {
     try {
-      const query = `
-        SELECT *
-        FROM sku_details
-        WHERE id = $1
-      `;
-      
-      const result = await pool.query(query, [id]);
-      
-      if (result.rows.length === 0) {
-        return null;
-      }
-      
-      return result.rows[0];
+      const [row] = await dbV2.select().from(schema.skus).where(eq(schema.skus.id, id));
+      return row ? toSnakeCase(row) : null;
     } catch (error) {
       Logger.error(`Error fetching SKU ${id}:`, error);
       throw error;
@@ -54,23 +45,15 @@ class SkuService {
   }
 
   /**
-   * Get rate by SKU name
+   * Get rate by SKU name (v2 `sku_rate`)
    */
   async getRateBySku(skuName) {
     try {
-      const query = `
-        SELECT rate
-        FROM sku_rate
-        WHERE sku = $1
-      `;
-      
-      const result = await pool.query(query, [skuName]);
-      
-      if (result.rows.length === 0) {
-        return null;
-      }
-      
-      return result.rows[0].rate;
+      const [row] = await dbV2
+        .select({ rate: schema.skuRates.rate })
+        .from(schema.skuRates)
+        .where(eq(schema.skuRates.sku, skuName));
+      return row ? row.rate : null;
     } catch (error) {
       Logger.error(`Error fetching rate for SKU ${skuName}:`, error);
       throw error;
@@ -78,23 +61,16 @@ class SkuService {
   }
 
   /**
-   * Get all SKU rates with formulas
+   * Get all SKU rates with formulas (v2 `sku_rate`)
    */
   async getAllSkuRates() {
     try {
-      const query = `
-        SELECT 
-          id,
-          sku,
-          rate,
-          formula
-        FROM sku_rate
-        ORDER BY id ASC
-      `;
-      
-      const result = await pool.query(query);
-      Logger.info(`Fetched ${result.rows.length} SKU rates`);
-      return result.rows;
+      const rows = await dbV2
+        .select({ id: schema.skuRates.id, sku: schema.skuRates.sku, rate: schema.skuRates.rate, formula: schema.skuRates.formula })
+        .from(schema.skuRates)
+        .orderBy(schema.skuRates.id);
+      Logger.info(`Fetched ${rows.length} SKU rates`);
+      return rows;
     } catch (error) {
       Logger.error('Error fetching SKU rates:', error);
       throw error;

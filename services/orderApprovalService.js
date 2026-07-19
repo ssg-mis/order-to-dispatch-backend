@@ -26,7 +26,8 @@ const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
 const { eq, and, isNull, isNotNull, sql, asc, desc } = require('drizzle-orm');
-const { getPlannedAt, mintDsr } = require('./stageUtils');
+const { alias } = require('drizzle-orm/pg-core');
+const { getPlannedAt, mintDsr, isStockTransfer } = require('./stageUtils');
 
 const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
 
@@ -66,6 +67,10 @@ class OrderApprovalService {
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
       .where(where);
 
+    const punchUser = alias(schema.users, 'punch_user');
+    const preApprovalUser = alias(schema.users, 'pre_approval_doer');
+    const orderApprovalUser = alias(schema.users, 'order_approval_doer');
+
     const rows = await dbV2
       .select({
         orderApprovalId: schema.orderApprovals.id,
@@ -82,6 +87,11 @@ class OrderApprovalService {
         customer: schema.customers,
         depot: schema.depots,
         sku: schema.skus,
+        orderPunchUser: punchUser.username,
+        preApprovalUser: preApprovalUser.username,
+        orderApprovalUser: orderApprovalUser.username,
+        preApprovalPlannedAt: schema.preApprovals.plannedAt,
+        preApprovalActualAt: schema.preApprovals.actualAt,
       })
       .from(schema.orderApprovals)
       .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.orderApprovals.orderItemId))
@@ -89,6 +99,10 @@ class OrderApprovalService {
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
       .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
+      .leftJoin(punchUser, eq(punchUser.id, schema.orders.orderPunchUserId))
+      .leftJoin(schema.preApprovals, eq(schema.preApprovals.orderItemId, schema.orderItems.id))
+      .leftJoin(preApprovalUser, eq(preApprovalUser.id, schema.preApprovals.approvedByUserId))
+      .leftJoin(orderApprovalUser, eq(orderApprovalUser.id, schema.orderApprovals.approvedByUserId))
       .where(where)
       .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.orderApprovals.actualAt))
       .limit(limit)
@@ -139,7 +153,7 @@ class OrderApprovalService {
    *   - rateIsRightlyAsPerCurrentMarketRate, weAreDealingInOrderedSku,
    *     dispatchDateConfirmed, orderConfirmationWithCustomer: booleans
    *   - partyCreditStatus: boolean|string (stored as text)
-   *   - processId: string|null  Manual Sauda No. -> orders.process_id
+   *   - manualSaudaNo: string|null  Manual Sauda No. -> orders.manual_sauda_no
    *   - userId: number|null      -> order_approvals.approved_by_user_id
    */
   async submitApproval(orderItemId, data = {}) {
@@ -186,8 +200,10 @@ class OrderApprovalService {
       assertStageOpen({ rowCount: closedGate.length }, 'Approval of Order');
 
       // Manual Sauda No. is captured at this gate; it lives on the order header.
-      if (data.processId != null && data.processId !== '') {
-        await tx.update(schema.orders).set({ processId: String(data.processId) }).where(eq(schema.orders.id, current.item.orderId));
+      // Accept the new key, fall back to the legacy `processId` for any cached client.
+      const manualSaudaInput = data.manualSaudaNo ?? data.processId;
+      if (manualSaudaInput != null && manualSaudaInput !== '') {
+        await tx.update(schema.orders).set({ manualSaudaNo: String(manualSaudaInput) }).where(eq(schema.orders.id, current.item.orderId));
       }
 
       // Honor the schema's "approved_qty set at order-approval" intent for
@@ -213,8 +229,8 @@ class OrderApprovalService {
       // Advance only on approval. A rejection closes the gate and stops here.
       let advanced = false;
       if (isApproved) {
-        const isStockTransfer = (current.order.orderCategory || '').toLowerCase().trim() === 'stock transfer';
-        if (isStockTransfer) {
+        const isStockTransferOrder = isStockTransfer(current.order.orderCategory);
+        if (isStockTransferOrder) {
           // Stock Transfer skips Dispatch Planning: the whole approved qty ships
           // in one go. Record a CLOSED dispatch_plannings row (shows in DP history,
           // not pending), zero the remaining, and mint the shipment straight into
@@ -228,8 +244,14 @@ class OrderApprovalService {
           const shipQty = toNum(current.item.remainingQty) ?? toNum(current.item.approvedQty) ?? toNum(current.item.orderQuantity) ?? 0;
           const dsrNumber = await mintDsr(tx);
           const shipmentPlannedAt = await getPlannedAt(tx, 'Actual Dispatch');
+          // Snapshot Manual Sauda No. as of THIS submit (reflects the processId
+          // update just above, if this call supplied one) - same rationale as
+          // dispatchPlanningService's mint: must not be read live later.
+          const manualSaudaNo = (manualSaudaInput != null && manualSaudaInput !== '')
+            ? String(manualSaudaInput)
+            : current.order.manualSaudaNo ?? null;
           await tx.insert(schema.dispatches).values({
-            orderItemId, dsrNumber, plannedAt: shipmentPlannedAt, qtyToBeDispatched: shipQty, isTransfer: true,
+            orderItemId, dsrNumber, plannedAt: shipmentPlannedAt, qtyToBeDispatched: shipQty, isTransfer: true, manualSaudaNo,
           });
           await tx.update(schema.orderItems).set({ remainingQty: 0 }).where(eq(schema.orderItems.id, orderItemId));
           Logger.info(`[STOCK TRANSFER] order_item ${orderItemId} skipped Dispatch Planning -> shipment ${dsrNumber} (qty ${shipQty})`);

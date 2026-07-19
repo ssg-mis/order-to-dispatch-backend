@@ -5,6 +5,7 @@
 
 const dispatchPlanningService = require('../services/dispatchPlanningService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 const handleError = (res, next, error, ctx) => {
   if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
@@ -87,7 +88,7 @@ const submitDispatchPlanning = async (req, res, next) => {
     const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
     Logger.info(`[DISPATCH PLANNING] Submit for order_item ${orderItemId}`);
     const result = await dispatchPlanningService.submitDispatchPlanning(orderItemId, data);
-    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    notifyNextStage({ orderItemId }, { targetPage: 'Actual Dispatch', userId: data.userId });
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     handleError(res, next, error, '[DISPATCH PLANNING] Error in submitDispatchPlanning controller');

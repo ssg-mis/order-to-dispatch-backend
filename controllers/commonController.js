@@ -1,13 +1,21 @@
-const { query } = require('../config/db');
-const { Logger } = require('../utils');
+const { dbV2 } = require('../config/db-v2.ts');
+const { sql } = require('drizzle-orm');
 
 /**
- * Get Next ID for a given type (customer, depot, broker, sku)
+ * Get Next business-code ID for a given master type (used by the Master page's
+ * "add" dialog to pre-fill the next code, e.g. CUS1002, DPT102).
+ *
+ * Migrated to the v2 schema: the old RDS master tables (customer_details,
+ * depot_details, …) became customers/depots/…, and their text business-code
+ * columns (customer_id, depot_id, …) became *_code columns. This scans the v2
+ * table for the highest existing numeric code under the prefix and returns +1.
+ * Table/column names come from the fixed whitelist below (never user input),
+ * so sql.raw here is not an injection surface.
  */
 const getNextId = async (req, res, next) => {
   try {
     const { type } = req.query;
-    
+
     if (!type) {
       return res.status(400).json({
         success: false,
@@ -22,50 +30,50 @@ const getNextId = async (req, res, next) => {
 
     switch (type) {
       case 'customer':
-        tableName = 'customer_details';
-        idColumn = 'customer_id';
+        tableName = 'customers';
+        idColumn = 'customer_code';
         prefix = 'CUS';
         minDigits = 4; // CUS1001
         break;
       case 'depot':
-        tableName = 'depot_details';
-        idColumn = 'depot_id';
+        tableName = 'depots';
+        idColumn = 'depot_code';
         prefix = 'DPT';
         minDigits = 3; // DPT101
         break;
       case 'broker':
-        tableName = 'broker_details';
-        idColumn = 'broker_id';
+        tableName = 'brokers';
+        idColumn = 'broker_code';
         prefix = 'BRK';
         minDigits = 3; // BRK101
         break;
       case 'sku':
-        tableName = 'sku_details';
+        tableName = 'skus';
         idColumn = 'sku_code';
         prefix = 'SKU';
         minDigits = 4; // SKU1001
         break;
       case 'salesperson':
-        tableName = 'salesperson_details';
-        idColumn = 'broker_id';
+        tableName = 'salespersons';
+        idColumn = 'salesperson_code';
         prefix = 'SLM';
         minDigits = 3; // SLM101
         break;
       case 'vehicle':
-        tableName = 'vehicle_master';
-        idColumn = 'vehicle_master_id';
+        tableName = 'vehicles';
+        idColumn = 'vehicle_code';
         prefix = 'VICL';
         minDigits = 3; // VICL001
         break;
       case 'driver':
-        tableName = 'driver_master';
-        idColumn = 'driver_master_id';
+        tableName = 'drivers';
+        idColumn = 'driver_code';
         prefix = 'DRIV';
         minDigits = 3; // DRIV001
         break;
       case 'transport':
-        tableName = 'transport_master';
-        idColumn = 'transport_master_id';
+        tableName = 'transporters';
+        idColumn = 'transporter_code';
         prefix = 'TRSP';
         minDigits = 3; // TRSP001
         break;
@@ -76,33 +84,25 @@ const getNextId = async (req, res, next) => {
         });
     }
 
-    // Query to find the max ID
-    // We use a regex to extract the numeric part and find the max
-    // Note: This assumes IDs are always formatted as Prefix + Number
-    // If the table is empty, we start with a default (e.g., 1001 or 101)
-    
-    // Improved query to handle alphanumeric sorting correctly
-    const sql = `
-      SELECT ${idColumn} as id 
-      FROM ${tableName} 
-      WHERE ${idColumn} LIKE $1
-      ORDER BY CAST(SUBSTRING(${idColumn} FROM LENGTH($2) + 1) AS INTEGER) DESC 
+    // Find the max numeric code under the prefix. The `~ '^PREFIX[0-9]+$'`
+    // guard ensures only pure numeric-suffixed codes are considered, so the
+    // CAST to INTEGER can never choke on a hand-entered non-numeric code.
+    const result = await dbV2.execute(sql`
+      SELECT ${sql.raw(idColumn)} AS id
+      FROM ${sql.raw(tableName)}
+      WHERE ${sql.raw(idColumn)} LIKE ${prefix + '%'}
+        AND ${sql.raw(idColumn)} ~ ${'^' + prefix + '[0-9]+$'}
+      ORDER BY CAST(SUBSTRING(${sql.raw(idColumn)} FROM ${prefix.length + 1}) AS INTEGER) DESC
       LIMIT 1
-    `;
-    
-    const result = await query(sql, [`${prefix}%`, prefix]);
-    
-    let nextNum = 1;
-    let startNum = minDigits === 4 ? 1001 : 101; 
+    `);
 
-    if (result.rowCount > 0) {
-      const currentId = result.rows[0].id;
+    let startNum = minDigits === 4 ? 1001 : 101;
+    let nextNum;
+
+    if (result.rows.length > 0) {
+      const currentId = String(result.rows[0].id);
       const numPart = parseInt(currentId.replace(prefix, ''), 10);
-      if (!isNaN(numPart)) {
-        nextNum = numPart + 1;
-      } else {
-        nextNum = startNum;
-      }
+      nextNum = !isNaN(numPart) ? numPart + 1 : startNum;
     } else {
       nextNum = startNum;
     }

@@ -44,4 +44,15 @@ async function mintDsr(tx) {
   return `DSR-${String(next).padStart(3, '0')}`;
 }
 
-module.exports = { getPlannedAt, mintDsr };
+// THE single Sales-vs-Stock-Transfer discriminator. order_category is a DB enum
+// (only 'Sales' | 'Stock Transfer' | NULL) AND Stock Transfer is routed by this
+// field (it skips Dispatch Planning), so a genuine transfer always carries the
+// exact label. NULL / anything else => NOT a transfer, i.e. treated as Sales, the
+// enforced default. Normalizes case/space defensively even though the enum makes
+// drift impossible - so every stage, guard, and report asks the question the same
+// way. Pass the category value (e.g. order.orderCategory / row.orderCategory).
+function isStockTransfer(orderCategory) {
+  return String(orderCategory ?? '').toLowerCase().trim() === 'stock transfer';
+}
+
+module.exports = { getPlannedAt, mintDsr, isStockTransfer };

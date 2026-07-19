@@ -29,7 +29,13 @@ class OrderDispatchValidator {
       errors.push({ field: 'orderType', message: `orderType must be one of: ${ORDER_TYPES.join(', ')}` });
     }
 
-    if (body.orderCategory && !ORDER_CATEGORIES.includes(body.orderCategory)) {
+    // Required: it's THE Sales-vs-Stock-Transfer discriminator that drives both
+    // workflow routing and the qty hard-cap (Sales enforced, Stock Transfer exempt).
+    // Leaving it blank previously produced NULL-category orders whose intent had to
+    // be guessed - now every order declares Sales or Stock Transfer explicitly.
+    if (!body.orderCategory) {
+      errors.push({ field: 'orderCategory', message: 'orderCategory is required (Sales or Stock Transfer)' });
+    } else if (!ORDER_CATEGORIES.includes(body.orderCategory)) {
       errors.push({ field: 'orderCategory', message: `orderCategory must be one of: ${ORDER_CATEGORIES.join(', ')}` });
     }
     if (body.deliveryPurpose && !DELIVERY_PURPOSES.includes(body.deliveryPurpose)) {

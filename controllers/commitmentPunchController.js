@@ -5,6 +5,7 @@
 
 const commitmentPunchService = require('../services/commitmentPunchService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 const handleError = (res, next, error, ctx) => {
   if (error.code === 'STALE_WRITE' || error.statusCode === 409) {
@@ -92,7 +93,8 @@ const processCommitment = async (req, res, next) => {
     const data = { ...req.body, userId: req.body?.userId ?? req.user?.id ?? null };
     Logger.info(`[COMMITMENT] Process commitment ${commitmentId}`);
     const result = await commitmentPunchService.processCommitment(commitmentId, data);
-    // WhatsApp next-stage notification intentionally not wired yet (see createOrder).
+    // Commitment raises spawn an order straight into Approval of Order (skips Pre-Approval).
+    notifyNextStage({ orderId: result.data?.order?.id }, { targetPage: 'Approval of Order', userId: data.userId });
     return ResponseUtil.success(res, result.data, result.message);
   } catch (error) {
     handleError(res, next, error, '[COMMITMENT] Error in processCommitment controller');

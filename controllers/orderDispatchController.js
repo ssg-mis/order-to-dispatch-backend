@@ -5,6 +5,7 @@
 
 const orderDispatchService = require('../services/orderDispatchService');
 const { ResponseUtil, Logger } = require('../utils');
+const { notifyNextStage } = require('../services/stageNotifier');
 
 /**
  * Create new order (Order Punch) - v2 schema.
@@ -21,6 +22,15 @@ const createOrder = async (req, res, next) => {
     const { items, ...orderData } = req.body;
     Logger.info('Creating new order', { customerId: orderData.customerId, itemCount: items?.length || 0 });
     const result = await orderDispatchService.createOrder(orderData, items);
+
+    // Fire-and-forget next-stage nudge: a pre-approval order lands at Pre
+    // Approval, a regular order skips straight to Approval of Order.
+    const isPreApprovalOrder = String(orderData.orderType || '').toLowerCase().trim() === 'pre-approval';
+    notifyNextStage(
+      { orderId: result.data?.order?.id },
+      { targetPage: isPreApprovalOrder ? 'Pre Approval' : 'Approval of Order', userId: orderData.userId ?? req.user?.id ?? null }
+    );
+
     return ResponseUtil.success(res, result.data, result.message, 201);
   } catch (error) {
     Logger.error('Error in createOrder controller', error);

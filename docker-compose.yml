@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: o2d_v2_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: o2d
+      POSTGRES_PASSWORD: o2d_local_dev
+      POSTGRES_DB: order_to_dispatch_v2
+    ports:
+      - "55432:5432"
+    volumes:
+      - o2d_v2_pgdata:/var/lib/postgresql/data
+
+volumes:
+  o2d_v2_pgdata:

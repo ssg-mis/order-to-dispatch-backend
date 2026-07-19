@@ -53,7 +53,7 @@ class MakeInvoiceService {
       conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
     }
     if (manual_sauda_no) {
-      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+      conditions.push(sql`${schema.orders.manualSaudaNo} ILIKE ${'%' + manual_sauda_no + '%'}`);
     }
     const where = and(...conditions);
 

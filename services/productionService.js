@@ -1,57 +1,49 @@
-const db = require('../config/db');
+/**
+ * Production Service — v2 schema.
+ * Daily per-SKU plant output (the Production screen). Was raw SQL against the
+ * old RDS `production` table (created on the fly via ensureTable); that table is
+ * now a real v2 table (schema.production, backfilled from staging), so the
+ * ensureTable bootstrap is gone.
+ */
+const { dbV2, schema } = require('../config/db-v2.ts');
+const { and, eq, gte, lte, gt, asc, sql } = require('drizzle-orm');
 
 class ProductionService {
-  async ensureTable() {
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS production (
-        id SERIAL PRIMARY KEY,
-        sku_name TEXT NOT NULL,
-        date DATE NOT NULL,
-        qty INTEGER NOT NULL DEFAULT 0,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(sku_name, date)
-      )
-    `);
-  }
-
   async getByDate(date) {
-    await this.ensureTable();
-    const result = await db.query(
-      `SELECT id, sku_name, date, qty FROM production WHERE date = $1 ORDER BY sku_name`,
-      [date]
-    );
-    return result.rows;
+    return dbV2
+      .select({ id: schema.production.id, sku_name: schema.production.skuName, date: schema.production.date, qty: schema.production.qty })
+      .from(schema.production)
+      .where(eq(schema.production.date, date))
+      .orderBy(asc(schema.production.skuName));
   }
 
   async getByRange(from, to) {
-    await this.ensureTable();
-    const result = await db.query(
-      `SELECT sku_name, to_char(date, 'YYYY-MM-DD') AS date, qty
-       FROM production
-       WHERE date BETWEEN $1 AND $2 AND qty > 0
-       ORDER BY sku_name, date`,
-      [from, to]
-    );
-    return result.rows;
+    return dbV2
+      .select({
+        sku_name: schema.production.skuName,
+        date: sql`to_char(${schema.production.date}, 'YYYY-MM-DD')`.as('date'),
+        qty: schema.production.qty,
+      })
+      .from(schema.production)
+      .where(and(gte(schema.production.date, from), lte(schema.production.date, to), gt(schema.production.qty, 0)))
+      .orderBy(asc(schema.production.skuName), asc(schema.production.date));
   }
 
   async bulkUpsert(date, items) {
-    await this.ensureTable();
     if (!items || items.length === 0) return [];
-    const results = await Promise.all(
-      items.map(({ sku_name, qty }) =>
-        db.query(
-          `INSERT INTO production (sku_name, date, qty, updated_at)
-           VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-           ON CONFLICT (sku_name, date)
-           DO UPDATE SET qty = $3, updated_at = CURRENT_TIMESTAMP
-           RETURNING *`,
-          [sku_name, date, qty]
-        )
-      )
-    );
-    return results.map(r => r.rows[0]);
+    const out = [];
+    for (const { sku_name, qty } of items) {
+      const [row] = await dbV2
+        .insert(schema.production)
+        .values({ skuName: sku_name, date, qty, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: [schema.production.skuName, schema.production.date],
+          set: { qty, updatedAt: new Date() },
+        })
+        .returning();
+      out.push(row);
+    }
+    return out;
   }
 }
 

@@ -32,7 +32,7 @@ const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
 const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
-const { getPlannedAt } = require('./stageUtils');
+const { getPlannedAt, isStockTransfer } = require('./stageUtils');
 const { deriveConsolidatedRatesForGroup, deriveRatesForRegularOrder, detectOilType } = require('../utils/rateDerivation');
 
 const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
@@ -108,7 +108,7 @@ class ActualDispatchService {
       conditions.push(depo_names.length ? inArray(schema.depots.depotName, depo_names) : sql`1=0`);
     }
     if (manual_sauda_no) {
-      conditions.push(sql`${schema.orders.processId} ILIKE ${'%' + manual_sauda_no + '%'}`);
+      conditions.push(sql`${schema.orders.manualSaudaNo} ILIKE ${'%' + manual_sauda_no + '%'}`);
     }
     const where = and(...conditions);
 
@@ -215,6 +215,15 @@ class ActualDispatchService {
 
       const plannedQty = toNum(row.qtyToBeDispatched) ?? 0;
       const actualQtyVal = toNum(data.actualQtyDispatch) ?? toNum(data.actualQty) ?? plannedQty;
+      const isStockTransferOrder = isStockTransfer(row.orderCategory);
+
+      // No over-delivery for Sales: a shipment may be dispatched SHORT (the shortfall
+      // returns to be re-planned) but never OVER its planned qty — so cumulative actual
+      // can never pass the planned total, which is already capped at the order qty.
+      // Stock Transfer is exempt (ships above the punch by design).
+      if (!isStockTransferOrder && actualQtyVal > plannedQty + 0.0001) {
+        throw new Error(`Actual dispatched qty (${actualQtyVal}) cannot exceed the planned qty (${plannedQty}) for this shipment`);
+      }
 
       // Only include a field in the patch when the caller supplied it, so a sparse
       // submit never clobbers a value with null. Core stamps are always set.
@@ -277,8 +286,7 @@ class ActualDispatchService {
       // remaining_qty at planning time; a shortfall (planned > actual) goes back.
       const diffQty = plannedQty - actualQtyVal;
       if (Math.abs(diffQty) > 0.0001) {
-        const isStockTransfer = (row.orderCategory || '').toLowerCase() === 'stock transfer';
-        if (!isStockTransfer) {
+        if (!isStockTransferOrder) {
           const oldRemaining = toNum(item?.remainingQty) ?? 0;
           const newRemaining = Math.max(0, oldRemaining + diffQty);
           await tx.update(schema.orderItems).set({ remainingQty: newRemaining }).where(eq(schema.orderItems.id, row.orderItemId));
@@ -322,10 +330,19 @@ class ActualDispatchService {
 
   /**
    * Revert a shipment all the way back to Pre-Approval. Deletes the shipment
-   * (and its downstream gate rows), returns its qty to remaining_qty, deactivates
-   * the dispatch-planning + order-approval gates, and re-opens pre-approval. For
-   * regular orders, re-derives rates across the order group. Mirrors
-   * dispatchPlanningService.revertDispatchPlanning + the reference revert.
+   * (and its downstream gate rows) and returns its qty.
+   *
+   * Sibling-aware: if this order_item has OTHER dispatches (active or already
+   * settled elsewhere in the pipeline), reopening the shared order-approval /
+   * pre-approval gates for the WHOLE item would re-litigate approval for
+   * quantity that has nothing to do with this one shipment. Instead, this
+   * shipment's quantity is carved into its own line (origin='split', same
+   * budget_root_id family) and only THAT line goes back to Pre-Approval — the
+   * original item, its siblings, and its approval history are untouched.
+   * Mirrors dispatchPlanningService.revertDispatchPlanning's split-on-revert.
+   *
+   * Only when no siblings exist does the whole item revert as before. For
+   * regular orders in that case, rates are re-derived across the order group.
    *
    * @param {number} dispatchId
    * @param {Object} data - { userId, remarks }
@@ -347,15 +364,66 @@ class ActualDispatchService {
         .where(eq(schema.dispatches.id, dispatchId));
       if (!row) throw new Error('Dispatch record not found');
 
-      const locked = await tx.select({ remainingQty: schema.orderItems.remainingQty }).from(schema.orderItems).where(eq(schema.orderItems.id, row.orderItemId)).for('update');
+      const locked = await tx.select().from(schema.orderItems).where(eq(schema.orderItems.id, row.orderItemId)).for('update');
+      const item = locked[0];
+
+      // Any OTHER dispatch (active or settled) on this same order_item?
+      const siblings = await tx
+        .select({ id: schema.dispatches.id })
+        .from(schema.dispatches)
+        .where(and(eq(schema.dispatches.orderItemId, row.orderItemId), sql`${schema.dispatches.id} <> ${dispatchId}`));
 
       // Delete the shipment. rowCount is the concurrency gate: 0 → already reverted.
       await deleteDispatchChildren(tx, dispatchId);
       const del = await tx.delete(schema.dispatches).where(eq(schema.dispatches.id, dispatchId)).returning();
       if (del.length === 0) throw staleWrite();
 
-      // Return the shipment's qty to the item.
-      const restored = (toNum(locked[0]?.remainingQty) ?? 0) + (toNum(row.qtyToBeDispatched) ?? 0);
+      const revertedQty = toNum(row.qtyToBeDispatched) ?? 0;
+
+      if (siblings.length > 0) {
+        // Shrink the original line by exactly this shipment's qty (family total
+        // unchanged, so the qty-guard trigger stays satisfied) and fork a new
+        // line for the reverted qty — send only that back to Pre-Approval.
+        const newOrderQuantity = (toNum(item.orderQuantity) ?? 0) - revertedQty;
+        const newApprovedQty = (toNum(item.approvedQty) ?? 0) - revertedQty;
+        await tx
+          .update(schema.orderItems)
+          .set({ orderQuantity: newOrderQuantity, approvedQty: newApprovedQty })
+          .where(eq(schema.orderItems.id, row.orderItemId));
+
+        const [newItem] = await tx
+          .insert(schema.orderItems)
+          .values({
+            orderId: item.orderId,
+            skuId: item.skuId,
+            uom: item.uom,
+            alternateUom: item.alternateUom,
+            alternateQtyKg: item.alternateQtyKg,
+            oilType: item.oilType,
+            orderQuantity: revertedQty,
+            rateOfMaterial: item.rateOfMaterial,
+            finalRate: item.finalRate,
+            ratePer15kg: item.ratePer15kg,
+            ratePerLtr: item.ratePerLtr,
+            origin: 'split',
+            splitFromItemId: row.orderItemId,
+            budgetRootId: item.budgetRootId ?? item.id,
+          })
+          .returning();
+        const preAt = await getPlannedAt(tx, 'Pre Approval');
+        await tx.insert(schema.preApprovals).values({ orderItemId: newItem.id, plannedAt: preAt });
+
+        Logger.info(`[ACTUAL DISPATCH][REVERT-SPLIT] ${row.dsrNumber}: kept order_item ${row.orderItemId} untouched (siblings exist), moved reverted qty ${revertedQty} -> new order_item ${newItem.id} at Pre-Approval`);
+        return {
+          success: true,
+          split: true,
+          message: `This shipment had sibling shipments on the same line; the reverted quantity (${revertedQty}) was moved to a new line at Pre-Approval instead of reopening the original line's approval.`,
+          data: { kept: row.orderItemId, moved: newItem.id },
+        };
+      }
+
+      // No siblings — normal whole-line revert (unchanged from before).
+      const restored = (toNum(item.remainingQty) ?? 0) + revertedQty;
       await tx.update(schema.orderItems).set({ remainingQty: restored }).where(eq(schema.orderItems.id, row.orderItemId));
 
       // Deactivate dispatch-planning + order-approval gates (keep rows for audit),
@@ -381,15 +449,23 @@ class ActualDispatchService {
         await this._rederiveGroupRates(tx, row.orderId, row.orderNo);
       }
 
-      Logger.info(`[ACTUAL DISPATCH][REVERT] ${row.dsrNumber} reverted to Pre-Approval (order ${row.orderNo}, +${toNum(row.qtyToBeDispatched)} qty, remarks: ${data.remarks || 'none'})`);
+      Logger.info(`[ACTUAL DISPATCH][REVERT] ${row.dsrNumber} reverted to Pre-Approval (order ${row.orderNo}, +${revertedQty} qty, remarks: ${data.remarks || 'none'})`);
       return { success: true, message: 'Actual dispatch reverted to Pre-Approval successfully' };
     });
   }
 
   /**
    * Revert a shipment one stage back to Dispatch Planning (not all the way to
-   * Pre-Approval). Deletes the shipment + children, returns its qty, and re-opens
-   * the dispatch-planning gate so the item reappears there.
+   * Pre-Approval). Deletes the shipment + children and returns its qty.
+   *
+   * Sibling-aware, same rationale as revertActualDispatch above: if this
+   * order_item has OTHER dispatches (active or already settled), reopening the
+   * shared dispatch-planning gate for the WHOLE item would let a re-plan touch
+   * quantity that has nothing to do with this one shipment. Instead, this
+   * shipment's quantity is carved into its own line and only THAT line reopens
+   * at Dispatch Planning — the original item and its siblings are untouched.
+   *
+   * Only when no siblings exist does the whole item's gate reopen as before.
    *
    * @param {number} dispatchId
    * @param {Object} data - { userId, remarks }
@@ -406,13 +482,69 @@ class ActualDispatchService {
         .where(eq(schema.dispatches.id, dispatchId));
       if (!row) throw new Error('Dispatch record not found');
 
-      const locked = await tx.select({ remainingQty: schema.orderItems.remainingQty }).from(schema.orderItems).where(eq(schema.orderItems.id, row.orderItemId)).for('update');
+      const locked = await tx.select().from(schema.orderItems).where(eq(schema.orderItems.id, row.orderItemId)).for('update');
+      const item = locked[0];
+
+      // Any OTHER dispatch (active or settled) on this same order_item?
+      const siblings = await tx
+        .select({ id: schema.dispatches.id })
+        .from(schema.dispatches)
+        .where(and(eq(schema.dispatches.orderItemId, row.orderItemId), sql`${schema.dispatches.id} <> ${dispatchId}`));
 
       await deleteDispatchChildren(tx, dispatchId);
       const del = await tx.delete(schema.dispatches).where(eq(schema.dispatches.id, dispatchId)).returning();
       if (del.length === 0) throw staleWrite();
 
-      const restored = (toNum(locked[0]?.remainingQty) ?? 0) + (toNum(row.qtyToBeDispatched) ?? 0);
+      const revertedQty = toNum(row.qtyToBeDispatched) ?? 0;
+
+      if (siblings.length > 0) {
+        // Shrink the original line by exactly this shipment's qty (family total
+        // unchanged, so the qty-guard trigger stays satisfied) and fork a new
+        // line for the reverted qty — send only that back to Dispatch Planning.
+        const newOrderQuantity = (toNum(item.orderQuantity) ?? 0) - revertedQty;
+        const newApprovedQty = (toNum(item.approvedQty) ?? 0) - revertedQty;
+        await tx
+          .update(schema.orderItems)
+          .set({ orderQuantity: newOrderQuantity, approvedQty: newApprovedQty })
+          .where(eq(schema.orderItems.id, row.orderItemId));
+
+        const [newItem] = await tx
+          .insert(schema.orderItems)
+          .values({
+            orderId: item.orderId,
+            skuId: item.skuId,
+            uom: item.uom,
+            alternateUom: item.alternateUom,
+            alternateQtyKg: item.alternateQtyKg,
+            oilType: item.oilType,
+            orderQuantity: revertedQty,
+            rateOfMaterial: item.rateOfMaterial,
+            finalRate: item.finalRate,
+            ratePer15kg: item.ratePer15kg,
+            ratePerLtr: item.ratePerLtr,
+            origin: 'split',
+            splitFromItemId: row.orderItemId,
+            budgetRootId: item.budgetRootId ?? item.id,
+          })
+          .returning();
+        await tx.insert(schema.dispatchPlannings).values({
+          orderItemId: newItem.id,
+          plannedAt: new Date(),
+          revertRemarks: data.remarks ?? null,
+          performedByUserId: data.userId ?? null,
+        });
+
+        Logger.info(`[ACTUAL DISPATCH][REVERT→PLANNING-SPLIT] ${row.dsrNumber}: kept order_item ${row.orderItemId} untouched (siblings exist), moved reverted qty ${revertedQty} -> new order_item ${newItem.id} at Dispatch Planning`);
+        return {
+          success: true,
+          split: true,
+          message: `This shipment had sibling shipments on the same line; the reverted quantity (${revertedQty}) was moved to a new line at Dispatch Planning instead of reopening the original line.`,
+          data: { kept: row.orderItemId, moved: newItem.id },
+        };
+      }
+
+      // No siblings — normal whole-line revert (unchanged from before).
+      const restored = (toNum(item.remainingQty) ?? 0) + revertedQty;
       await tx.update(schema.orderItems).set({ remainingQty: restored }).where(eq(schema.orderItems.id, row.orderItemId));
 
       // Re-open the dispatch-planning gate (keep planned_at; COALESCE guards a
@@ -422,7 +554,7 @@ class ActualDispatchService {
         .set({ actualAt: null, plannedAt: sql`COALESCE(${schema.dispatchPlannings.plannedAt}, now())`, revertRemarks: data.remarks ?? null, performedByUserId: data.userId ?? null })
         .where(eq(schema.dispatchPlannings.orderItemId, row.orderItemId));
 
-      Logger.info(`[ACTUAL DISPATCH][REVERT→PLANNING] ${row.dsrNumber} reverted (order_item ${row.orderItemId}, +${toNum(row.qtyToBeDispatched)} qty, remarks: ${data.remarks || 'none'})`);
+      Logger.info(`[ACTUAL DISPATCH][REVERT→PLANNING] ${row.dsrNumber} reverted (order_item ${row.orderItemId}, +${revertedQty} qty, remarks: ${data.remarks || 'none'})`);
       return { success: true, message: 'Actual dispatch reverted to Dispatch Planning successfully' };
     });
   }
