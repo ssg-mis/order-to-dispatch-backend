@@ -166,8 +166,13 @@ class DispatchPlanningService {
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
       .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
-      .leftJoin(schema.preApprovals, eq(schema.preApprovals.orderItemId, schema.orderItems.id))
-      .leftJoin(schema.orderApprovals, eq(schema.orderApprovals.orderItemId, schema.orderItems.id))
+      // A reverted item can have several historical rows in these gate tables
+      // (the old one gets nulled, not deleted, for audit — see revertDispatchPlanning
+      // below); only the row with planned_at still set is the current/live one, so
+      // that condition must live in the JOIN itself (not a WHERE) or a duplicated,
+      // stale-plus-live pair would fan out into two rows for the same order_item.
+      .leftJoin(schema.preApprovals, and(eq(schema.preApprovals.orderItemId, schema.orderItems.id), isNotNull(schema.preApprovals.plannedAt)))
+      .leftJoin(schema.orderApprovals, and(eq(schema.orderApprovals.orderItemId, schema.orderItems.id), isNotNull(schema.orderApprovals.plannedAt)))
       .leftJoin(punchUser, eq(punchUser.id, schema.orders.orderPunchUserId))
       .leftJoin(preApprovalUser, eq(preApprovalUser.id, schema.preApprovals.approvedByUserId))
       .leftJoin(orderApprovalUser, eq(orderApprovalUser.id, schema.orderApprovals.approvedByUserId))

@@ -207,8 +207,12 @@ class ActualDispatchService {
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
       .leftJoin(schema.brokers, eq(schema.brokers.id, schema.orders.brokerId))
       .leftJoin(schema.salespersons, eq(schema.salespersons.id, schema.orders.salespersonId))
-      .leftJoin(schema.preApprovals, eq(schema.preApprovals.orderItemId, schema.orderItems.id))
-      .leftJoin(schema.orderApprovals, eq(schema.orderApprovals.orderItemId, schema.orderItems.id))
+      // Same rationale as dispatchPlanningService.js's _listDispatchPlanning: a
+      // reverted item keeps its old (now-nulled) gate row for audit, so this join
+      // must pin to the row still holding planned_at — the current/live one —
+      // or a revert-then-readvance cycle fans this into duplicate rows per item.
+      .leftJoin(schema.preApprovals, and(eq(schema.preApprovals.orderItemId, schema.orderItems.id), isNotNull(schema.preApprovals.plannedAt)))
+      .leftJoin(schema.orderApprovals, and(eq(schema.orderApprovals.orderItemId, schema.orderItems.id), isNotNull(schema.orderApprovals.plannedAt)))
       .leftJoin(punchUser, eq(punchUser.id, schema.orders.orderPunchUserId))
       .leftJoin(preApprovalUser, eq(preApprovalUser.id, schema.preApprovals.approvedByUserId))
       .leftJoin(orderApprovalUser, eq(orderApprovalUser.id, schema.orderApprovals.approvedByUserId))

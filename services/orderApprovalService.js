@@ -140,7 +140,11 @@ class OrderApprovalService {
       .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
       .leftJoin(punchUser, eq(punchUser.id, schema.orders.orderPunchUserId))
-      .leftJoin(schema.preApprovals, eq(schema.preApprovals.orderItemId, schema.orderItems.id))
+      // Pinned to the live row (planned_at set) — pre_approvals is normally
+      // reused in place on revert (see dispatchPlanningService's reopen logic),
+      // but this guard is cheap insurance against the same fan-out this codebase
+      // hit with order_approvals/dispatch_plannings if that ever changes.
+      .leftJoin(schema.preApprovals, and(eq(schema.preApprovals.orderItemId, schema.orderItems.id), isNotNull(schema.preApprovals.plannedAt)))
       .leftJoin(preApprovalUser, eq(preApprovalUser.id, schema.preApprovals.approvedByUserId))
       .leftJoin(orderApprovalUser, eq(orderApprovalUser.id, schema.orderApprovals.approvedByUserId))
       .where(open ? and(where, inArray(schema.orders.id, pageOrderIds)) : where)
@@ -183,7 +187,13 @@ class OrderApprovalService {
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
       .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
-      .where(eq(schema.orderApprovals.orderItemId, orderItemId));
+      // A reverted item can have more than one order_approvals row (see
+      // _listApproval above); without an order_by, an unqualified match on
+      // orderItemId alone could return a stale/nulled row instead of the live
+      // one. Newest id wins — that's always the current cycle's row.
+      .where(eq(schema.orderApprovals.orderItemId, orderItemId))
+      .orderBy(desc(schema.orderApprovals.id))
+      .limit(1);
 
     if (!row) throw new Error('Order approval not found');
     return { success: true, data: row };
