@@ -20,7 +20,7 @@
 const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
-const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { eq, and, isNull, isNotNull, sql, desc, inArray } = require('drizzle-orm');
 const { getPlannedAt } = require('./stageUtils');
 
 const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
@@ -65,11 +65,36 @@ class ConfirmMaterialReceiptService {
       .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
       .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
-      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId));
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .leftJoin(schema.invoices, eq(schema.invoices.dispatchId, schema.dispatches.id));
 
-    const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
+    // The pending/history list is grouped in the UI by invoice number (one
+    // invoice can cover several dispatches/products loaded on the same
+    // truck) — so pagination is done over DISTINCT invoice numbers, not raw
+    // joined rows, otherwise a page boundary could split one invoice's
+    // products across two pages or bunch several invoices' rows into what
+    // looks like "1 row" on a page.
+    const sortTs = open ? schema.materialReceipts.plannedAt : schema.materialReceipts.actualAt;
+    const groupKey = sql`coalesce(${schema.invoices.invoiceNo}, 'MR-' || ${schema.materialReceipts.id}::text)`;
 
-    const rows = await baseJoin(
+    const [{ count }] = await baseJoin(
+      dbV2.select({ count: sql`count(distinct ${groupKey})::int` })
+    ).where(where);
+
+    // Newest first: sort pending rows by DO Date (party_so_date), tie-broken
+    // by order_no, matching pre-approval/approval-of-order (orderDispatchService.js).
+    const pageGroups = await baseJoin(
+      dbV2.select({ groupKey, sortTs: sql`min(${sortTs})`.as('sort_ts'), maxSoDate: sql`max(${schema.orders.partySoDate})`.as('max_so_date') })
+    )
+      .where(where)
+      .groupBy(groupKey)
+      .orderBy(open ? sql`max(${schema.orders.partySoDate}) DESC, max(${schema.orders.orderNo}) DESC` : desc(sql`min(${sortTs})`))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    const groupKeys = pageGroups.map((g) => g.groupKey);
+
+    const rows = groupKeys.length === 0 ? [] : await baseJoin(
       dbV2.select({
         materialReceipt: schema.materialReceipts,
         dispatch: schema.dispatches,
@@ -78,13 +103,12 @@ class ConfirmMaterialReceiptService {
         customer: schema.customers,
         depot: schema.depots,
         sku: schema.skus,
+        invoice: schema.invoices,
       })
     )
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
-      .where(where)
-      .orderBy(open ? asc(schema.materialReceipts.plannedAt) : desc(schema.materialReceipts.actualAt))
-      .limit(limit)
-      .offset((page - 1) * limit);
+      .where(and(where, inArray(groupKey, groupKeys)))
+      .orderBy(open ? sql`${schema.orders.partySoDate} DESC, ${schema.orders.orderNo} DESC` : desc(sortTs));
 
     return {
       success: true,

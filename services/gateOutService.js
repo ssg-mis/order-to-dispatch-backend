@@ -18,7 +18,7 @@
 const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
-const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { eq, and, isNull, isNotNull, sql, desc, inArray } = require('drizzle-orm');
 const { getPlannedAt } = require('./stageUtils');
 
 class GateOutService {
@@ -61,7 +61,8 @@ class GateOutService {
       .innerJoin(schema.orderItems, eq(schema.orderItems.id, schema.dispatches.orderItemId))
       .innerJoin(schema.orders, eq(schema.orders.id, schema.orderItems.orderId))
       .leftJoin(schema.customers, eq(schema.customers.id, schema.orders.customerId))
-      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId));
+      .leftJoin(schema.depots, eq(schema.depots.id, schema.orders.depotId))
+      .leftJoin(schema.invoices, eq(schema.invoices.dispatchId, schema.dispatches.id));
 
     const [{ count }] = await baseJoin(dbV2.select({ count: sql`count(*)::int` })).where(where);
 
@@ -77,6 +78,7 @@ class GateOutService {
         vehicle: schema.vehicles,
         driver: schema.drivers,
         transporter: schema.transporters,
+        invoice: schema.invoices,
       })
     )
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
@@ -84,7 +86,7 @@ class GateOutService {
       .leftJoin(schema.drivers, eq(schema.drivers.id, schema.dispatches.driverId))
       .leftJoin(schema.transporters, eq(schema.transporters.id, schema.dispatches.transporterId))
       .where(where)
-      .orderBy(open ? asc(schema.gateOuts.plannedAt) : desc(schema.gateOuts.actualAt))
+      .orderBy(open ? sql`${schema.orders.partySoDate} DESC, ${schema.orders.orderNo} DESC` : desc(schema.gateOuts.actualAt))
       .limit(limit)
       .offset((page - 1) * limit);
 

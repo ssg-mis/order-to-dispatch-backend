@@ -20,9 +20,11 @@ const handleError = (res, next, error, ctx) => {
 };
 
 const parseListFilters = (query) => {
-  const { order_no, customer_name, start_date, end_date, depo_names, manual_sauda_no } = query;
+  const { order_no, search, customer_name, start_date, end_date, depo_names, manual_sauda_no } = query;
   const filters = {
-    order_no,
+    // `search` is the generic search-box param sent by the frontend shell;
+    // `order_no` already matches against both order no. and customer name.
+    order_no: order_no || search,
     customer_name,
     start_date,
     end_date,

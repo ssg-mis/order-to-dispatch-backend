@@ -15,7 +15,7 @@
 const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
-const { eq, and, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { eq, and, isNull, isNotNull, sql, desc, inArray } = require('drizzle-orm');
 
 const toNum = (v) => (v === null || v === undefined || v === '') ? null : parseFloat(v);
 
@@ -78,7 +78,7 @@ class DamageAdjustmentService {
       .leftJoin(schema.materialReceipts, eq(schema.materialReceipts.dispatchId, schema.dispatches.id))
       .leftJoin(schema.skus, eq(schema.skus.id, schema.orderItems.skuId))
       .where(where)
-      .orderBy(open ? asc(schema.damageAdjustments.plannedAt) : desc(schema.damageAdjustments.actualAt))
+      .orderBy(open ? sql`${schema.orders.partySoDate} DESC, ${schema.orders.orderNo} DESC` : desc(schema.damageAdjustments.actualAt))
       .limit(limit)
       .offset((page - 1) * limit);
 

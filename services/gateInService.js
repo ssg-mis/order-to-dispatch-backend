@@ -91,7 +91,7 @@ class GateInService {
           WHERE gi.order_key IS NULL ${searchClause}
           ORDER BY dd.order_key, dd.saved_at DESC
         ) deduped
-        ORDER BY saved_at DESC
+        ORDER BY party_so_date DESC, so_no DESC
         LIMIT ${limit} OFFSET ${offset}
       `);
 

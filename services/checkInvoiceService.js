@@ -22,7 +22,7 @@
 const { Logger } = require('../utils');
 const { assertStageOpen } = require('../utils/staleWriteGuard');
 const { dbV2, schema } = require('../config/db-v2.ts');
-const { eq, and, or, isNull, isNotNull, sql, asc, desc, inArray } = require('drizzle-orm');
+const { eq, and, or, isNull, isNotNull, sql, desc, inArray } = require('drizzle-orm');
 const { getPlannedAt } = require('./stageUtils');
 
 class CheckInvoiceService {
@@ -92,7 +92,7 @@ class CheckInvoiceService {
       .leftJoin(schema.drivers, eq(schema.drivers.id, schema.dispatches.driverId))
       .leftJoin(schema.transporters, eq(schema.transporters.id, schema.dispatches.transporterId))
       .where(where)
-      .orderBy(open ? asc(schema.orders.orderNo) : desc(schema.invoices.checkedAt))
+      .orderBy(open ? sql`${schema.orders.partySoDate} DESC, ${schema.orders.orderNo} DESC` : desc(schema.invoices.checkedAt))
       .limit(limit)
       .offset((page - 1) * limit);
 

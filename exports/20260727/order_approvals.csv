@@ -1,0 +1,14 @@
+id,order_item_id,planned_at,actual_at,rate_is_rightly_as_per_current_market_rate,we_are_dealing_in_ordered_sku,party_credit_status,dispatch_date_confirmed,order_confirmation_with_customer,overall_status,approved_by_user_id
+6,6,,,t,t,true,t,t,true,
+4,4,,,t,t,true,t,t,true,
+5,5,,,t,t,true,t,t,true,
+1,1,,,t,t,true,t,t,true,
+3,3,,,t,t,true,t,t,true,
+2,2,,,t,t,true,t,t,true,
+9,6,2026-07-27 08:42:25.234+00,2026-07-27 08:27:36.988+00,t,t,true,t,t,true,40
+15,8,2026-07-27 08:42:25.234+00,2026-07-27 08:27:37.1+00,t,t,true,t,t,true,40
+10,4,2026-07-27 08:42:25.234+00,2026-07-27 08:27:37.204+00,t,t,true,t,t,true,40
+11,5,2026-07-27 08:42:25.234+00,2026-07-27 08:27:37.309+00,t,t,true,t,t,true,40
+12,1,2026-07-27 08:42:25.234+00,2026-07-27 08:27:37.408+00,t,t,true,t,t,true,40
+13,3,2026-07-27 08:42:25.234+00,2026-07-27 08:27:37.508+00,t,t,true,t,t,true,40
+14,2,2026-07-27 08:42:25.234+00,2026-07-27 08:27:37.608+00,t,t,true,t,t,true,40
