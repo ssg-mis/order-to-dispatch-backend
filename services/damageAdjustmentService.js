@@ -233,7 +233,7 @@ class DamageAdjustmentService {
         credit_note_date: data.credit_note_date || null,
         credit_note_no: data.credit_note_no || null,
         credit_note_copy: data.credit_note_copy || null,
-        credit_note_qty: data.credit_note_qty || null,
+        credit_note_qty: data.credit_note_qty ?? null,
         credit_note_amount: data.credit_note_amount || null,
         net_banalce: data.net_banalce || null
       };
