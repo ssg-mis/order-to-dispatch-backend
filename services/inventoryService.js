@@ -27,7 +27,10 @@ class InventoryService {
         SELECT
           dd.depot_name,
           lrc.product_name,
-          SUM(COALESCE(lrc.actual_qty_dispatch::numeric, 0)) AS stock_in_qty
+          SUM(
+            COALESCE(lrc.actual_qty_dispatch::numeric, 0)
+            - CASE WHEN lrc.actual_9 IS NOT NULL THEN COALESCE(lrc.credit_note_qty::numeric, 0) ELSE 0 END
+          ) AS stock_in_qty
         FROM lift_receiving_confirmation lrc
         JOIN order_dispatch od ON lrc.so_no = od.order_no
         JOIN depots dd ON od.customer_name ILIKE '%' || dd.depot_name || '%'
@@ -114,7 +117,12 @@ class InventoryService {
           lrc.so_no AS order_no,
           od.customer_name,
           od.party_so_date AS date,
-          COALESCE(lrc.actual_qty_dispatch::numeric, 0)::integer AS qty
+          CASE WHEN lrc.actual_9 IS NOT NULL THEN COALESCE(lrc.credit_note_qty::numeric, 0) ELSE 0 END::integer AS deducted_qty,
+          lrc.credit_note_no,
+          (
+            COALESCE(lrc.actual_qty_dispatch::numeric, 0)
+            - CASE WHEN lrc.actual_9 IS NOT NULL THEN COALESCE(lrc.credit_note_qty::numeric, 0) ELSE 0 END
+          )::integer AS qty
         FROM lift_receiving_confirmation lrc
         JOIN order_dispatch od ON lrc.so_no = od.order_no
         JOIN depot_details dd ON od.customer_name ILIKE '%' || dd.depot_name || '%'
