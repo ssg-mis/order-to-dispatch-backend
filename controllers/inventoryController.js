@@ -17,10 +17,45 @@ async function upsertOpeningQty(req, res) {
     if (!depo_name || !product_name || opening_qty === undefined) {
       return res.status(400).json({ success: false, message: 'depo_name, product_name, and opening_qty are required' });
     }
-    const result = await inventoryService.upsertOpeningQty(depo_name, product_name, parseInt(opening_qty) || 0);
-    res.json({ success: true, data: result });
+    const result = await inventoryService.upsertOpeningQty(depo_name, product_name, parseInt(opening_qty) || 0, req.user);
+    const staged = result?.approval_status !== 'approved' && result?.pending_opening_qty !== null;
+    res.json({ success: true, message: staged ? 'Opening qty submitted for approval' : 'Opening qty saved successfully', data: result });
   } catch (error) {
     Logger.error('Error saving opening qty', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function getPendingOpeningQty(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const data = await inventoryService.getPendingOpeningQty();
+    res.json({ success: true, data });
+  } catch (error) {
+    Logger.error('Error fetching pending opening qty', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function reviewOpeningQty(req, res) {
+  try {
+    if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: 'Admin access required' });
+    }
+    const { id } = req.params;
+    const { action, reason } = req.body;
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'action must be approve or reject' });
+    }
+    const result = await inventoryService.reviewOpeningQty(id, action, req.user.id, reason);
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'Pending opening qty not found' });
+    }
+    res.json({ success: true, message: `Opening qty ${action}d successfully`, data: result });
+  } catch (error) {
+    Logger.error('Error reviewing opening qty', error);
     res.status(500).json({ success: false, message: error.message });
   }
 }
@@ -39,4 +74,4 @@ async function getInventoryDetail(req, res) {
   }
 }
 
-module.exports = { getInventoryData, upsertOpeningQty, getInventoryDetail };
+module.exports = { getInventoryData, upsertOpeningQty, getInventoryDetail, getPendingOpeningQty, reviewOpeningQty };

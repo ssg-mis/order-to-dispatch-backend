@@ -13,6 +13,12 @@ class InventoryService {
         UNIQUE(depo_name, product_name)
       )
     `);
+    await db.query(`ALTER TABLE inventory_opening_qty ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'approved'`);
+    await db.query(`ALTER TABLE inventory_opening_qty ADD COLUMN IF NOT EXISTS pending_opening_qty INTEGER`);
+    await db.query(`ALTER TABLE inventory_opening_qty ADD COLUMN IF NOT EXISTS pending_by INTEGER`);
+    await db.query(`ALTER TABLE inventory_opening_qty ADD COLUMN IF NOT EXISTS pending_at TIMESTAMP WITH TIME ZONE`);
+    await db.query(`ALTER TABLE inventory_opening_qty ADD COLUMN IF NOT EXISTS reviewed_by INTEGER`);
+    await db.query(`ALTER TABLE inventory_opening_qty ADD COLUMN IF NOT EXISTS rejection_reason TEXT`);
   }
 
   async getInventoryData() {
@@ -170,16 +176,67 @@ class InventoryService {
     return result.rows;
   }
 
-  async upsertOpeningQty(depo_name, product_name, opening_qty) {
+  async upsertOpeningQty(depo_name, product_name, opening_qty, user) {
+    await this.ensureTable();
+    const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+
+    if (isAdmin) {
+      const result = await db.query(`
+        INSERT INTO inventory_opening_qty (depo_name, product_name, opening_qty, approval_status, reviewed_by, pending_opening_qty, pending_by, pending_at, rejection_reason, updated_at)
+        VALUES ($1, $2, $3, 'approved', $4, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+        ON CONFLICT (depo_name, product_name)
+        DO UPDATE SET opening_qty = $3, approval_status = 'approved', reviewed_by = $4,
+          pending_opening_qty = NULL, pending_by = NULL, pending_at = NULL, rejection_reason = NULL, updated_at = CURRENT_TIMESTAMP
+        RETURNING *
+      `, [depo_name, product_name, opening_qty, user?.id || null]);
+      return result.rows[0];
+    }
+
+    // Non-admin submissions are staged for approval; the live opening_qty is untouched.
+    const result = await db.query(`
+      INSERT INTO inventory_opening_qty (depo_name, product_name, opening_qty, pending_opening_qty, pending_by, pending_at, updated_at)
+      VALUES ($1, $2, 0, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT (depo_name, product_name)
+      DO UPDATE SET pending_opening_qty = $3, pending_by = $4, pending_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      RETURNING *
+    `, [depo_name, product_name, opening_qty, user?.id || null]);
+    return result.rows[0];
+  }
+
+  async getPendingOpeningQty() {
     await this.ensureTable();
     const result = await db.query(`
-      INSERT INTO inventory_opening_qty (depo_name, product_name, opening_qty, updated_at)
-      VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-      ON CONFLICT (depo_name, product_name)
-      DO UPDATE SET opening_qty = $3, updated_at = CURRENT_TIMESTAMP
+      SELECT oq.*, l.username AS pending_by_name
+      FROM inventory_opening_qty oq
+      LEFT JOIN login l ON l.id = oq.pending_by
+      WHERE oq.pending_opening_qty IS NOT NULL
+      ORDER BY oq.pending_at ASC
+    `);
+    return result.rows;
+  }
+
+  async reviewOpeningQty(id, action, reviewerId, reason) {
+    await this.ensureTable();
+    if (action === 'approve') {
+      const result = await db.query(`
+        UPDATE inventory_opening_qty
+        SET opening_qty = pending_opening_qty, approval_status = 'approved',
+          pending_opening_qty = NULL, pending_by = NULL, pending_at = NULL,
+          reviewed_by = $1, rejection_reason = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2 AND pending_opening_qty IS NOT NULL
+        RETURNING *
+      `, [reviewerId, id]);
+      return result.rows[0] || null;
+    }
+
+    const result = await db.query(`
+      UPDATE inventory_opening_qty
+      SET pending_opening_qty = NULL, pending_by = NULL, pending_at = NULL,
+        reviewed_by = $1, rejection_reason = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
       RETURNING *
-    `, [depo_name, product_name, opening_qty]);
-    return result.rows[0];
+    `, [reviewerId, reason || null, id]);
+    return result.rows[0] || null;
   }
 }
 
