@@ -35,7 +35,7 @@ const getAllSkuDetails = async (req, res, next) => {
     let dataQuery;
     if (all === 'true') {
       dataQuery = `
-        SELECT sd.*, (sd.pending_changes IS NOT NULL) AS has_pending_edit, t.name AS tag_name
+        SELECT sd.*, (sd.pending_changes IS NOT NULL OR EXISTS (SELECT 1 FROM inventory_opening_qty ioq WHERE LOWER(TRIM(ioq.product_name)) = LOWER(TRIM(sd.sku_name)) AND ioq.pending_opening_qty IS NOT NULL AND ioq.pending_opening_qty != ioq.opening_qty)) AS has_pending_edit, t.name AS tag_name
         FROM sku_details sd
         LEFT JOIN tag t ON t.sku_id = sd.id
         ${whereClause}
@@ -43,7 +43,7 @@ const getAllSkuDetails = async (req, res, next) => {
       `;
     } else {
       dataQuery = `
-        SELECT sd.*, (sd.pending_changes IS NOT NULL) AS has_pending_edit, t.name AS tag_name
+        SELECT sd.*, (sd.pending_changes IS NOT NULL OR EXISTS (SELECT 1 FROM inventory_opening_qty ioq WHERE LOWER(TRIM(ioq.product_name)) = LOWER(TRIM(sd.sku_name)) AND ioq.pending_opening_qty IS NOT NULL AND ioq.pending_opening_qty != ioq.opening_qty)) AS has_pending_edit, t.name AS tag_name
         FROM sku_details sd
         LEFT JOIN tag t ON t.sku_id = sd.id
         ${whereClause}
@@ -357,7 +357,7 @@ const getPendingSkuDetails = async (req, res, next) => {
       FROM sku_details sd
       LEFT JOIN login l  ON l.id  = sd.created_by
       LEFT JOIN login le ON le.id = sd.pending_edit_by
-      WHERE sd.approval_status = 'pending' OR sd.pending_changes IS NOT NULL
+      WHERE sd.approval_status = 'pending' OR sd.pending_changes IS NOT NULL OR EXISTS (SELECT 1 FROM inventory_opening_qty ioq WHERE LOWER(TRIM(ioq.product_name)) = LOWER(TRIM(sd.sku_name)) AND ioq.pending_opening_qty IS NOT NULL AND ioq.pending_opening_qty != ioq.opening_qty)
       ORDER BY COALESCE(sd.pending_edit_at, sd.created_at) ASC
     `);
     res.json({ success: true, data: result.rows });
@@ -378,7 +378,7 @@ const reviewSkuDetail = async (req, res, next) => {
 
     // Determine whether this is a staged EDIT or a brand-new CREATE awaiting approval.
     const existing = await query(
-      'SELECT approval_status, pending_changes FROM sku_details WHERE id = $1',
+      'SELECT sku_name, approval_status, pending_changes FROM sku_details WHERE id = $1',
       [id]
     );
     if (!existing.rowCount) return res.status(404).json({ success: false, message: 'SKU Detail not found' });
@@ -404,6 +404,16 @@ const reviewSkuDetail = async (req, res, next) => {
           `UPDATE sku_details SET ${setCols} WHERE id=$${n} RETURNING *`,
           params
         );
+        const skuName = result.rows[0]?.sku_name || existing.rows[0]?.sku_name;
+        if (skuName) {
+          await query(`
+            UPDATE inventory_opening_qty
+            SET opening_qty = pending_opening_qty, approval_status = 'approved',
+                pending_opening_qty = NULL, pending_by = NULL, pending_at = NULL,
+                reviewed_by = $1, rejection_reason = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE LOWER(TRIM(product_name)) = LOWER(TRIM($2)) AND pending_opening_qty IS NOT NULL
+          `, [req.user.id, skuName]);
+        }
         return res.json({ success: true, message: 'SKU Detail approved successfully', data: result.rows[0] });
       }
 
@@ -415,6 +425,15 @@ const reviewSkuDetail = async (req, res, next) => {
          WHERE id=$3 RETURNING *`,
         [reason || null, req.user.id, id]
       );
+      const skuName = existing.rows[0]?.sku_name;
+      if (skuName) {
+        await query(`
+          UPDATE inventory_opening_qty
+          SET pending_opening_qty = NULL, pending_by = NULL, pending_at = NULL,
+              reviewed_by = $1, rejection_reason = $2, updated_at = CURRENT_TIMESTAMP
+          WHERE LOWER(TRIM(product_name)) = LOWER(TRIM($3)) AND pending_opening_qty IS NOT NULL
+        `, [req.user.id, reason || null, skuName]);
+      }
       return res.json({ success: true, message: 'SKU Detail rejected successfully', data: result.rows[0] });
     }
 
@@ -433,6 +452,25 @@ const reviewSkuDetail = async (req, res, next) => {
       params
     );
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Pending SKU not found' });
+    const skuName = result.rows[0]?.sku_name || existing.rows[0]?.sku_name;
+    if (skuName) {
+      if (action === 'approve') {
+        await query(`
+          UPDATE inventory_opening_qty
+          SET opening_qty = pending_opening_qty, approval_status = 'approved',
+              pending_opening_qty = NULL, pending_by = NULL, pending_at = NULL,
+              reviewed_by = $1, rejection_reason = NULL, updated_at = CURRENT_TIMESTAMP
+          WHERE LOWER(TRIM(product_name)) = LOWER(TRIM($2)) AND pending_opening_qty IS NOT NULL
+        `, [req.user.id, skuName]);
+      } else {
+        await query(`
+          UPDATE inventory_opening_qty
+          SET pending_opening_qty = NULL, pending_by = NULL, pending_at = NULL,
+              reviewed_by = $1, rejection_reason = $2, updated_at = CURRENT_TIMESTAMP
+          WHERE LOWER(TRIM(product_name)) = LOWER(TRIM($3)) AND pending_opening_qty IS NOT NULL
+        `, [req.user.id, reason || null, skuName]);
+      }
+    }
     res.json({ success: true, message: `SKU Detail ${action}d successfully`, data: result.rows[0] });
   } catch (error) { next(error); }
 };

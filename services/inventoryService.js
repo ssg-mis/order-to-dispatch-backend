@@ -86,6 +86,12 @@ class InventoryService {
         FROM production_totals pt
         JOIN depots d ON UPPER(TRIM(d.depot_name)) = 'BANARI'
         WHERE COALESCE(pt.total_production, 0) <> 0
+        UNION
+        SELECT depo_name AS depot_name, product_name FROM inventory_opening_qty
+        UNION
+        SELECT d.depot_name, sd.sku_name AS product_name
+        FROM sku_details sd
+        CROSS JOIN depots d
       )
       SELECT
         ak.depot_name,
@@ -96,6 +102,7 @@ class InventoryService {
         COALESCE(so.stock_out_qty, 0)::integer AS stock_out,
         COALESCE(sa.sales_qty, 0)::integer AS sales,
         COALESCE(oq.opening_qty, 0) AS opening_qty,
+        oq.pending_opening_qty,
         oq.updated_at AS opening_qty_updated_at,
         -- Attribute production to BANARI only; every other depot shows 0.
         CASE WHEN UPPER(TRIM(ak.depot_name)) = 'BANARI'
@@ -194,10 +201,10 @@ class InventoryService {
 
     // Non-admin submissions are staged for approval; the live opening_qty is untouched.
     const result = await db.query(`
-      INSERT INTO inventory_opening_qty (depo_name, product_name, opening_qty, pending_opening_qty, pending_by, pending_at, updated_at)
-      VALUES ($1, $2, 0, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO inventory_opening_qty (depo_name, product_name, opening_qty, approval_status, pending_opening_qty, pending_by, pending_at, updated_at)
+      VALUES ($1, $2, 0, 'pending', $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (depo_name, product_name)
-      DO UPDATE SET pending_opening_qty = $3, pending_by = $4, pending_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      DO UPDATE SET pending_opening_qty = $3, approval_status = 'pending', pending_by = $4, pending_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
       RETURNING *
     `, [depo_name, product_name, opening_qty, user?.id || null]);
     return result.rows[0];
@@ -210,6 +217,7 @@ class InventoryService {
       FROM inventory_opening_qty oq
       LEFT JOIN login l ON l.id = oq.pending_by
       WHERE oq.pending_opening_qty IS NOT NULL
+        AND oq.pending_opening_qty != oq.opening_qty
       ORDER BY oq.pending_at ASC
     `);
     return result.rows;
