@@ -324,13 +324,16 @@ class DispatchPlanningService {
       const planned1 = await this.getPlannedTimestamp(client, 'Actual Dispatch');
 
       // Insert into lift_receiving_confirmation
+      // order_dispatch_id is stamped here so this row stays linked to its source
+      // order_dispatch row even if that row's product_name/order_quantity is later
+      // changed (e.g. revert-to-pre-approval + SKU change) — see order DO/26-27/1233A.
       const insertQuery = `
         INSERT INTO lift_receiving_confirmation (
-          timestamp, d_sr_number, so_no, party_name, 
-          product_name, qty_to_be_dispatched, 
-          type_of_transporting, dispatch_from, processid, planned_1
+          timestamp, d_sr_number, so_no, party_name,
+          product_name, qty_to_be_dispatched,
+          type_of_transporting, dispatch_from, processid, planned_1, order_dispatch_id
         ) VALUES (
-          NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9
+          NOW(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
         ) RETURNING *
       `;
 
@@ -347,7 +350,8 @@ class DispatchPlanningService {
         order.type_of_transporting,
         data.dispatch_from || null,
         order.processid || null,
-        planned1
+        planned1,
+        orderId
       ];
 
       const insertResult = await client.query(insertQuery, insertParams);
