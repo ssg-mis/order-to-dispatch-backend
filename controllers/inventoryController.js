@@ -3,7 +3,8 @@ const { Logger } = require('../utils');
 
 async function getInventoryData(req, res) {
   try {
-    const data = await inventoryService.getInventoryData();
+    const { from_date, to_date } = req.query;
+    const data = await inventoryService.getInventoryData({ from_date, to_date });
     res.json({ success: true, data });
   } catch (error) {
     Logger.error('Error fetching inventory data', error);
@@ -62,11 +63,11 @@ async function reviewOpeningQty(req, res) {
 
 async function getInventoryDetail(req, res) {
   try {
-    const { depot_name, product_name, type } = req.query;
+    const { depot_name, product_name, type, from_date, to_date } = req.query;
     if (!depot_name || !product_name || !type) {
       return res.status(400).json({ success: false, message: 'depot_name, product_name, and type are required' });
     }
-    const data = await inventoryService.getInventoryDetail(depot_name, product_name, type);
+    const data = await inventoryService.getInventoryDetail(depot_name, product_name, type, { from_date, to_date });
     res.json({ success: true, data });
   } catch (error) {
     Logger.error('Error fetching inventory detail', error);

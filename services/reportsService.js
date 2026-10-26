@@ -568,6 +568,15 @@ class ReportsService {
       let p = 1;
       if (filters.customer_name) { conditions.push(`customer_name ILIKE $${p}`); params.push(`%${filters.customer_name}%`); p++; }
       if (filters.order_no)      { conditions.push(`order_no ILIKE $${p}`);      params.push(`${filters.order_no}%`);     p++; }
+      // Depot options always list every depot with pending DOs (before the depot filter)
+      const depotRes = await client.query(
+        `SELECT DISTINCT TRIM(depo_name) AS depo_name FROM order_dispatch
+         WHERE ${conditions.join(' AND ')} AND COALESCE(TRIM(depo_name), '') <> ''
+         ORDER BY 1`,
+        params
+      );
+      const depotOptions = depotRes.rows.map(r => r.depo_name);
+      if (filters.depo_name) { conditions.push(`LOWER(TRIM(depo_name)) = LOWER(TRIM($${p}))`); params.push(filters.depo_name); p++; }
       const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
       const ordersRes = await client.query(
@@ -660,6 +669,7 @@ class ReportsService {
           sauda_no: items.map(i => i.processid).find(Boolean) || '',
           customer_name: first.customer_name || '',
           broker_name: items.map(i => i.broker_name).find(Boolean) || '',
+          depo_name: (items.map(i => i.depo_name).find(Boolean) || '').trim(),
           rice: buckets.rice,
           soya: buckets.soya,
           palm: buckets.palm,
@@ -701,6 +711,19 @@ class ReportsService {
       }
       months.sort((a, b) => a.sort - b.sort);
 
+      // Within each month, split rows by depot (alphabetical; rows keep DO-date order)
+      months.forEach(m => {
+        const depotIndex = new Map();
+        m.rows.forEach(r => {
+          const name = r.depo_name || 'DEPO NOT SET';
+          const key = name.toUpperCase();
+          if (!depotIndex.has(key)) depotIndex.set(key, { name, rows: [] });
+          depotIndex.get(key).rows.push(r);
+        });
+        m.depots = [...depotIndex.values()].sort((a, b) => a.name.localeCompare(b.name));
+        m.rows = m.depots.flatMap(d => d.rows);
+      });
+
       // Subtotals per month + grand total
       const blankAgg = () => ({ rice: 0, soya: 0, palm: 0, total: 0, riceKg: 0, soyaKg: 0, palmKg: 0, totalKg: 0 });
       const grand = blankAgg();
@@ -720,7 +743,7 @@ class ReportsService {
         delete m.sort;
       });
 
-      return { months, grandTotal: grand, count: doRows.length };
+      return { months, grandTotal: grand, count: doRows.length, depotOptions };
     } finally {
       client.release();
     }

@@ -717,6 +717,13 @@ class ActualDispatchService {
               // 2. Derive consolidated rates for the whole group (mapped by oil type)
               const consolidatedRatesMap = await deriveConsolidatedRatesForGroup(groupProducts);
 
+              // Always map oil_type from the product name, even when no rates can be derived
+              // (e.g. Stock Transfer DOs carry rate_of_material = 0, so the rate maps below are null).
+              for (const p of groupProducts) {
+                await client.query(`UPDATE order_dispatch SET oil_type = $1 WHERE id = $2 AND COALESCE(TRIM(oil_type), '') = ''`,
+                  [detectOilType(p.product_name), p.id]);
+              }
+
               if (consolidatedRatesMap) {
                 // 3. Update products in the group with their specific oil-type rates
                 for (const p of groupProducts) {

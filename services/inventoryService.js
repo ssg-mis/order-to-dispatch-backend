@@ -21,8 +21,20 @@ class InventoryService {
     await db.query(`ALTER TABLE inventory_opening_qty ADD COLUMN IF NOT EXISTS rejection_reason TEXT`);
   }
 
-  async getInventoryData() {
+  // Sales (Make Invoice) date-range condition on the invoice date; falls back to the
+  // Make Invoice timestamp for rows without an invoice_date. from/to are YYYY-MM-DD.
+  salesDateFilter(from, to, values) {
+    const conds = [];
+    const dateExpr = `COALESCE(lrc.invoice_date, (lrc.actual_7 AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date)`;
+    if (from) { values.push(from); conds.push(`${dateExpr} >= $${values.length}::date`); }
+    if (to)   { values.push(to);   conds.push(`${dateExpr} <= $${values.length}::date`); }
+    return conds.map(c => `AND ${c}`).join(' ');
+  }
+
+  async getInventoryData(filters = {}) {
     await this.ensureTable();
+    const values = [];
+    const salesDateCond = this.salesDateFilter(filters.from_date, filters.to_date, values);
     const result = await db.query(`
       WITH depots AS (
         SELECT depot_name
@@ -66,6 +78,7 @@ class InventoryService {
         WHERE UPPER(TRIM(od.order_category)) = 'SALES'
           AND lrc.actual_7 IS NOT NULL
           AND od.depo_name IS NOT NULL
+          ${salesDateCond}
         GROUP BY od.depo_name, lrc.product_name
       ),
       production_totals AS (
@@ -116,11 +129,11 @@ class InventoryService {
       LEFT JOIN inventory_opening_qty oq ON oq.depo_name = ak.depot_name AND oq.product_name = ak.product_name
       LEFT JOIN production_totals pt ON LOWER(TRIM(pt.sku_name)) = LOWER(TRIM(ak.product_name))
       ORDER BY ak.depot_name ASC, ak.product_name ASC
-    `);
+    `, values);
     return result.rows;
   }
 
-  async getInventoryDetail(depot_name, product_name, type) {
+  async getInventoryDetail(depot_name, product_name, type, filters = {}) {
     let query;
     const values = [depot_name, product_name];
 
@@ -173,6 +186,7 @@ class InventoryService {
           AND lrc.actual_7 IS NOT NULL
           AND od.depo_name = $1
           AND LOWER(TRIM(lrc.product_name)) = LOWER(TRIM($2))
+          ${this.salesDateFilter(filters.from_date, filters.to_date, values)}
         ORDER BY lrc.so_no
       `;
     } else {
