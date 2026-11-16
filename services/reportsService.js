@@ -563,15 +563,24 @@ class ReportsService {
       // Base DO grouping expression (matches dispatchPlanningService)
       const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
 
-      const conditions = ['planned_3 IS NOT NULL', 'actual_3 IS NULL'];
+      const conditions = [
+        'planned_3 IS NOT NULL', 'actual_3 IS NULL',
+        // Report runs "upto yesterday": leave out DOs dated today (IST)
+        `COALESCE(party_so_date, created_at::date) < (NOW() AT TIME ZONE 'Asia/Kolkata')::date`,
+      ];
       const params = [];
       let p = 1;
       if (filters.customer_name) { conditions.push(`customer_name ILIKE $${p}`); params.push(`%${filters.customer_name}%`); p++; }
       if (filters.order_no)      { conditions.push(`order_no ILIKE $${p}`);      params.push(`${filters.order_no}%`);     p++; }
-      // Depot options always list every depot with pending DOs (before the depot filter)
+      // Depot options list every depot with pending DOs (before the depot filter),
+      // skipping depots marked Inactive in the Depot Master
       const depotRes = await client.query(
-        `SELECT DISTINCT TRIM(depo_name) AS depo_name FROM order_dispatch
+        `SELECT DISTINCT TRIM(depo_name) AS depo_name FROM order_dispatch od
          WHERE ${conditions.join(' AND ')} AND COALESCE(TRIM(depo_name), '') <> ''
+           AND NOT EXISTS (
+             SELECT 1 FROM depot_details dd
+             WHERE LOWER(TRIM(dd.depot_name)) = LOWER(TRIM(od.depo_name)) AND dd.status = 'Inactive'
+           )
          ORDER BY 1`,
         params
       );
