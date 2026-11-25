@@ -4,7 +4,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { createCommitment, getAll, getPending, processCommitment, getDetails } = require('../controllers/commitmentPunchController');
+const { createCommitment, getAll, getPending, processCommitment, getDetails, precloseCommitment } = require('../controllers/commitmentPunchController');
 const { pageAccess } = require('../middleware/pageAccessMiddleware');
 
 // POST /api/v1/commitment-punch — Create a new commitment
@@ -21,5 +21,8 @@ router.get('/:id/details', getDetails);
 
 // PUT /api/v1/commitment-punch/:id/process — Process a commitment
 router.put('/:id/process', pageAccess, processCommitment);
+
+// PUT /api/v1/commitment-punch/:id/preclose — Preclose the remaining commitment balance
+router.put('/:id/preclose', precloseCommitment);
 
 module.exports = router;

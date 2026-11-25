@@ -563,9 +563,15 @@ class ReportsService {
       // Base DO grouping expression (matches dispatchPlanningService)
       const baseDoExp = `COALESCE(substring(order_no from '^(DO[-\\/](?:\\d{2}-\\d{2}\\/)?\\d+)'), order_no)`;
 
+      // Report is a snapshot "upto yesterday": the cut-off is today 00:00 IST.
+      // A DO that was still pending at the cut-off stays in the report even if
+      // someone processed it in Dispatch Planning today (actual_3 set after the cut-off).
+      const cutoffExp = `((NOW() AT TIME ZONE 'Asia/Kolkata')::date::timestamp AT TIME ZONE 'Asia/Kolkata')`;
+      const closedTodayExp = `(CASE WHEN actual_3 ~ '^\\d{4}-\\d{2}-\\d{2}' THEN actual_3::timestamptz >= ${cutoffExp} ELSE false END)`;
       const conditions = [
-        'planned_3 IS NOT NULL', 'actual_3 IS NULL',
-        // Report runs "upto yesterday": leave out DOs dated today (IST)
+        'planned_3 IS NOT NULL',
+        `(actual_3 IS NULL OR ${closedTodayExp})`,
+        // Leave out DOs dated today (IST)
         `COALESCE(party_so_date, created_at::date) < (NOW() AT TIME ZONE 'Asia/Kolkata')::date`,
       ];
       const params = [];
@@ -589,7 +595,7 @@ class ReportsService {
       const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
       const ordersRes = await client.query(
-        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+        `SELECT *, ${baseDoExp} AS base_do, ${closedTodayExp} AS closed_today FROM order_dispatch ${whereClause}
          ORDER BY start_date ASC NULLS LAST, created_at ASC, order_no ASC`,
         params
       );
@@ -602,18 +608,31 @@ class ReportsService {
         skuRes.rows.forEach(s => skuMap.set((s.sku_name || '').toUpperCase().trim(), s));
       } catch (e) { /* table shape may differ — weights default to 0 */ }
 
-      // Already-dispatched quantities per DO (in dispatch order)
+      // Already-dispatched quantities per DO (in dispatch order), split at the cut-off:
+      //  - before the cut-off -> shown in "Dispatched Qty Detail"
+      //  - after the cut-off (planned today) -> added back to the balance, since at
+      //    the end of yesterday that qty was still pending
       const orderNos = [...new Set(rows.map(r => r.order_no).filter(Boolean))];
       const dispatchedByOrder = new Map();
+      const beforeCutoffByRow = new Map();  // order_dispatch id -> qty planned before cut-off
+      const afterCutoffByRow = new Map();   // order_dispatch id -> qty planned today
       if (orderNos.length) {
+        const rowIdByOrderNo = new Map();
+        rows.forEach(r => { if (!rowIdByOrderNo.has(r.order_no)) rowIdByOrderNo.set(r.order_no, r.id); });
         const lrcRes = await client.query(
-          `SELECT so_no, qty_to_be_dispatched FROM lift_receiving_confirmation
+          `SELECT so_no, order_dispatch_id, qty_to_be_dispatched,
+                  (timestamp AT TIME ZONE 'UTC') >= ${cutoffExp} AS after_cutoff
+           FROM lift_receiving_confirmation
            WHERE so_no = ANY($1) ORDER BY timestamp ASC NULLS LAST, id ASC`,
           [orderNos]
         );
         lrcRes.rows.forEach(l => {
           const q = parseFloat(l.qty_to_be_dispatched);
           if (!q) return;
+          const rowId = l.order_dispatch_id || rowIdByOrderNo.get(l.so_no);
+          const bucket = l.after_cutoff ? afterCutoffByRow : beforeCutoffByRow;
+          bucket.set(rowId, (bucket.get(rowId) || 0) + q);
+          if (l.after_cutoff) return;
           if (!dispatchedByOrder.has(l.so_no)) dispatchedByOrder.set(l.so_no, []);
           dispatchedByOrder.get(l.so_no).push(q);
         });
@@ -626,10 +645,24 @@ class ReportsService {
         if (s.includes('rice') || s.includes('rbo')) return 'rice';
         return null;
       };
-      const balOf = (r) => {
+      const balNowOf = (r) => {
         const v = r.remaining_dispatch_qty != null ? parseFloat(r.remaining_dispatch_qty)
           : (r.approval_qty != null ? parseFloat(r.approval_qty) : parseFloat(r.order_quantity));
         return Number.isFinite(v) ? v : 0;
+      };
+      // Balance as it stood at the cut-off (end of yesterday)
+      const balOf = (r) => {
+        const plannedToday = afterCutoffByRow.get(r.id) || 0;
+        const bal = balNowOf(r) + plannedToday;
+        // Closed today with nothing planned today (cancelled / pre-closed today): the
+        // balance was zeroed today, so rebuild it from the approved qty
+        if (r.closed_today && bal <= 0) {
+          const base = parseFloat(r.approval_qty ?? r.order_quantity) || 0;
+          const precloseBefore = String(r.overall_status_of_order || '') === 'Cancelled'
+            ? (parseFloat(r.preclose_qty) || 0) : 0;
+          return Math.max(0, base - (beforeCutoffByRow.get(r.id) || 0) - precloseBefore);
+        }
+        return bal;
       };
       const wtOf = (r) => {
         const sku = skuMap.get((r.sku_name || r.product_name || '').toUpperCase().trim());
@@ -638,9 +671,10 @@ class ReportsService {
       };
       const rateOf = (r) => parseFloat(r.final_rate ?? r.rate_per_15kg ?? r.rate_of_material) || 0;
 
-      // Group by base DO
+      // Group by base DO (rows closed today that had nothing pending at the cut-off are dropped)
       const groups = new Map();
       for (const r of rows) {
+        if (r.closed_today && balOf(r) <= 0) continue;
         const key = r.base_do || r.order_no;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(r);
@@ -778,7 +812,7 @@ class ReportsService {
       const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
       const ordersRes = await client.query(
-        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+        `SELECT *, ${baseDoExp} AS base_do, ${closedTodayExp} AS closed_today FROM order_dispatch ${whereClause}
          ORDER BY customer_name ASC, created_at ASC, order_no ASC`,
         params
       );
@@ -877,7 +911,7 @@ class ReportsService {
       const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
       const ordersRes = await client.query(
-        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+        `SELECT *, ${baseDoExp} AS base_do, ${closedTodayExp} AS closed_today FROM order_dispatch ${whereClause}
          ORDER BY customer_name ASC, created_at ASC, order_no ASC`,
         params
       );
@@ -1102,7 +1136,7 @@ class ReportsService {
       const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
       const ordersRes = await client.query(
-        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+        `SELECT *, ${baseDoExp} AS base_do, ${closedTodayExp} AS closed_today FROM order_dispatch ${whereClause}
          ORDER BY created_at DESC, order_no ASC`,
         params
       );
@@ -1324,7 +1358,7 @@ class ReportsService {
       const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
       const ordersRes = await client.query(
-        `SELECT *, ${baseDoExp} AS base_do FROM order_dispatch ${whereClause}
+        `SELECT *, ${baseDoExp} AS base_do, ${closedTodayExp} AS closed_today FROM order_dispatch ${whereClause}
          ORDER BY customer_name ASC, created_at ASC, order_no ASC`,
         params
       );

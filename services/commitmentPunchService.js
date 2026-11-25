@@ -164,6 +164,11 @@ class CommitmentPunchService {
       await db.query(`ALTER TABLE commitment_details ADD COLUMN IF NOT EXISTS ordercategory VARCHAR(50)`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS preclose_qty NUMERIC(15,4) DEFAULT 0`);
       await db.query(`ALTER TABLE order_dispatch ADD COLUMN IF NOT EXISTS preclose_user VARCHAR(255)`);
+      // Commitment preclose (closes the remaining commitment balance)
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS preclose_qty NUMERIC(15,4) DEFAULT 0`);
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS preclose_remarks TEXT`);
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS preclose_user VARCHAR(255)`);
+      await db.query(`ALTER TABLE commitment_main ADD COLUMN IF NOT EXISTS preclosed_at TIMESTAMPTZ`);
     } catch (err) {
       Logger.warn('Error in ensureColumns (safe to ignore if columns exist):', err.message);
     }
@@ -336,12 +341,18 @@ class CommitmentPunchService {
   // GET PENDING
   // ─────────────────────────────────────────────────────────────────────────
 
+  /**
+   * tab = 'pending' (default): open commitments, plus closed ones (Completed /
+   *        Preclosed) whose POs are still pending delivery — those are read-only.
+   * tab = 'history': fully closed — commitment closed AND nothing left to deliver.
+   */
   async getPending(filters = {}, pagination = {}) {
     try {
       await this.ensureColumns();
       const page = parseInt(pagination.page) || 1;
       const limit = parseInt(pagination.limit) || 50;
       const offset = (page - 1) * limit;
+      const tab = filters.tab === 'history' ? 'history' : 'pending';
 
       let where = [`cm.planned1 IS NOT NULL`];
       let params = [];
@@ -354,15 +365,11 @@ class CommitmentPunchService {
         idx = sIdx;
       }
 
-      // Add remaining-qty filter directly into WHERE
-      where.push(`cm.quantity > COALESCE((
-        SELECT SUM(sku_weight_mt) FROM commitment_details
-        WHERE commitment_id = cm.id
-      ), 0)`);
-
       const whereClause = `WHERE ${where.join(' AND ')}`;
 
-      const fullQuery = `
+      // Per-commitment figures (same formulas as before; preclose_qty is taken out
+      // of the commitment pending balance)
+      const baseQuery = `
         SELECT
           cm.id,
           cm.commitment_no,
@@ -374,16 +381,15 @@ class CommitmentPunchService {
           cm.rate,
           cm.planned1,
           cm.timestamp,
+          COALESCE(cm.preclose_qty, 0) AS preclose_qty,
+          cm.preclose_remarks,
+          cm.preclose_user,
+          cm.preclosed_at,
           COALESCE((
             SELECT SUM(cd.sku_weight_mt)
             FROM commitment_details cd
             WHERE cd.commitment_id = cm.id
           ), 0) AS processed_qty,
-          cm.quantity - COALESCE((
-            SELECT SUM(cd.sku_weight_mt)
-            FROM commitment_details cd
-            WHERE cd.commitment_id = cm.id
-          ), 0) AS remaining_qty,
           COALESCE((
             SELECT SUM(
               CASE 
@@ -410,16 +416,35 @@ class CommitmentPunchService {
           ), 0) AS po_pending_qty
         FROM commitment_main cm
         ${whereClause}
-        ORDER BY cm.timestamp DESC, cm.commitment_no ASC
       `;
 
-      // Count pending rows
-      const countQuery = `SELECT COUNT(*) FROM commitment_main cm ${whereClause}`;
-      const countRes = await db.query(countQuery, params);
+      // Closed = preclosed, or nothing left of the commitment to raise POs against.
+      // History = closed AND every PO fully delivered (PO pending shows 0.0000).
+      const statusQuery = `
+        WITH base AS (${baseQuery}),
+        calc AS (
+          SELECT base.*,
+            GREATEST(base.quantity - base.processed_qty - base.preclose_qty, 0) AS remaining_qty,
+            (base.preclosed_at IS NOT NULL OR base.quantity - base.processed_qty - base.preclose_qty <= 0) AS is_closed
+          FROM base
+        )
+        SELECT calc.*,
+          CASE WHEN calc.preclosed_at IS NOT NULL THEN 'Preclosed'
+               WHEN calc.is_closed THEN 'Completed'
+               ELSE 'Pending' END AS status
+        FROM calc
+        WHERE ${tab === 'history'
+          ? 'calc.is_closed AND calc.po_pending_qty < 0.00005'
+          : 'NOT (calc.is_closed AND calc.po_pending_qty < 0.00005)'}
+      `;
+
+      const countRes = await db.query(`SELECT COUNT(*) FROM (${statusQuery}) t`, params);
       const total = parseInt(countRes.rows[0]?.count || '0');
 
       const dataRes = await db.query(
-        `${fullQuery} LIMIT $${idx} OFFSET $${idx + 1}`,
+        `${statusQuery}
+         ORDER BY is_closed ASC, timestamp DESC, commitment_no ASC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
         [...params, limit, offset]
       );
 
@@ -432,6 +457,63 @@ class CommitmentPunchService {
     } catch (error) {
       Logger.error('Error fetching pending commitments', error);
       throw error;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PRECLOSE COMMITMENT
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Close the whole remaining commitment balance. After this the commitment
+   * can no longer be processed (no new POs). POs already raised are untouched.
+   */
+  async precloseCommitment(id, data = {}) {
+    if (!String(data.remarks || '').trim()) {
+      const err = new Error('Remarks are required to preclose a commitment');
+      err.statusCode = 400;
+      throw err;
+    }
+    await this.ensureColumns();
+    const client = await db.getClient();
+    try {
+      await client.query('BEGIN');
+      const cmRes = await client.query(`SELECT * FROM commitment_main WHERE id = $1 FOR UPDATE`, [id]);
+      if (cmRes.rows.length === 0) throw new Error('Commitment not found');
+      const cm = cmRes.rows[0];
+      if (cm.preclosed_at) throw new Error(`Commitment ${cm.commitment_no} is already preclosed`);
+
+      const processedRes = await client.query(
+        `SELECT COALESCE(SUM(sku_weight_mt), 0) AS processed_mt FROM commitment_details WHERE commitment_id = $1`,
+        [id]
+      );
+      const processedMt = parseFloat(processedRes.rows[0].processed_mt) || 0;
+      const remainingMt = parseFloat(cm.quantity) - processedMt - (parseFloat(cm.preclose_qty) || 0);
+      if (!(remainingMt > 0)) throw new Error(`Commitment ${cm.commitment_no} has no pending quantity to preclose`);
+
+      const upd = await client.query(
+        `UPDATE commitment_main
+         SET preclose_qty = COALESCE(preclose_qty, 0) + $1,
+             preclose_remarks = $2,
+             preclose_user = $3,
+             preclosed_at = NOW()
+         WHERE id = $4
+         RETURNING id, commitment_no, preclose_qty, preclosed_at`,
+        [remainingMt, String(data.remarks).trim(), data.username || null, id]
+      );
+      await client.query('COMMIT');
+      Logger.info(`[COMMITMENT PRECLOSE] ${cm.commitment_no} preclosed ${remainingMt.toFixed(4)} MT by ${data.username || 'unknown'}`);
+      return {
+        success: true,
+        message: `Commitment ${cm.commitment_no} preclosed (${remainingMt.toFixed(4)} MT)`,
+        data: upd.rows[0],
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      Logger.error('Error preclosing commitment', error);
+      throw error;
+    } finally {
+      client.release();
     }
   }
 
@@ -452,6 +534,7 @@ class CommitmentPunchService {
       );
       if (cmRes.rows.length === 0) throw new Error('Commitment not found');
       const cm = cmRes.rows[0];
+      if (cm.preclosed_at) throw new Error(`Commitment ${cm.commitment_no} is preclosed and cannot be processed`);
 
 
       // ── Step 2: Fetch SKU factor and calculate MT ──────────────────
@@ -478,7 +561,7 @@ class CommitmentPunchService {
         [id]
       );
       const processedMt = parseFloat(processedRes.rows[0].processed_mt) || 0;
-      const remainingMt = parseFloat(cm.quantity) - processedMt;
+      const remainingMt = parseFloat(cm.quantity) - processedMt - (parseFloat(cm.preclose_qty) || 0);
 
       if (requestedMt > remainingMt + 0.0001) {
         throw new Error(

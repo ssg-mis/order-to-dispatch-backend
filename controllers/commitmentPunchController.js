@@ -43,8 +43,8 @@ const getAll = async (req, res, next) => {
  */
 const getPending = async (req, res, next) => {
   try {
-    const { page, limit, search } = req.query;
-    const result = await commitmentPunchService.getPending({ search }, { page, limit });
+    const { page, limit, search, tab } = req.query;
+    const result = await commitmentPunchService.getPending({ search, tab }, { page, limit });
     return ResponseUtil.success(res, { commitments: result.data, pagination: result.pagination }, 'Pending commitments fetched');
   } catch (error) {
     Logger.error('Error fetching pending commitments', error);
@@ -111,5 +111,20 @@ const processCommitment = async (req, res, next) => {
   }
 };
 
-module.exports = { createCommitment, getAll, getPending, processCommitment, getDetails };
+/**
+ * PUT /api/v1/commitment-punch/:id/preclose
+ * Preclose the remaining commitment balance (no further processing allowed)
+ */
+const precloseCommitment = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await commitmentPunchService.precloseCommitment(id, req.body || {});
+    return ResponseUtil.success(res, result.data, result.message);
+  } catch (error) {
+    Logger.error('Error preclosing commitment', error);
+    next(error);
+  }
+};
+
+module.exports = { createCommitment, getAll, getPending, processCommitment, getDetails, precloseCommitment };
 
